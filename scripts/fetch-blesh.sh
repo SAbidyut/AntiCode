@@ -17,7 +17,8 @@ curl -fsSL -o "$WORK/ble.tar.xz" \
 echo "$SHA256  $WORK/ble.tar.xz" | sha256sum -c -
 mkdir -p "$WORK/x"
 tar -xJf "$WORK/ble.tar.xz" -C "$WORK/x"
-# repack without the top folder (the app reads gzip, not xz)
-tar -czf "$ASSETS/blesh.tar.gz" -C "$WORK/x/ble-$VERSION" .
+# repack without the top folder as gzip (the app reads gzip, not xz). Not named *.gz:
+# the Android build would silently unpack it.
+tar -czf "$ASSETS/blesh.pack" -C "$WORK/x/ble-$VERSION" .
 echo "$VERSION" > "$ASSETS/blesh.version"
-ls -la "$ASSETS/blesh.tar.gz"
+ls -la "$ASSETS/blesh.pack"

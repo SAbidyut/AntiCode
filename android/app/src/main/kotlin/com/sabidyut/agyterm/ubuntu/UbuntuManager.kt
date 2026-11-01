@@ -221,7 +221,7 @@ class UbuntuManager(private val context: Context) {
         try {
             dir.deleteRecursively()
             dir.mkdirs()
-            context.assets.open("blesh.tar.gz").use { extractTarGz(it, dir) }
+            context.assets.open("blesh.pack").use { extractTarGz(it, dir) }
             stamp.writeText(version)
         } catch (e: Exception) {
             Log.w(TAG, "ble.sh unpack failed", e)

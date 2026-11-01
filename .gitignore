@@ -2,5 +2,5 @@ node_modules/
 web-terminal/dist/
 .DS_Store
 AgyTerminal.apk
-android/app/src/main/assets/blesh.tar.gz
+android/app/src/main/assets/blesh.pack
 android/app/src/main/assets/blesh.version
