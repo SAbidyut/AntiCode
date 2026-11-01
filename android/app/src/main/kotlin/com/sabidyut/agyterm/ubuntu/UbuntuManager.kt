@@ -336,7 +336,13 @@ class UbuntuManager(private val context: Context) {
             // used by the debug-only self test (see SessionService.runSelfTest)
             "selftest" -> args += listOf(
                 "/bin/bash", "-lc",
-                "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && echo SELFTEST_OK",
+                "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && echo SELFTEST_OK; " +
+                    // diagnostics: terminal settings, and agy's raw output on a PTY made inside Ubuntu
+                    "echo STTY: $(stty -a | tr '\\n' ' '); " +
+                    "(sleep 30) | timeout -s KILL 25 script -qfc agy /tmp/agy.ts >/dev/null 2>&1; " +
+                    "echo AGYTS_BYTES=$(wc -c < /tmp/agy.ts); " +
+                    "cat -v /tmp/agy.ts | tr -d '\\n' | fold -w 300 | head -8 | sed 's/^/AGYTS| /'; " +
+                    "true",
             )
             else -> args += listOf("/bin/bash", "-l")
         }
