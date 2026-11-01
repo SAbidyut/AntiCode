@@ -212,7 +212,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleScreenChecks() {
-        val checks = listOf(15_000L, 30_000L, 50_000L)
+        val checks = listOf(15_000L, 30_000L, 60_000L, 90_000L)
         for ((i, delay) in checks.withIndex()) {
             main.postDelayed({
                 web.evaluateJavascript("JSON.stringify({s: __selftest.screen(), e: __selftest.errors()})") { raw ->
@@ -227,8 +227,20 @@ class MainActivity : ComponentActivity() {
                     for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "ui| $line")
                     if (errors.isNotBlank()) Log.e(SELFTEST, "ui js errors: $errors")
                     val ok = errors.isBlank() && Regex("Antigravity|sign|Sign|login|Login").containsMatchIn(screen)
-                    if (ok) Log.i(SELFTEST, "SELFTEST_AGY_OK")
-                    else if (i == checks.lastIndex) Log.e(SELFTEST, "SELFTEST_AGY_FAIL screen blank or JS errors")
+                    if (ok) {
+                        Log.i(SELFTEST, "SELFTEST_AGY_OK")
+                    } else if (i == checks.lastIndex) {
+                        // Log the raw terminal output so the cause is visible in CI.
+                        web.evaluateJavascript("__selftest.dump()") { dump ->
+                            val text = try {
+                                JSONObject("{\"v\":$dump}").getString("v")
+                            } catch (_: Exception) {
+                                "$dump"
+                            }
+                            for (chunk in text.chunked(900)) Log.i(SELFTEST, "dump| $chunk")
+                            Log.e(SELFTEST, "SELFTEST_AGY_FAIL screen blank or JS errors")
+                        }
+                    }
                 }
             }, delay)
         }

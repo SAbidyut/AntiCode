@@ -1,3 +1,4 @@
+import './polyfills';
 import { createBridge, type Bridge, type HostState, type SessionKind } from './bridge';
 import { TerminalSession } from './term/session';
 import { THEMES } from './term/renderer';
@@ -638,6 +639,7 @@ async function boot() {
       open: (kind: SessionKind) => newSession(kind),
       screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
       errors: () => jsErrors.join('\n'),
+      dump: () => (active ? active.debugDump() : ''),
     };
   }
   buildKeyBar();

@@ -13,7 +13,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    target: 'es2020',
+    // Android System WebView can be old on devices that don't update it (Chrome 80+).
+    target: ['es2020', 'chrome80'],
     assetsInlineLimit: 0,
     // Do NOT minify. esbuild's minifier miscompiles xterm's (already minified) DECRQM
     // handler: `let i; (...)(i ||= {})` becomes `(...)(void 0 || (s = {}))`, a write to an
