@@ -717,8 +717,17 @@ export class BanglaRenderer {
       const overflow = rows * lh - visible;
       let pan = 0;
       if (overflow > 0) {
-        const below = (buf.cursorY + 2) * lh - visible;
-        pan = Math.max(0, Math.min(overflow, below));
+        // keep the cursor plus a line visible — and whatever is drawn under it (a
+        // completion menu, a TUI's footer) as long as the cursor stays on screen
+        let lastY = buf.cursorY + 1;
+        for (let y = rows - 1; y > lastY; y--) {
+          if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
+            lastY = y;
+            break;
+          }
+        }
+        const below = (lastY + 1) * lh - visible;
+        pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
       }
       this.pan = pan;
     }
