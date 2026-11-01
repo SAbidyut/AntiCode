@@ -71,18 +71,18 @@ jobs:
 
       - name: Rename
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk AgyTerminal.apk
-          cp android/app/build/outputs/apk/debug/app-debug.apk AgyTerminal-debug.apk
+          cp android/app/build/outputs/apk/release/app-release.apk AntiCode.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk AntiCode-debug.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AgyTerminal-apk
-          path: AgyTerminal.apk
+          name: AntiCode-apk
+          path: AntiCode.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AgyTerminal-debug-apk
-          path: AgyTerminal-debug.apk
+          name: AntiCode-debug-apk
+          path: AntiCode-debug.apk
 
       # Easiest way to get the APK on a phone: the "latest" release on the repo page.
       # Needs Settings → Actions → General → Workflow permissions → "Read and write".
@@ -94,11 +94,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest AgyTerminal.apk \
+          gh release create latest AntiCode.apk \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --title "Agy টার্মিনাল — সর্বশেষ বিল্ড" \
-            --notes "ফোনে এই পেজ খুলে **AgyTerminal.apk** নামিয়ে ইনস্টল করুন। (commit ${GITHUB_SHA::7}, branch ${GITHUB_REF_NAME})"
+            --title "AntiCode — সর্বশেষ বিল্ড" \
+            --notes "ফোনে এই পেজ খুলে **AntiCode.apk** নামিয়ে ইনস্টল করুন। (commit ${GITHUB_SHA::7}, branch ${GITHUB_REF_NAME})"
 
   # Boots an emulator and runs the app's self test: download + install Ubuntu, start it
   # with proot, run the first-time setup (apt + official Antigravity installer) and
@@ -112,7 +112,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: AgyTerminal-debug-apk
+          name: AntiCode-debug-apk
 
       - name: Enable KVM
         run: |
@@ -127,7 +127,7 @@ jobs:
           target: default
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -partition-size 4096
-          script: bash scripts/emulator-selftest.sh AgyTerminal-debug.apk
+          script: bash scripts/emulator-selftest.sh AntiCode-debug.apk
 
       - uses: actions/upload-artifact@v4
         if: always()

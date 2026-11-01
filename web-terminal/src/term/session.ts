@@ -46,6 +46,8 @@ export class TerminalSession {
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
     this.term.loadAddon(new UnicodeGraphemesAddon() as never);
     this.renderer = new BanglaRenderer(this.term, opts);
+    this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
+    this.loadMeta();
 
     this.el = document.createElement('div');
     this.el.className = 'session';
@@ -162,9 +164,82 @@ export class TerminalSession {
     ].join('\n');
   }
 
+  // ---- what is this session about? (shown in tabs and the home list) ----
+  /** The first prompt typed in an agent session, or the last command in a shell. */
+  task = '';
+  /** A name the user gave it (long-press → Rename). */
+  customName = '';
+  onMeta?: () => void;
+  private lineBuf = '';
+
+  get kindLabel() {
+    return { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
+  }
+  /** The program's own window title when it describes the work (Claude Code: "✳ Fix login"). */
+  get topic(): string {
+    const t = this.title.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|ubuntu|bash)$/i.test(t)) return '';
+    if (/^[~/]/.test(t) || /^[\w.-]+@[\w.-]+:/.test(t)) return ''; // a path or user@host
+    return t;
+  }
+  /** What to call the session in tabs. */
+  get label(): string {
+    return this.customName || this.topic || this.task || this.title;
+  }
+  /** One line saying what it's doing (home list). */
+  get about(): string {
+    return this.topic || this.task;
+  }
+  rename(name: string) {
+    this.customName = name.trim().slice(0, 60);
+    this.saveMeta();
+    this.onMeta?.();
+  }
+  private loadMeta() {
+    try {
+      const m = JSON.parse(localStorage.getItem(`meta:${this.id}`) ?? '{}');
+      this.task = typeof m.task === 'string' ? m.task : '';
+      this.customName = typeof m.name === 'string' ? m.name : '';
+    } catch { /* storage unavailable */ }
+  }
+  private saveMeta() {
+    try {
+      localStorage.setItem(`meta:${this.id}`, JSON.stringify({ task: this.task, name: this.customName }));
+    } catch { /* storage unavailable */ }
+  }
+  /** Follow what's typed (roughly — history recall and cursor moves aren't seen). */
+  private trackInput(data: string) {
+    let rest = data;
+    if (rest.startsWith('\x1b[200~')) {
+      const end = rest.indexOf('\x1b[201~');
+      this.lineBuf += (end < 0 ? rest.slice(6) : rest.slice(6, end)).replace(/[\r\n]+/g, ' ');
+      rest = end < 0 ? '' : rest.slice(end + 6);
+    }
+    if (rest.length > 1 && rest[0] === '\x1b') return; // arrow keys and other sequences
+    for (const ch of rest) {
+      if (ch === '\r') this.commitLine();
+      else if (ch === '\x7f' || ch === '\b') this.lineBuf = Array.from(this.lineBuf).slice(0, -1).join('');
+      else if (ch === '\x03' || ch === '\x15' || ch === '\x1b') this.lineBuf = '';
+      else if (ch >= ' ') this.lineBuf += ch;
+    }
+    if (this.lineBuf.length > 300) this.lineBuf = this.lineBuf.slice(-300);
+  }
+  private commitLine() {
+    const line = this.lineBuf.trim().replace(/\s+/g, ' ');
+    this.lineBuf = '';
+    if (line.length < 3 || line.startsWith('/')) return;
+    const agent = this.kind === 'agy' || this.kind === 'claude';
+    if (agent && this.task) return; // the first real prompt names the work
+    if (!agent && /^(ls|ll|la|cd|clear|pwd|exit|history)( |$)/.test(line)) return;
+    this.task = line.slice(0, 80);
+    this.saveMeta();
+    this.onMeta?.();
+  }
+
   /** User input → PTY. Jumps back to the live view. */
   input(data: string) {
     if (!this.alive) return;
+    this.trackInput(data);
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
       this.renderer.schedule();
@@ -402,6 +477,7 @@ export class TerminalSession {
   dispose() {
     try {
       localStorage.removeItem(`modes:${this.id}`);
+      localStorage.removeItem(`meta:${this.id}`);
     } catch { /* storage unavailable */ }
     this.term.dispose();
     this.el.remove();

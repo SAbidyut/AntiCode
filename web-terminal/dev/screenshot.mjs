@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright');
 
 const out = process.argv[2] ?? '.';
-const url = process.env.URL ?? 'http://localhost:4173/';
+const url = process.env.URL ?? 'http://localhost:4173/?selftest=1';
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2 });
 page.on('console', (m) => console.log('[console]', m.text()));
@@ -19,7 +19,6 @@ if ((await page.getAttribute('body', 'data-screen')) === 'term') await page.clic
 await page.screenshot({ path: `${out}/01-home.png` });
 
 await page.click('#hero .btn-secondary');
-if (await page.isHidden('#compose-bar')) await page.dispatchEvent('#compose-key', 'pointerdown');
 await page.waitForTimeout(800);
 const lines = [
   "printf '\\e[1;36m✦ Antigravity\\e[0m বাংলা টেস্ট\\n'",
@@ -29,8 +28,7 @@ const lines = [
   "printf '\\e[42;30m সবুজ পটভূমি \\e[0m \\e[31mলাল লেখা\\e[0m \\e[1mমোটা বাংলা\\e[0m\\n'",
 ];
 for (const l of lines) {
-  await page.fill('#compose', l);
-  await page.dispatchEvent('#send', 'pointerdown');
+  await page.evaluate((t) => window.__selftest.send(t), l);
   await page.waitForTimeout(250);
 }
 await page.waitForTimeout(800);

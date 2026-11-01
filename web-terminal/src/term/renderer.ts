@@ -209,6 +209,13 @@ export class BanglaRenderer {
   scrollPx = 0;
   cursorVisible = true;
   focused = false;
+  /**
+   * Chat-style layout for agent sessions: while what's drawn is shorter than the screen,
+   * it sits at the bottom (the prompt box right above the keys), like Claude Code.
+   */
+  anchorBottom = false;
+  /** True while the keyboard slides: follow it exactly, no easing. */
+  insetsMoving = false;
   /** Called when the view leaves / returns to the bottom of the output. */
   onScrolled?: (scrolledUp: boolean) => void;
   private wasScrolled = false;
@@ -274,6 +281,7 @@ export class BanglaRenderer {
   /** Visual-only zoom while pinching (cheap); the real font size is set when it ends. */
   previewZoom(scale: number | null) {
     this.zoom = scale ?? 1;
+    this.zoomLayer.style.transitionDuration = '0s';
     this.applyLayerTransform();
   }
 
@@ -715,20 +723,28 @@ export class BanglaRenderer {
     if (this.scrollPx === 0) {
       const visible = this.el.clientHeight - 12;
       const overflow = rows * lh - visible;
-      let pan = 0;
-      if (overflow > 0) {
-        // keep the cursor plus a line visible — and whatever is drawn under it (a
-        // completion menu, a TUI's footer) as long as the cursor stays on screen
-        let lastY = buf.cursorY + 1;
-        for (let y = rows - 1; y > lastY; y--) {
-          if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
-            lastY = y;
-            break;
-          }
+      // the last line drawn: the cursor's (plus one), or anything below it (a completion
+      // menu, a TUI's footer)
+      let lastY = buf.cursorY + 1;
+      for (let y = rows - 1; y > lastY; y--) {
+        if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
+          lastY = y;
+          break;
         }
-        const below = (lastY + 1) * lh - visible;
+      }
+      const below = (lastY + 1) * lh - visible;
+      let pan = 0;
+      if (this.anchorBottom && buf.type === 'normal' && buf.baseY === 0 && below < 0) {
+        pan = below; // short screen in an agent session: sit at the bottom
+      } else if (overflow > 0) {
+        // keep the cursor visible, and what's drawn under it while the cursor still fits
         pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
       }
+      // ease small moves that come from new content; follow the keyboard exactly
+      const d = Math.abs(pan - this.pan);
+      const ease = motion && !this.insetsMoving && this.zoom === 1 && d > 0 && d <= 4 * lh;
+      const dur = ease ? '160ms' : '0s';
+      if (this.zoomLayer.style.transitionDuration !== dur) this.zoomLayer.style.transitionDuration = dur;
       this.pan = pan;
     }
     this.applyLayerTransform();

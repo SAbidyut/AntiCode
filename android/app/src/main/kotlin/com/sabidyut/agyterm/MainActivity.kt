@@ -53,6 +53,12 @@ class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var imm: InputMethodManager
     private lateinit var browser: InAppBrowser
+    private lateinit var panel: RemotePanel
+    private var fileCallback: android.webkit.ValueCallback<Array<Uri>>? = null
+    private val pickFiles = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        fileCallback?.onReceiveValue(uris.takeIf { it.isNotEmpty() }?.toTypedArray())
+        fileCallback = null
+    }
 
     // ---------------------------------------------------------------- output pump
     // PTY output arrives on reader threads; batch it and hand it to the web UI ~60×/s.
@@ -105,6 +111,7 @@ class MainActivity : ComponentActivity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val svc = (binder as SessionService.LocalBinder).service
             service = svc
+            svc.uiVisible = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
             svc.onSessionExit = { s ->
                 main.post {
                     flush() // the session's last output first, then "exited"
@@ -148,6 +155,17 @@ class MainActivity : ComponentActivity() {
             addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(keys, FrameLayout.LayoutParams(1, 1))
         }
+        panel = RemotePanel(
+            this,
+            openInBrowser = { browser.open(it) },
+            chooseFiles = { cb ->
+                fileCallback?.onReceiveValue(null)
+                fileCallback = cb
+                pickFiles.launch("*/*")
+            },
+            onClosed = {},
+        )
+        root.addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         setContentView(root)
         followInsets(root)
 
@@ -171,6 +189,7 @@ class MainActivity : ComponentActivity() {
                 // the page missed the insets sent while it was loading
                 lastInsets = ""
                 ViewCompat.requestApplyInsets(view)
+                deliverOpenSession()
             }
 
             // The page's renderer died (out of memory, killed): rebuild the UI instead of
@@ -203,15 +222,17 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (panel.back()) return
                 web.evaluateJavascript("window.__native ? __native.onBack() : false") { r ->
                     if (r != "true") moveTaskToBack(true)
                 }
             }
         })
 
-        val intent = Intent(this, SessionService::class.java)
-        startService(intent)
-        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        val serviceIntent = Intent(this, SessionService::class.java)
+        startService(serviceIntent)
+        bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+        takeOpenSession(intent)
     }
 
     override fun onDestroy() {
@@ -223,6 +244,7 @@ class MainActivity : ComponentActivity() {
         }
         unbindService(connection)
         browser.release()
+        panel.destroy()
         web.destroy()
         super.onDestroy()
     }
@@ -270,6 +292,7 @@ class MainActivity : ComponentActivity() {
         val d = resources.displayMetrics.density
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
         val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+        panel.applyInsets(bars.top, maxOf(bars.bottom, ime.bottom))
         val top = bars.top / d
         val bottom = maxOf(bars.bottom, ime.bottom) / d
         val keyboard = ime.bottom > bars.bottom
@@ -328,6 +351,49 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         pushState() // storage access may have been granted in Settings
+    }
+
+    override fun onStart() {
+        super.onStart()
+        service?.uiVisible = true
+    }
+
+    // ---------------------------------------------------------------- "task finished" taps
+    private var openSessionId: String? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        takeOpenSession(intent)
+    }
+
+    private fun takeOpenSession(intent: Intent?) {
+        val id = intent?.getStringExtra(SessionService.EXTRA_OPEN_SESSION) ?: return
+        intent.removeExtra(SessionService.EXTRA_OPEN_SESSION)
+        openSessionId = id
+        deliverOpenSession()
+    }
+
+    /** Show the session whose notification was tapped (the page keeps it if still starting). */
+    private fun deliverOpenSession() {
+        val id = openSessionId ?: return
+        if (web.url == null) return // delivered from onPageFinished
+        openSessionId = null
+        service?.clearFinished(id)
+        js("__native.onOpenSession(${JSONObject.quote(id)})")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        service?.uiVisible = false
+        // Opening the app again must not pop the keyboard up by itself: let go of the
+        // terminal's keyboard focus (a tap on the terminal brings it back).
+        if (keys.hasFocus()) {
+            imm.hideSoftInputFromWindow(keys.windowToken, 0)
+            web.holdFocusAway = false
+            keys.clearFocus()
+            js("__native.onKeyboardReleased && __native.onKeyboardReleased()")
+        }
     }
 
     private fun pushState() {
@@ -438,7 +504,11 @@ class MainActivity : ComponentActivity() {
         selftestScreen { screen ->
             if (screen.contains("SD2OK")) {
                 Log.i(SELFTEST, "SELFTEST_STORAGE_OK")
-                selftestClaudeInUi()
+                // Phase 3b: a program's notification escape (OSC 9) while nobody looks at
+                // the session → a "task finished" notification (the CI script checks it)
+                web.evaluateJavascript("__selftest.home(); __selftest.send(\"printf '\\\\033]9;SELFTEST-NOTIFY\\\\007'\")", null)
+                Log.i(SELFTEST, "SELFTEST_NOTIFY_SENT")
+                main.postDelayed({ selftestClaudeInUi() }, 9000)
             } else if (n < 10) {
                 main.postDelayed({ pollStorage(n + 1) }, 2000)
             } else {
@@ -469,6 +539,7 @@ class MainActivity : ComponentActivity() {
                 if (ok) {
                     for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "claude| $line")
                     Log.i(SELFTEST, "SELFTEST_CLAUDE_OK")
+                    selftestPanel()
                 } else if (n < 12) {
                     pollClaude(n + 1)
                 } else {
@@ -478,6 +549,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }, 5000)
+    }
+
+    /** Phase 5: a remote dashboard opens in the app's own panel. */
+    private fun selftestPanel() {
+        main.postDelayed({
+            panel.open("https://example.com/", "Remote test")
+            Log.i(SELFTEST, "SELFTEST_PANEL_READY")
+            main.postDelayed({
+                if (panel.isOpen) Log.i(SELFTEST, "SELFTEST_PANEL_OK")
+                else Log.e(SELFTEST, "SELFTEST_PANEL_FAIL panel did not open")
+            }, 6000)
+        }, 3000)
     }
 
     private fun scheduleScreenChecks() {
@@ -582,9 +665,35 @@ class MainActivity : ComponentActivity() {
             main.post { browser.open(url) }
         }
 
+        /** A remote dashboard in the app's own panel (Chrome tab for Google-only sites). */
         @JavascriptInterface
-        fun openRemote(url: String) {
-            main.post { browser.open(url) }
+        fun openRemote(url: String, title: String) {
+            main.post {
+                if (keys.hasFocus()) {
+                    imm.hideSoftInputFromWindow(keys.windowToken, 0)
+                    web.holdFocusAway = false
+                    keys.clearFocus()
+                    js("__native.onKeyboardReleased()")
+                }
+                if (!panel.open(url, title.ifBlank { Uri.parse(url).host ?: url })) browser.open(url)
+            }
+        }
+
+        /** The app's theme: the remote panel and the status bar icons follow it. */
+        @JavascriptInterface
+        fun setThemeColors(bg: String, text: String, muted: String, accent: String) {
+            main.post {
+                try {
+                    val b = Color.parseColor(bg)
+                    panel.setColors(b, Color.parseColor(text), Color.parseColor(muted), Color.parseColor(accent))
+                    val light = (Color.red(b) * 299 + Color.green(b) * 587 + Color.blue(b) * 114) / 1000 > 150
+                    androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = light
+                        isAppearanceLightNavigationBars = light
+                    }
+                } catch (_: IllegalArgumentException) {
+                }
+            }
         }
 
         @JavascriptInterface
@@ -623,6 +732,29 @@ class MainActivity : ComponentActivity() {
                 web.holdFocusAway = false
             }
         }
+
+        /** The session on screen (no "finished" notification for what you're looking at). */
+        @JavascriptInterface
+        fun setActiveSession(id: String) {
+            service?.let {
+                it.activeSessionId = id.ifEmpty { null }
+                if (id.isNotEmpty()) it.clearFinished(id)
+            }
+        }
+
+        /** What the UI calls a session — the text of its notifications. */
+        @JavascriptInterface
+        fun setSessionLabel(id: String, label: String) {
+            svc().sessions[id]?.label = label.take(120)
+        }
+
+        @JavascriptInterface
+        fun setNotifyWhenDone(on: Boolean) {
+            service?.notifyWhenDone = on
+        }
+
+        @JavascriptInterface
+        fun getNotifyWhenDone(): Boolean = service?.notifyWhenDone ?: true
 
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface

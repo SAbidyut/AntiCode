@@ -16,8 +16,6 @@ interface Prefs {
   /** Claude Code's remote dashboard (Remote Control sessions). */
   claudeUrl: string;
   cursor: CursorStyle;
-  /** Show the compose bar (for Bangla keyboards / long text). */
-  compose: boolean;
   /** Keyboard compatibility mode (keyboards that misbehave with raw keys). */
   kbCompat: boolean;
   /** Fade-in output, gliding cursor, sliding scroll. */
@@ -30,7 +28,6 @@ const DEFAULT_PREFS: Prefs = {
   remoteUrl: 'https://antigravity.google.com',
   claudeUrl: 'https://claude.ai/code',
   cursor: 'block',
-  compose: false,
   kbCompat: false,
   animations: true,
 };
@@ -96,6 +93,8 @@ window.addEventListener('unhandledrejection', (e) => reportError(`unhandled reje
 
 // ================================================================ state
 const sessions = new Map<string, TerminalSession>();
+let notifyWhenDone = true;
+let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
 let active: TerminalSession | null = null;
 let hostState: HostState = { host: 'dev', ubuntu: 'none' };
@@ -143,12 +142,22 @@ const bridge: Bridge = createBridge({
     // The keyboard's height doesn't resize the terminal (see TerminalSession.fit).
     if (!keyboard) navBottom = bottom;
     TerminalSession.keyboardInset = keyboard ? Math.max(0, bottom - navBottom) : 0;
+    if (active) active.renderer.insetsMoving = !settled;
     active?.renderer.schedule();
     if (settled) {
       keyboardShown = keyboard;
       clearTimeout(fitTimer);
       active?.fit();
     }
+  },
+  onKeyboardReleased() {
+    keyboardShown = false;
+    active?.setFocused(false);
+  },
+  onOpenSession(id) {
+    const s = sessions.get(id);
+    if (s) activate(s);
+    else pendingOpen = id; // the UI is still starting: open it once sessions are restored
   },
   onBack() {
     if (sheetOpen()) {
@@ -184,14 +193,16 @@ function rendererOpts() {
 const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', ubuntu: 'terminal', android: 'android' };
 
 /** The remote dashboard that belongs to a session: claude.ai/code for Claude Code, else Antigravity's. */
-function dashboardFor(kind?: SessionKind) {
-  return kind === 'claude' ? prefs.claudeUrl : prefs.remoteUrl;
+function openDashboard(which: 'agy' | 'claude') {
+  if (which === 'claude') bridge.openRemote(prefs.claudeUrl, 'Claude Code');
+  else bridge.openRemote(prefs.remoteUrl, 'Antigravity');
 }
 
 function addSession(id: string, kind: SessionKind): TerminalSession {
   const s = new TerminalSession(bridge, id, kind, rendererOpts());
   s.renderer.el.dataset.cursor = prefs.cursor;
   s.onTitle = renderTabs;
+  s.onMeta = renderTabs;
   sessions.set(id, s);
   for (const d of early.get(id) ?? []) s.write(d);
   early.delete(id);
@@ -229,6 +240,7 @@ function activate(s: TerminalSession | null) {
     x.setFocused(false);
   }
   active = s;
+  bridge.setActiveSession(s?.id ?? '');
   if (s) {
     showTerm();
     s.fit(); // layout is already known; don't wait for a frame (rAF is paused when the screen is off)
@@ -264,10 +276,11 @@ function confirmClose(s: TerminalSession) {
 
 function renderTabs() {
   const tabs = $('#tabs');
+  for (const s of sessions.values()) bridge.setSessionLabel(s.id, s.customName || s.about || s.kindLabel);
   tabs.replaceChildren(
     ...[...sessions.values()].map((s) => {
       const tab = h('div', { class: 'tab' + (s === active ? ' active' : '') + (s.alive ? '' : ' dead') },
-        svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.title));
+        svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.label));
       const x = h('button', { class: 'tx', 'aria-label': 'Close' }, svg('x'));
       x.onclick = (e) => {
         e.stopPropagation();
@@ -278,6 +291,7 @@ function renderTabs() {
         haptic();
         activate(s);
       };
+      onLongPress(tab, () => openRenameSheet(s));
       return tab;
     }),
   );
@@ -288,6 +302,7 @@ function renderTabs() {
 // ================================================================ screens
 function showHome() {
   screen = 'home';
+  bridge.setActiveSession(''); // looking at no session: all of them may notify
   document.body.dataset.screen = 'home';
   bridge.hideKeyboard();
   keyboardShown = false;
@@ -295,6 +310,7 @@ function showHome() {
 }
 function showTerm() {
   screen = 'term';
+  if (active) bridge.setActiveSession(active.id);
   document.body.dataset.screen = 'term';
   requestAnimationFrame(() => active?.fit());
 }
@@ -390,16 +406,48 @@ function renderHomeSessions() {
   box.hidden = list.length === 0;
   box.querySelector('.list')!.replaceChildren(
     ...list.map((s) => {
+      const status = s.alive ? 'Running' : 'Finished';
       const item = h('button', { class: 'list-item' },
-        h('span', { class: 'li-icon' }, svg(KIND_ICON[s.kind] ?? 'terminal')),
+        h('span', { class: `li-icon kind-${s.kind}` }, svg(KIND_ICON[s.kind] ?? 'terminal')),
         h('span', { class: 'li-main' },
-          h('div', { class: 'li-title' }, s.title),
-          h('div', { class: 'li-sub' }, s.alive ? 'Running' : 'Exited')),
+          h('div', { class: 'li-title' }, s.customName || s.kindLabel),
+          h('div', { class: 'li-sub' },
+            h('span', { class: 'li-dot' + (s.alive ? ' on' : '') }),
+            h('span', { class: 'li-sub-text' }, s.about ? `${s.about} · ${status}` : status))),
         svg('chevron', 'chev'));
       item.onclick = () => activate(s);
+      onLongPress(item, () => openRenameSheet(s));
       return item;
     }),
   );
+}
+
+/** Long-press (contextmenu on touch) without the browser's own menu. */
+function onLongPress(el: HTMLElement, run: () => void) {
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    haptic();
+    run();
+  });
+}
+
+function openRenameSheet(s: TerminalSession) {
+  const input = h('input', { class: 'text-input', type: 'text', maxlength: '60', placeholder: s.about || s.kindLabel, spellcheck: 'false' }) as HTMLInputElement;
+  input.value = s.customName;
+  const save = () => {
+    s.rename(input.value);
+    closeSheet();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') save();
+  });
+  const saveBtn = h('button', { class: 'btn btn-primary' }, 'Save');
+  saveBtn.onclick = save;
+  openSheet('Name this session',
+    h('p', { class: 'note' }, 'Shown in the tabs and on the home screen.'),
+    input,
+    h('div', { class: 'sheet-actions' }, saveBtn));
+  setTimeout(() => input.focus(), 250);
 }
 
 // ================================================================ keyboard input
@@ -411,7 +459,7 @@ function focusTerminalKeyboard() {
   active.setFocused(true);
   keyboardShown = true;
   if (bridge.host === 'android') {
-    // Leave the compose box: the native key view takes over the keyboard.
+    // Leave any text field (settings): the native key view takes over the keyboard.
     (document.activeElement as HTMLElement | null)?.blur?.();
     bridge.setTerminalKeyboard(true);
     bridge.showKeyboard();
@@ -594,59 +642,40 @@ function setFontSize(size: number, persist: boolean) {
   }
 }
 
-// ================================================================ extra keys (two rows, Termux style)
+// ================================================================ extra keys
 interface KeyDef {
   label?: string;
   icon?: string;
   key?: NamedKey;
   text?: string;
   latch?: 'ctrl' | 'alt';
-  act?: 'compose' | 'keyboard';
+  act?: 'keyboard';
   small?: boolean;
   repeat?: boolean;
 }
-const KEY_ROWS: KeyDef[][] = [
-  [
-    { label: 'Esc', key: 'Escape' },
-    { label: 'Tab', key: 'Tab' },
-    { label: '^C', text: '\x03' },
-    { label: '/', text: '/' },
-    { label: '-', text: '-' },
-    { label: '|', text: '|' },
-    { label: '↑', key: 'ArrowUp', repeat: true },
-    { icon: 'pencil', act: 'compose' },
-  ],
-  [
-    { label: 'Ctrl', latch: 'ctrl' },
-    { label: 'Alt', latch: 'alt' },
-    { label: 'Home', key: 'Home', small: true },
-    { label: 'End', key: 'End', small: true },
-    { label: '←', key: 'ArrowLeft', repeat: true },
-    { label: '↓', key: 'ArrowDown', repeat: true },
-    { label: '→', key: 'ArrowRight', repeat: true },
-    { icon: 'keyboard', act: 'keyboard' },
-  ],
+// One row of the keys a phone keyboard lacks (everything else is on the keyboard).
+const KEYS: KeyDef[] = [
+  { label: 'Esc', key: 'Escape' },
+  { label: 'Tab', key: 'Tab' },
+  { label: 'Ctrl', latch: 'ctrl' },
+  { label: '^C', text: '\x03' },
+  { label: '←', key: 'ArrowLeft', repeat: true },
+  { label: '↑', key: 'ArrowUp', repeat: true },
+  { label: '↓', key: 'ArrowDown', repeat: true },
+  { label: '→', key: 'ArrowRight', repeat: true },
+  { icon: 'keyboard', act: 'keyboard' },
 ];
 
 function buildKeyBar() {
   const bar = $('#extra-keys');
-  for (const row of KEY_ROWS) {
-    for (const k of row) {
+  {
+    for (const k of KEYS) {
       const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') + (k.small ? ' small' : '') });
       if (k.icon) b.append(svg(k.icon));
       else b.textContent = k.label!;
-      if (k.act === 'compose') {
-        b.id = 'compose-key';
-        b.setAttribute('aria-label', 'Compose bar');
-        b.classList.toggle('on', prefs.compose);
-      }
       if (k.act === 'keyboard') b.setAttribute('aria-label', 'Keyboard');
       let repeat = 0;
       const fire = () => {
-        if (k.act === 'compose') {
-          setCompose(!prefs.compose);
-          return;
-        }
         if (k.act === 'keyboard') {
           if (keyboardShown) hideKeyboard();
           else focusTerminalKeyboard();
@@ -684,58 +713,6 @@ function buildKeyBar() {
       bar.append(b);
     }
   }
-}
-
-// ================================================================ compose bar
-function setCompose(on: boolean) {
-  prefs.compose = on;
-  savePrefs();
-  $('#compose-bar').hidden = !on;
-  $('#compose-key')?.classList.toggle('on', on);
-  if (on) {
-    bridge.setTerminalKeyboard(false);
-    $<HTMLTextAreaElement>('#compose').focus();
-  }
-  requestAnimationFrame(() => active?.fit());
-}
-
-function bindCompose() {
-  const ta = $<HTMLTextAreaElement>('#compose');
-  const grow = () => {
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
-  };
-  ta.addEventListener('input', grow);
-  const normalKeyboard = () => {
-    bridge.setTerminalKeyboard(false);
-    active?.setFocused(false);
-  };
-  ta.addEventListener('focus', normalKeyboard);
-  ta.addEventListener('pointerdown', normalKeyboard);
-  const doSend = () => {
-    if (!active) return;
-    const text = ta.value;
-    if (!text) {
-      active.input('\r');
-      return;
-    }
-    active.sendLine(text);
-    ta.value = '';
-    grow();
-  };
-  $('#send').addEventListener('pointerdown', (e) => {
-    e.preventDefault(); // keep focus (and the keyboard) in the textarea
-    haptic();
-    doSend();
-  });
-  ta.addEventListener('keydown', (e) => {
-    // Enter sends on hardware keyboards; Shift+Enter = new line
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && bridge.host === 'dev') {
-      e.preventDefault();
-      doSend();
-    }
-  });
-  $('#compose-bar').hidden = !prefs.compose;
 }
 
 // ================================================================ bottom sheet
@@ -798,8 +775,8 @@ function openMoreSheet() {
       const t = await bridge.readClipboard();
       if (t) s.paste(t);
     }),
-    action('remote', 'Antigravity dashboard', 'Antigravity running on your computer', () => bridge.openRemote(prefs.remoteUrl)),
-    action('claude', 'Claude Code dashboard', 'claude.ai/code — Remote Control sessions', () => bridge.openRemote(prefs.claudeUrl)),
+    action('remote', 'Antigravity dashboard', 'Antigravity running on your computer', () => openDashboard('agy')),
+    action('claude', 'Claude Code dashboard', 'claude.ai/code — Remote Control sessions', () => openDashboard('claude')),
     action('zoomIn', 'Bigger text', '', () => setFontSize(Math.min(28, prefs.fontSize + 1), true)),
     action('zoomOut', 'Smaller text', '', () => setFontSize(Math.max(9, prefs.fontSize - 1), true)),
     s && action('eraser', 'Clear screen', '', () => {
@@ -810,7 +787,7 @@ function openMoreSheet() {
     s && action('bug', 'Copy debug log', 'Paste it into a chat if something misbehaves', () => {
       bridge.copyText(
         [
-          `Agy Terminal debug log — ${new Date().toISOString()}`,
+          `AntiCode debug log — ${new Date().toISOString()}`,
           `host=${bridge.host} ubuntu=${hostState.ubuntu} storage=${hostState.storage} ua=${navigator.userAgent}`,
           `--- JavaScript errors (${jsErrors.length}) ---`,
           ...jsErrors,
@@ -918,12 +895,15 @@ function openSettingsSheet() {
       sample?.renderer.setOptions({ bnScale: v });
     }, savePrefs),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
+    toggle('Notify when a task finishes', 'A notification when an agent has answered or a long command is done — unless you are looking at it.', notifyWhenDone, (v) => {
+      notifyWhenDone = v;
+      bridge.setNotifyWhenDone(v);
+    }),
     toggle('Animations', 'New output fades in, the cursor glides and the screen slides smoothly.', prefs.animations, (v) => {
       prefs.animations = v;
       savePrefs();
       for (const s of sessions.values()) s.renderer.setOptions({ animate: v });
     }),
-    toggle('Compose bar', 'A text box under the terminal — handy for Bangla keyboards and long prompts.', prefs.compose, setCompose),
     toggle('Keyboard compatibility mode', 'Turn on if your keyboard types nothing or wrong characters in the terminal.', prefs.kbCompat, (v) => {
       prefs.kbCompat = v;
       savePrefs();
@@ -937,6 +917,7 @@ function openSettingsSheet() {
       h('div', { class: 's-title' }, 'Claude Code dashboard address'),
       h('div', { class: 's-sub' }, 'Where Remote Control sessions show up.'),
       urlField('claudeUrl')),
+    h('p', { class: 'about-line' }, 'AntiCode · fonts: Kalpurush, JetBrains Mono, Noto Sans Symbols (SIL Open Font License)'),
   );
 }
 
@@ -946,6 +927,9 @@ function applyTheme() {
   document.body.style.setProperty('--term-bg', t.background);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t.background);
   for (const s of sessions.values()) s.renderer.setOptions({ theme: t });
+  const css = getComputedStyle(document.body);
+  const v = (name: string) => css.getPropertyValue(name).trim();
+  bridge.setThemeColors(v('--bg') || t.background, v('--text'), v('--muted'), v('--accent'));
 }
 
 // ================================================================ wiring
@@ -953,12 +937,12 @@ function bindChrome() {
   $('#home-btn').onclick = () => showHome();
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
-  $('#remote-top-btn').onclick = () => bridge.openRemote(dashboardFor(active?.kind));
+  $('#remote-top-btn').onclick = () => openDashboard(active?.kind === 'claude' ? 'claude' : 'agy');
   $('#settings-btn').onclick = () => openSettingsSheet();
   $('#sheet-backdrop').onclick = () => closeSheet();
-  $('#remote-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
+  $('#remote-btn').onclick = () => openDashboard('agy');
   $('#storage-btn').onclick = () => bridge.requestStorage();
-  $('#claude-remote-btn').onclick = () => bridge.openRemote(prefs.claudeUrl);
+  $('#claude-remote-btn').onclick = () => openDashboard('claude');
   $('#copy-remote-cmd').onclick = () => {
     bridge.copyText('agy --remote-control');
     toast('Command copied');
@@ -967,7 +951,7 @@ function bindChrome() {
     bridge.copyText('claude --remote-control');
     toast('Command copied');
   };
-  // Any text field in the page (compose box, settings) takes the keyboard back from the terminal.
+  // Any text field in the page (settings) takes the keyboard back from the terminal.
   document.addEventListener('focusin', (e) => {
     const t = e.target as HTMLElement;
     if ((t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && t.id !== 'kbd') {
@@ -992,6 +976,7 @@ async function boot() {
       open: (kind: SessionKind) => newSession(kind),
       focusKeys: () => focusTerminalKeyboard(),
       send: (line: string) => active?.sendLine(line),
+      home: () => showHome(),
       /** the active session, for tests */
       session: () => active,
       /** raw keys, e.g. '\x03' */
@@ -1003,7 +988,6 @@ async function boot() {
   }
   hydrateIcons();
   buildKeyBar();
-  bindCompose();
   bindChrome();
   applyTheme();
   document.body.dataset.host = bridge.host;
@@ -1024,6 +1008,7 @@ async function boot() {
   } catch { /* fall back to whatever is available */ }
   console.info(`boot: fonts ready=${document.fonts.check(`${prefs.fontSize}px Kalpurush`, 'বাংলা')}`);
 
+  notifyWhenDone = await bridge.getNotifyWhenDone();
   try {
     hostState = await bridge.getState();
   } catch {
@@ -1037,7 +1022,10 @@ async function boot() {
     // forget saved terminal modes of sessions that no longer exist
     try {
       const ids = new Set(list.map((i) => i.id));
-      for (const k of Object.keys(localStorage)) if (k.startsWith('modes:') && !ids.has(k.slice(6))) localStorage.removeItem(k);
+      for (const k of Object.keys(localStorage)) {
+        const m = /^(modes|meta):(.*)$/.exec(k);
+        if (m && !ids.has(m[2])) localStorage.removeItem(k);
+      }
     } catch { /* storage unavailable */ }
     for (const info of list) {
       const s = addSession(info.id, info.kind);
@@ -1048,7 +1036,8 @@ async function boot() {
       s.restoreModes();
       bridge.attach(info.id);
     }
-    if (list.length) activate([...sessions.values()].pop()!);
+    if (list.length) activate((pendingOpen && sessions.get(pendingOpen)) || [...sessions.values()].pop()!);
+    pendingOpen = '';
   } catch { /* nothing to restore */ }
 
   new ResizeObserver(() => {

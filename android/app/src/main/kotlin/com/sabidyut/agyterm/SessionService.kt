@@ -39,6 +39,88 @@ class SessionService : Service() {
     /** Called (on a background thread) when a session's process exits. */
     var onSessionExit: ((TermSession) -> Unit)? = null
 
+    // ---- "task finished" notifications ----
+    /** The app is on screen, showing this session: no need to notify about it. */
+    @Volatile var uiVisible = false
+    @Volatile var activeSessionId: String? = null
+    var notifyWhenDone: Boolean
+        get() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_NOTIFY, true)
+        set(v) = getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_NOTIFY, v).apply()
+
+    private val watcher = object : Runnable {
+        override fun run() {
+            checkFinished()
+            if (sessions.values.any { it.alive }) mainHandler.postDelayed(this, WATCH_MS)
+            else watching = false
+        }
+    }
+    private var watching = false
+
+    private fun startWatching() {
+        if (watching) return
+        watching = true
+        mainHandler.postDelayed(watcher, WATCH_MS)
+    }
+
+    /**
+     * An agent's answer (or a long command) is done when, after the user pressed Enter, the
+     * program wrote for a while and then went quiet — or it rang the bell / sent a
+     * notification escape itself.
+     */
+    private fun checkFinished() {
+        val now = System.currentTimeMillis()
+        for (s in sessions.values) {
+            val explicit = s.alert
+            if (explicit != null) s.alert = null
+            val armed = s.enterAt > 0
+            val worked = armed && s.outSinceEnter > 200 && s.lastOutputAt - s.enterAt > MIN_WORK_MS
+            val quiet = now - s.lastOutputAt > QUIET_MS
+            val done = (explicit != null && explicit != "bell") ||
+                (armed && explicit == "bell" && now - s.enterAt > MIN_WORK_MS) ||
+                (worked && quiet)
+            if (!done) continue
+            s.enterAt = 0
+            val watched = uiVisible && activeSessionId == s.id
+            if (!watched && notifyWhenDone) notifyFinished(s, explicit?.takeIf { it != "bell" })
+        }
+    }
+
+    private fun notifyFinished(s: TermSession, message: String?) {
+        val who = when (s.kind) {
+            "claude" -> "Claude Code"
+            "agy" -> "Antigravity"
+            else -> "Command"
+        }
+        val title = if (s.kind == "claude" || s.kind == "agy") "$who replied" else "$who finished"
+        val text = message?.takeIf { it.isNotBlank() } ?: s.label.ifBlank { "Tap to see the result" }
+        val open = PendingIntent.getActivity(
+            this, s.id.hashCode(),
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(EXTRA_OPEN_SESSION, s.id),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, DONE_CHANNEL_ID)
+        else @Suppress("DEPRECATION") Notification.Builder(this)
+        val n = builder
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .build()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(DONE_NOTIFICATION_BASE + (s.id.hashCode() and 0xffff), n)
+    }
+
+    /** The user opened that session: its "finished" notification is old news. */
+    fun clearFinished(id: String) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(DONE_NOTIFICATION_BASE + (id.hashCode() and 0xffff))
+    }
+
     override fun onCreate() {
         super.onCreate()
         ubuntu = UbuntuManager(applicationContext)
@@ -79,6 +161,7 @@ class SessionService : Service() {
         }
         sessions[id] = session
         updateForeground()
+        mainHandler.post { startWatching() }
         return session
     }
 
@@ -165,7 +248,7 @@ class SessionService : Service() {
         else @Suppress("DEPRECATION") Notification.Builder(this)
         return builder
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Agy Terminal")
+            .setContentTitle("AntiCode")
             .setContentText(if (running == 1) "1 session running — tap to open" else "$running sessions running — tap to open")
             .setOngoing(true)
             .setContentIntent(open)
@@ -179,6 +262,9 @@ class SessionService : Service() {
         val ch = NotificationChannel(CHANNEL_ID, "Running sessions", NotificationManager.IMPORTANCE_LOW)
         ch.description = "Keeps terminal sessions running in the background"
         nm.createNotificationChannel(ch)
+        val done = NotificationChannel(DONE_CHANNEL_ID, "Task finished", NotificationManager.IMPORTANCE_HIGH)
+        done.description = "When an agent has answered or a long command is done"
+        nm.createNotificationChannel(done)
     }
 
     private fun acquireWakeLock() {
@@ -209,7 +295,17 @@ class SessionService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "sessions"
+        private const val DONE_CHANNEL_ID = "done"
         private const val NOTIFICATION_ID = 1
+        private const val DONE_NOTIFICATION_BASE = 1000
+        private const val PREFS = "service"
+        private const val PREF_NOTIFY = "notifyWhenDone"
+        const val EXTRA_OPEN_SESSION = "openSession"
+        /** Quiet this long after output = the answer is done. */
+        private const val QUIET_MS = 4000L
+        /** Only for runs that took a while (not `ls`). */
+        private const val MIN_WORK_MS = 5000L
+        private const val WATCH_MS = 1500L
         private const val SELFTEST = "AgySelfTest"
         const val ACTION_STOP = "com.sabidyut.agyterm.STOP"
     }

@@ -28,12 +28,16 @@ echo "--- self test (up to 30 min)"
 #          …and still do after scrolling the terminal             (SELFTEST_TYPE_AFTER_SWIPE_OK)
 #          ble.sh autosuggestions are attached in the shell       (SELFTEST_BLE_OK)
 #          and the phone's storage is visible in /sdcard           (SELFTEST_STORAGE_OK)
+#          a program's OSC 9 → "task finished" notification        (checked here)
 # Phase 4: Claude Code opened through the real web UI draws        (SELFTEST_CLAUDE_OK)
+# Phase 5: a remote dashboard opens in the app's own panel         (SELFTEST_PANEL_OK)
 deadline=$((SECONDS + 1800))
 result=1
 typed=0
 shot_agy=0
 suggest=0
+notified=0
+claude_shot=0
 while [ $SECONDS -lt $deadline ]; do
   log=$(adb logcat -d -s AgySelfTest:* AndroidRuntime:E 2>/dev/null)
   if [ $typed -eq 0 ] && grep -q "SELFTEST_TYPE_READY" <<<"$log"; then
@@ -63,8 +67,22 @@ while [ $SECONDS -lt $deadline ]; do
     adb shell input keyevent 66
     typed=2
   fi
-  if grep -q "SELFTEST_CLAUDE_OK" <<<"$log"; then sleep 2; shot 4-claude; result=0; break; fi
-  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_BLE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
+  if [ $notified -eq 0 ] && grep -q "SELFTEST_NOTIFY_SENT" <<<"$log"; then
+    sleep 4
+    if adb shell dumpsys notification --noredact | grep -q "SELFTEST-NOTIFY"; then
+      echo "--- 'task finished' notification posted"
+      adb shell cmd statusbar expand-notifications >/dev/null 2>&1; sleep 1; shot 3b-notification
+      adb shell cmd statusbar collapse >/dev/null 2>&1
+      notified=1
+    else
+      echo "SELFTEST_NOTIFY_FAIL no notification for OSC 9"; notified=2
+    fi
+  fi
+  if [ $claude_shot -eq 0 ] && grep -q "SELFTEST_CLAUDE_OK" <<<"$log"; then sleep 2; shot 4-claude; claude_shot=1; fi
+  if grep -q "SELFTEST_PANEL_READY" <<<"$log" && [ ! -f "$SHOTS/5-panel.png" ]; then sleep 4; shot 5-panel; fi
+  if grep -q "SELFTEST_PANEL_OK" <<<"$log"; then [ $notified -eq 1 ] && result=0; break; fi
+  if [ $notified -eq 2 ]; then break; fi
+  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_BLE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|SELFTEST_PANEL_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
   if grep -q "session exited with code [^0]" <<<"$log"; then break; fi
   sleep 5
 done

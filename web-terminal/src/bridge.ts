@@ -36,6 +36,10 @@ export interface BridgeEvents {
   onBack(): boolean;
   /** System bar / keyboard insets in CSS px; called every frame while the keyboard slides. */
   onInsets(top: number, bottom: number, keyboard: boolean, settled: boolean): void;
+  /** The app went to the background and dropped the terminal keyboard. */
+  onKeyboardReleased(): void;
+  /** Show this session (e.g. its "task finished" notification was tapped). */
+  onOpenSession(id: string): void;
 }
 
 export interface Bridge {
@@ -50,9 +54,18 @@ export interface Bridge {
   getState(): Promise<HostState>;
   installUbuntu(): void;
   openUrl(url: string): void;
-  openRemote(url: string): void;
+  /** A remote dashboard in the app's own panel (title shown in its header). */
+  openRemote(url: string, title: string): void;
   copyText(text: string): void;
   readClipboard(): Promise<string>;
+  /** The session on screen ('' = none): no "task finished" notification for it. */
+  setActiveSession(id: string): void;
+  /** What the UI calls a session (used in its notifications). */
+  setSessionLabel(id: string, label: string): void;
+  setNotifyWhenDone(on: boolean): void;
+  getNotifyWhenDone(): Promise<boolean>;
+  /** The app's colours, for native parts (remote panel, status bar icons). */
+  setThemeColors(bg: string, text: string, muted: string, accent: string): void;
   /** true: soft keyboard sends raw keys to the terminal (no suggestions). false: normal IME (for the compose box). */
   setTerminalKeyboard(on: boolean): void;
   showKeyboard(): void;
@@ -81,9 +94,14 @@ interface AndroidBridgeApi {
   getState(): string;
   installUbuntu(): void;
   openUrl(url: string): void;
-  openRemote(url: string): void;
+  openRemote(url: string, title?: string): void;
   copyText(text: string): void;
   readClipboard(): string;
+  setActiveSession?(id: string): void;
+  setSessionLabel?(id: string, label: string): void;
+  setNotifyWhenDone?(on: boolean): void;
+  getNotifyWhenDone?(): boolean;
+  setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setTerminalKeyboard(on: boolean): void;
   showKeyboard(): void;
   hideKeyboard(): void;
@@ -113,9 +131,14 @@ class AndroidHostBridge implements Bridge {
   async getState() { return JSON.parse(this.api.getState()) as HostState; }
   installUbuntu() { this.api.installUbuntu(); }
   openUrl(url: string) { this.api.openUrl(url); }
-  openRemote(url: string) { this.api.openRemote(url); }
+  openRemote(url: string, title: string) { this.api.openRemote(url, title); }
   copyText(text: string) { this.api.copyText(text); }
   async readClipboard() { return this.api.readClipboard(); }
+  setActiveSession(id: string) { this.api.setActiveSession?.(id); }
+  setSessionLabel(id: string, label: string) { this.api.setSessionLabel?.(id, label); }
+  setNotifyWhenDone(on: boolean) { this.api.setNotifyWhenDone?.(on); }
+  async getNotifyWhenDone() { return this.api.getNotifyWhenDone?.() ?? true; }
+  setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
   setTerminalKeyboard(on: boolean) { this.api.setTerminalKeyboard(on); }
   showKeyboard() { this.api.showKeyboard(); }
   hideKeyboard() { this.api.hideKeyboard(); }
@@ -175,6 +198,11 @@ class DevBridge implements Bridge {
   openRemote(url: string) { window.open(url, '_blank'); }
   copyText(text: string) { navigator.clipboard?.writeText(text).catch(() => {}); }
   async readClipboard() { try { return await navigator.clipboard.readText(); } catch { return ''; } }
+  setActiveSession() {}
+  setSessionLabel() {}
+  setNotifyWhenDone() {}
+  async getNotifyWhenDone() { return true; }
+  setThemeColors() {}
   setTerminalKeyboard() {}
   showKeyboard() {}
   hideKeyboard() {}
@@ -193,6 +221,8 @@ export function createBridge(events: BridgeEvents): Bridge {
     onImeKey: (k: number, c: boolean, a: boolean, s: boolean) => events.onImeKey(k, c, a, s),
     onBack: () => events.onBack(),
     onInsets: (t: number, b: number, k: boolean, s: boolean) => events.onInsets(t, b, k, s),
+    onKeyboardReleased: () => events.onKeyboardReleased(),
+    onOpenSession: (id: string) => events.onOpenSession(id),
   };
   if (window.AndroidBridge) return new AndroidHostBridge(window.AndroidBridge);
   const port = new URLSearchParams(location.search).get('bridge') ?? '7681';

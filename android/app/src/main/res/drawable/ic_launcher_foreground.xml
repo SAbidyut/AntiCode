@@ -1,14 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- four-pointed star (✦) with a terminal prompt underline -->
+<!-- AntiCode mark: a prompt caret "Λ" with a cursor bar — reads as "A" and as ^▁ -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <path android:pathData="M54,30 C56.2,30 57.6,31.1 58.6,33.2 L76.4,72.6 C77.6,75.3 75.8,78 72.9,78 L71.2,78 C69.4,78 68.1,77 67.3,75.4 L54,46.2 L40.7,75.4 C39.9,77 38.6,78 36.8,78 L35.1,78 C32.2,78 30.4,75.3 31.6,72.6 L49.4,33.2 C50.4,31.1 51.8,30 54,30 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="30"
+                android:endX="54" android:endY="78"
+                android:startColor="#FFF5A97F"
+                android:centerColor="#FFF38BA8"
+                android:endColor="#FF8AADF4" />
+        </aapt:attr>
+    </path>
     <path
-        android:fillColor="#14161F"
-        android:pathData="M54,28 C56,44 60,48 76,50 C60,52 56,56 54,72 C52,56 48,52 32,50 C48,48 52,44 54,28 Z" />
-    <path
-        android:fillColor="#14161F"
-        android:pathData="M42,78 h24 v4 h-24 Z" />
+        android:fillColor="#FFA6E3A1"
+        android:pathData="M47,60.5 h14 a2.5,2.5 0 0 1 2.5,2.5 v1 a2.5,2.5 0 0 1 -2.5,2.5 h-14 a2.5,2.5 0 0 1 -2.5,-2.5 v-1 a2.5,2.5 0 0 1 2.5,-2.5 Z" />
 </vector>

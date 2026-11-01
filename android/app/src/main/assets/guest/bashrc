@@ -69,12 +69,20 @@ __agy_prompt() {
   [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
 
   local path=${PWD/#$HOME/\~}
+  # Text that comes from outside (folder names, git branches) is never put into PS1
+  # itself — bash would expand $(…) in it — but referenced as ${__agy_txt[i]}.
+  __agy_txt=()
+  __agy_path=$path
+  # a blank line between the last output and the prompt bar (not on the first prompt)
+  local gap=
+  [ -n "$__agy_prompted" ] && gap='\n'
+  __agy_prompted=1
   local ok='166;227;161' bad='243;139;168'
   local mark=$ok
   (( status != 0 )) && mark=$bad
 
   if [ "$style" = simple ]; then
-    PS1="\[\e]0;${path}\a\]\[\e[38;2;137;220;235m\]${path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+    PS1="\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
     __agy_in_prompt=
     return
   fi
@@ -125,7 +133,8 @@ __agy_prompt() {
   for (( i = 0; i < n; i++ )); do
     bg=${segs[i]%%|*}
     (( i == 0 )) && line+="\[\e[0m\e[38;2;${bg}m\]"$''
-    line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\] ${segs[i]#*|} "
+    __agy_txt[i]=${segs[i]#*|}
+    line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\] \${__agy_txt[$i]} "
     if (( i + 1 < n )); then
       next=${segs[i + 1]%%|*}
       line+="\[\e[48;2;${next}m\e[38;2;${bg}m\]"$''
@@ -135,7 +144,7 @@ __agy_prompt() {
   done
 
   # window title (shown on the app's tab) + segments + input line
-  PS1="\[\e]0;${path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${gap}\[\e]0;\${__agy_path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
   __agy_in_prompt=
 }
 PROMPT_COMMAND=__agy_prompt

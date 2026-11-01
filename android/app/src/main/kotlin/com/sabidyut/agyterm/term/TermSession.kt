@@ -47,6 +47,19 @@ class TermSession(
     @Volatile var rows = rows
         private set
 
+    // ---- "is the answer done?" (see SessionService's task notifications) ----
+    /** What the UI calls this session (its task), for notifications. */
+    @Volatile var label: String = ""
+    /** When the user last pressed Enter; 0 once that run was reported (or more was typed). */
+    @Volatile var enterAt = 0L
+    /** Output bytes since that Enter, and when the last ones arrived. */
+    @Volatile var outSinceEnter = 0L
+    @Volatile var lastOutputAt = 0L
+    /** A notification the program asked for (OSC 9 / OSC 777), or "bell". */
+    @Volatile var alert: String? = null
+    private var oscState = 0
+    private val osc = java.io.ByteArrayOutputStream()
+
     private val out: FileOutputStream
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "pty-writer-$id") }
 
@@ -68,6 +81,9 @@ class TermSession(
                         append(buf, n)
                         listener?.onOutput(this, buf, n)
                     }
+                    lastOutputAt = System.currentTimeMillis()
+                    outSinceEnter += n
+                    scanForAlerts(buf, n)
                 }
             } catch (_: IOException) {
                 // EIO when the child side closes — normal end of session
@@ -118,8 +134,48 @@ class TermSession(
         }
     }
 
+    /**
+     * Finds BEL and the desktop-notification escapes programs send when they finish:
+     * OSC 9 ; text (iTerm2, Claude Code), OSC 777 ; notify ; title ; body (urxvt, Ghostty).
+     */
+    private fun scanForAlerts(b: ByteArray, n: Int) {
+        for (i in 0 until n) {
+            val c = b[i].toInt() and 0xff
+            when (oscState) {
+                0 -> if (c == 0x1b) oscState = 1 else if (c == 0x07) alert = "bell"
+                1 -> oscState = when (c) {
+                    ']'.code -> { osc.reset(); 2 }
+                    0x1b -> 1
+                    else -> 0
+                }
+                2 -> when (c) {
+                    0x07 -> { finishOsc(); oscState = 0 }
+                    0x1b -> oscState = 3
+                    else -> if (osc.size() < 400) osc.write(c)
+                }
+                3 -> if (c == '\\'.code) { finishOsc(); oscState = 0 } else { oscState = 2 }
+            }
+        }
+    }
+
+    private fun finishOsc() {
+        val s = osc.toString("UTF-8")
+        when {
+            s.startsWith("9;") && !s.startsWith("9;4;") -> alert = s.substring(2) // 9;4 = progress bar
+            s.startsWith("777;notify;") -> alert = s.substring(11).split(';').filter { it.isNotBlank() }.joinToString(" — ")
+        }
+    }
+
     fun write(data: ByteArray) {
         if (!alive) return
+        // Enter arms the "answer finished" check; typing more (not terminal replies,
+        // which start with ESC) means the user is here and disarms it.
+        if (data.contains('\r'.code.toByte())) {
+            enterAt = System.currentTimeMillis()
+            outSinceEnter = 0
+        } else if (data.isNotEmpty() && data[0] != 0x1b.toByte()) {
+            enterAt = 0
+        }
         writer.execute {
             try {
                 out.write(data)

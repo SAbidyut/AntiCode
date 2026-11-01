@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0b0d12" />
-    <title>Agy Terminal</title>
+    <title>AntiCode</title>
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body data-screen="home" data-theme="midnight">
@@ -12,10 +12,12 @@
     <main id="home">
       <header class="appbar">
         <div class="brand">
-          <div class="logo"><i data-icon="sparkle"></i></div>
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 108 108"><defs><linearGradient id="logo-g" x1="54" y1="30" x2="54" y2="78" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F5A97F"/><stop offset=".5" stop-color="#F38BA8"/><stop offset="1" stop-color="#8AADF4"/></linearGradient></defs><path fill="url(#logo-g)" d="M54,30 C56.2,30 57.6,31.1 58.6,33.2 L76.4,72.6 C77.6,75.3 75.8,78 72.9,78 L71.2,78 C69.4,78 68.1,77 67.3,75.4 L54,46.2 L40.7,75.4 C39.9,77 38.6,78 36.8,78 L35.1,78 C32.2,78 30.4,75.3 31.6,72.6 L49.4,33.2 C50.4,31.1 51.8,30 54,30 Z"/><path fill="#A6E3A1" d="M47,60.5 h14 a2.5,2.5 0 0 1 2.5,2.5 v1 a2.5,2.5 0 0 1 -2.5,2.5 h-14 a2.5,2.5 0 0 1 -2.5,-2.5 v-1 a2.5,2.5 0 0 1 2.5,-2.5 Z"/></svg>
+          </div>
           <div>
-            <h1>Agy Terminal</h1>
-            <p>Ubuntu + Antigravity &amp; Claude Code</p>
+            <h1>AntiCode</h1>
+            <p>AI coding agents in your pocket</p>
           </div>
         </div>
         <button class="icon-btn" id="settings-btn" aria-label="Settings"><i data-icon="settings"></i></button>
@@ -28,44 +30,26 @@
         <div class="list"></div>
       </section>
 
-      <h2 class="group-title">Remote control</h2>
-      <section class="card">
-        <div class="card-head">
-          <div class="card-icon tint-blue"><i data-icon="sparkle"></i></div>
-          <div>
-            <h3>Antigravity</h3>
-            <p>Watch and control Antigravity running on your Mac or PC.</p>
+      <section class="group">
+        <h2 class="group-title">Remote control</h2>
+        <div class="list">
+          <div class="remote-row">
+            <span class="li-icon tint-blue"><i data-icon="sparkle"></i></span>
+            <span class="li-main">
+              <span class="li-title">Antigravity</span>
+              <button class="cmd-chip" id="copy-remote-cmd" aria-label="Copy command"><code>agy --remote-control</code><i data-icon="copy"></i></button>
+            </span>
+            <button class="open-btn" id="remote-btn">Open</button>
+          </div>
+          <div class="remote-row">
+            <span class="li-icon tint-clay"><i data-icon="claude"></i></span>
+            <span class="li-main">
+              <span class="li-title">Claude Code</span>
+              <button class="cmd-chip" id="copy-claude-cmd" aria-label="Copy command"><code>claude --remote-control</code><i data-icon="copy"></i></button>
+            </span>
+            <button class="open-btn" id="claude-remote-btn">Open</button>
           </div>
         </div>
-        <ol class="steps">
-          <li>
-            On your computer run
-            <span class="cmd"><code>agy --remote-control</code><button class="chip" id="copy-remote-cmd">Copy</button></span>
-            or type <code>/remote-control</code> inside agy. To keep it always on: <code>agy remote-control start</code>.
-          </li>
-          <li>Open the dashboard and sign in with the same Google account. It opens inside this app.</li>
-        </ol>
-        <button class="btn btn-secondary" id="remote-btn"><i data-icon="external"></i><span>Open Antigravity dashboard</span></button>
-      </section>
-
-      <section class="card">
-        <div class="card-head">
-          <div class="card-icon tint-clay"><i data-icon="claude"></i></div>
-          <div>
-            <h3>Claude Code</h3>
-            <p>Watch and control Claude Code running on your Mac or PC.</p>
-          </div>
-        </div>
-        <ol class="steps">
-          <li>
-            On your computer run
-            <span class="cmd"><code>claude --remote-control</code><button class="chip" id="copy-claude-cmd">Copy</button></span>
-            or type <code>/remote-control</code> inside Claude Code.
-          </li>
-          <li>To keep it always on: inside Claude Code run <code>/config</code> → <em>Enable Remote Control for all sessions</em>.</li>
-          <li>Open claude.ai/code and sign in with the same Claude account (Pro or Max plan). It opens inside this app.</li>
-        </ol>
-        <button class="btn btn-secondary" id="claude-remote-btn"><i data-icon="external"></i><span>Open claude.ai/code</span></button>
       </section>
 
       <section class="card" id="storage-card">
@@ -83,7 +67,6 @@
         <button class="btn btn-secondary" id="storage-btn"><i data-icon="shield"></i><span>Allow access</span></button>
       </section>
 
-      <footer class="foot">Fonts: Kalpurush (OmicronLab) · JetBrains Mono — SIL Open Font License</footer>
     </main>
 
     <!-- ================= TERMINAL ================= -->
@@ -97,10 +80,6 @@
       </nav>
       <div id="sessions"></div>
       <div id="extra-keys"></div>
-      <div class="compose" id="compose-bar" hidden>
-        <textarea id="compose" rows="1" placeholder="Type here — Bangla works — then send" autocomplete="off" spellcheck="false"></textarea>
-        <button id="send" class="send-btn" aria-label="Send"><i data-icon="send"></i></button>
-      </div>
       <textarea id="kbd" aria-hidden="true" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
     </section>
 
