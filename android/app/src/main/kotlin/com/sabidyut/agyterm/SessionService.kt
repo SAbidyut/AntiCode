@@ -73,11 +73,18 @@ class SessionService : Service() {
             val explicit = s.alert
             if (explicit != null) s.alert = null
             val armed = s.enterAt > 0
-            val worked = armed && s.outSinceEnter > 200 && s.lastOutputAt - s.enterAt > MIN_WORK_MS
-            val quiet = now - s.lastOutputAt > QUIET_MS
+            val longRun = armed && now - s.enterAt > MIN_WORK_MS
+            // A shell says when a command is done (its prompt came back); an agent's answer
+            // is done when it wrote for a while after the input and then went quiet.
+            val shellDone = armed && s.promptAt > s.enterAt
+            val agentDone = armed && s.outSinceEnter > 200 && s.lastOutputAt - s.enterAt > MIN_WORK_MS &&
+                now - s.lastOutputAt > QUIET_MS && s.promptAt <= s.enterAt &&
+                (s.kind == "claude" || s.kind == "agy")
             val done = (explicit != null && explicit != "bell") ||
-                (armed && explicit == "bell" && now - s.enterAt > MIN_WORK_MS) ||
-                (worked && quiet)
+                (explicit == "bell" && longRun) ||
+                (shellDone && s.promptAt - s.enterAt > MIN_WORK_MS) ||
+                agentDone
+            if (shellDone && !done) s.enterAt = 0 // a quick command: nothing to report
             if (!done) continue
             s.enterAt = 0
             val watched = uiVisible && activeSessionId == s.id
@@ -110,6 +117,15 @@ class SessionService : Service() {
             .setAutoCancel(true)
             .setContentIntent(open)
             .setCategory(Notification.CATEGORY_MESSAGE)
+            // the text may show what you're working on: keep it off the lock screen
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, DONE_CHANNEL_ID)
+                else @Suppress("DEPRECATION") Notification.Builder(this))
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(title)
+                    .build(),
+            )
             .build()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(DONE_NOTIFICATION_BASE + (s.id.hashCode() and 0xffff), n)
@@ -166,6 +182,7 @@ class SessionService : Service() {
     }
 
     fun closeSession(id: String) {
+        clearFinished(id)
         sessions.remove(id)?.kill()
         updateForeground()
     }

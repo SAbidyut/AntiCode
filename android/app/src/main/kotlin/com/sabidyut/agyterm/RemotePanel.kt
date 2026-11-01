@@ -38,6 +38,7 @@ class RemotePanel(
     context: Context,
     private val openInBrowser: (String) -> Unit,
     private val chooseFiles: (ValueCallback<Array<Uri>>) -> Unit,
+    private val onOpened: () -> Unit,
     private val onClosed: () -> Unit,
 ) : FrameLayout(context) {
 
@@ -55,7 +56,16 @@ class RemotePanel(
     private var fg = Color.parseColor("#E6E9EF")
     private var muted = Color.parseColor("#8A90A2")
 
-    val isOpen get() = visibility == View.VISIBLE
+    /** Shown (or sliding in), not on its way out. */
+    var isOpen = false
+        private set
+    /** Unload the page a while after closing, so it doesn't poll in the background. */
+    private val unload = Runnable {
+        if (!isOpen) {
+            web.loadUrl("about:blank")
+            startUrl = ""
+        }
+    }
 
     init {
         visibility = View.GONE
@@ -110,7 +120,11 @@ class RemotePanel(
                 }
                 if (url.host == GOOGLE_SIGN_IN) {
                     // Google blocks its sign-in inside apps: continue this dashboard in Chrome.
-                    prefs().edit().putBoolean(hostOf(startUrl), true).apply()
+                    // A site that sends you there by itself (Google-only sign-in) goes straight
+                    // to Chrome for a week; a "Continue with Google" tap is just this once.
+                    if (!request.hasGesture()) {
+                        prefs().edit().putLong(hostOf(startUrl), System.currentTimeMillis()).apply()
+                    }
                     Toast.makeText(context, "Google sign-in opens in Chrome", Toast.LENGTH_SHORT).show()
                     openInBrowser(startUrl)
                     close()
@@ -153,8 +167,8 @@ class RemotePanel(
         }
 
         addView(header, LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
-        addView(progress, LayoutParams(MATCH_PARENT, dp(2), Gravity.TOP))
         addView(web, LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        addView(progress, LayoutParams(MATCH_PARENT, dp(2), Gravity.TOP)) // over the page
         applyTheme()
         applyInsets(0, 0)
     }
@@ -207,7 +221,13 @@ class RemotePanel(
 
     /** Opens [url]; false if this site only works in Chrome (Google sign-in). */
     fun open(url: String, title: String): Boolean {
-        if (prefs().getBoolean(hostOf(url), false)) return false
+        val chromeSince = try {
+            prefs().getLong(hostOf(url), 0L)
+        } catch (_: ClassCastException) {
+            0L
+        }
+        if (System.currentTimeMillis() - chromeSince < CHROME_FOR_MS) return false
+        removeCallbacks(unload)
         titleView.text = title
         subtitleView.text = hostOf(url)
         if (url != startUrl || web.url == null) {
@@ -215,11 +235,16 @@ class RemotePanel(
             web.loadUrl(url)
         }
         if (!isOpen) {
-            visibility = View.VISIBLE
-            translationX = width.toFloat().takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels.toFloat())
-            alpha = 0.6f
+            isOpen = true
+            animate().cancel() // maybe still sliding out
+            if (visibility != View.VISIBLE) {
+                visibility = View.VISIBLE
+                translationX = width.toFloat().takeIf { it > 0 } ?: resources.displayMetrics.widthPixels.toFloat()
+                alpha = 0.6f
+            }
             animate().translationX(0f).alpha(1f).setDuration(240)
                 .setInterpolator(DecelerateInterpolator(2f)).start()
+            onOpened()
         }
         web.onResume()
         return true
@@ -227,12 +252,15 @@ class RemotePanel(
 
     fun close() {
         if (!isOpen) return
+        isOpen = false
         CookieManager.getInstance().flush()
+        onClosed()
         animate().translationX(width.toFloat()).alpha(0.6f).setDuration(200)
             .setInterpolator(DecelerateInterpolator()).withEndAction {
+                if (isOpen) return@withEndAction // reopened meanwhile
                 visibility = View.GONE
                 web.onPause()
-                onClosed()
+                postDelayed(unload, UNLOAD_AFTER_MS)
             }.start()
     }
 
@@ -249,5 +277,7 @@ class RemotePanel(
 
     companion object {
         private const val GOOGLE_SIGN_IN = "accounts.google.com"
+        private const val CHROME_FOR_MS = 7L * 24 * 3600 * 1000
+        private const val UNLOAD_AFTER_MS = 60_000L
     }
 }

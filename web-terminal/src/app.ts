@@ -94,6 +94,7 @@ window.addEventListener('unhandledrejection', (e) => reportError(`unhandled reje
 // ================================================================ state
 const sessions = new Map<string, TerminalSession>();
 let notifyWhenDone = true;
+let restored = false;
 let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
 let active: TerminalSession | null = null;
@@ -157,7 +158,7 @@ const bridge: Bridge = createBridge({
   onOpenSession(id) {
     const s = sessions.get(id);
     if (s) activate(s);
-    else pendingOpen = id; // the UI is still starting: open it once sessions are restored
+    else if (!restored) pendingOpen = id; // still starting: open it once sessions are restored
   },
   onBack() {
     if (sheetOpen()) {
@@ -1038,6 +1039,7 @@ async function boot() {
     }
     if (list.length) activate((pendingOpen && sessions.get(pendingOpen)) || [...sessions.values()].pop()!);
     pendingOpen = '';
+    restored = true;
   } catch { /* nothing to restore */ }
 
   new ResizeObserver(() => {

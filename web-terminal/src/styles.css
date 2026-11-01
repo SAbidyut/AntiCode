@@ -214,6 +214,7 @@ body[data-theme='paper'] .agent-agy { --agent: #d0477a; }
 .group-title { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.9px; color: var(--muted); margin: 0 4px 8px; font-weight: 700; }
 .list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .list-item {
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
   padding: 13px 14px; border-bottom: 1px solid var(--line); transition: background 0.15s;
 }
@@ -253,13 +254,18 @@ body[data-theme='paper'] .tint-green { color: #2b8a3e; }
 .cmd { display: inline-flex; align-items: center; gap: 6px; }
 .note { font-size: 13.5px; color: var(--muted); margin: 0 0 14px; line-height: 1.75; }
 .ok-text { color: var(--good); }
-/* remote control: one compact row per agent */
-.remote-row { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; border-bottom: 1px solid var(--line); }
+/* remote control: one compact row per agent — name and Open on top, the command under */
+.remote-row {
+  display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 4px; align-items: center;
+  padding: 12px 12px 12px 14px; border-bottom: 1px solid var(--line);
+}
 .remote-row:last-child { border-bottom: 0; }
-.remote-row .li-icon { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; flex: none; }
+.remote-row .li-icon { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; grid-row: 1 / span 2; align-self: start; }
 .remote-row .li-icon .ic { width: 19px; height: 19px; }
-.remote-row .li-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-.remote-row .li-title { font-weight: 600; }
+.remote-row .li-main { display: contents; }
+.remote-row .li-title { font-weight: 600; grid-column: 2; grid-row: 1; }
+.remote-row .open-btn { grid-column: 3; grid-row: 1; }
+.remote-row .cmd-chip { grid-column: 2 / span 2; grid-row: 2; justify-self: start; }
 .cmd-chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   font-size: 12px; color: var(--muted); padding: 2px 8px 2px 0; border-radius: 8px;
@@ -299,6 +305,7 @@ body[data-screen='home']::before {
 }
 #tabs::-webkit-scrollbar { display: none; }
 .tab {
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   display: flex; align-items: center; gap: 7px; flex: none;
   height: 34px; padding: 0 12px; border-radius: 99px; font-size: 13.5px; font-weight: 600;
   color: var(--muted); background: transparent; border: 1px solid transparent;

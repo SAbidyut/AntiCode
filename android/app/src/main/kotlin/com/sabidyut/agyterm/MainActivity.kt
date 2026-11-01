@@ -163,7 +163,9 @@ class MainActivity : ComponentActivity() {
                 fileCallback = cb
                 pickFiles.launch("*/*")
             },
-            onClosed = {},
+            // while the panel covers the terminal, no session is "being watched"
+            onOpened = { service?.activeSessionId = null },
+            onClosed = { service?.activeSessionId = shownSessionId },
         )
         root.addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         setContentView(root)
@@ -360,6 +362,8 @@ class MainActivity : ComponentActivity() {
 
     // ---------------------------------------------------------------- "task finished" taps
     private var openSessionId: String? = null
+    /** The session the page shows (set from JS). */
+    @Volatile private var shownSessionId: String? = null
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -370,6 +374,7 @@ class MainActivity : ComponentActivity() {
     private fun takeOpenSession(intent: Intent?) {
         val id = intent?.getStringExtra(SessionService.EXTRA_OPEN_SESSION) ?: return
         intent.removeExtra(SessionService.EXTRA_OPEN_SESSION)
+        if (::panel.isInitialized) panel.close() // the session must not open under the panel
         openSessionId = id
         deliverOpenSession()
     }
@@ -559,8 +564,8 @@ class MainActivity : ComponentActivity() {
             main.postDelayed({
                 if (panel.isOpen) Log.i(SELFTEST, "SELFTEST_PANEL_OK")
                 else Log.e(SELFTEST, "SELFTEST_PANEL_FAIL panel did not open")
-            }, 6000)
-        }, 3000)
+            }, 8000)
+        }, 12_000) // the CI script screenshots Claude Code first
     }
 
     private fun scheduleScreenChecks() {
@@ -736,8 +741,9 @@ class MainActivity : ComponentActivity() {
         /** The session on screen (no "finished" notification for what you're looking at). */
         @JavascriptInterface
         fun setActiveSession(id: String) {
+            shownSessionId = id.ifEmpty { null }
             service?.let {
-                it.activeSessionId = id.ifEmpty { null }
+                if (!panel.isOpen) it.activeSessionId = shownSessionId
                 if (id.isNotEmpty()) it.clearFinished(id)
             }
         }

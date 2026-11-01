@@ -57,6 +57,8 @@ class TermSession(
     @Volatile var lastOutputAt = 0L
     /** A notification the program asked for (OSC 9 / OSC 777), or "bell". */
     @Volatile var alert: String? = null
+    /** The shell printed its prompt again (OSC 7770;done from the guest bashrc). */
+    @Volatile var promptAt = 0L
     private var oscState = 0
     private val osc = java.io.ByteArrayOutputStream()
 
@@ -163,16 +165,20 @@ class TermSession(
         when {
             s.startsWith("9;") && !s.startsWith("9;4;") -> alert = s.substring(2) // 9;4 = progress bar
             s.startsWith("777;notify;") -> alert = s.substring(11).split(';').filter { it.isNotBlank() }.joinToString(" — ")
+            s == "7770;done" -> promptAt = System.currentTimeMillis()
         }
     }
 
     fun write(data: ByteArray) {
         if (!alive) return
-        // Enter arms the "answer finished" check; typing more (not terminal replies,
-        // which start with ESC) means the user is here and disarms it.
-        if (data.contains('\r'.code.toByte())) {
+        // Enter arms the "answer finished" check. In an agent any key does (answering
+        // "1 / 2 / 3" to a question starts more work); in a shell, typing more means the
+        // user is here and disarms it. Terminal replies (starting with ESC) don't count.
+        val agent = kind == "agy" || kind == "claude"
+        if (data.contains('\r'.code.toByte()) || (agent && data.isNotEmpty() && data[0] != 0x1b.toByte())) {
             enterAt = System.currentTimeMillis()
             outSinceEnter = 0
+            promptAt = 0
         } else if (data.isNotEmpty() && data[0] != 0x1b.toByte()) {
             enterAt = 0
         }

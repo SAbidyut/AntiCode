@@ -228,6 +228,14 @@ export class TerminalSession {
     const line = this.lineBuf.trim().replace(/\s+/g, ' ');
     this.lineBuf = '';
     if (line.length < 3 || line.startsWith('/')) return;
+    // Only what was echoed on screen: a password typed at a prompt that doesn't show it
+    // (sudo, ssh, read -s) must never become a label or a notification.
+    const buf = this.term.buffer.active;
+    const row = (y: number) => buf.getLine(buf.baseY + y)?.translateToString(true) ?? '';
+    const shown = (row(buf.cursorY - 1) + row(buf.cursorY)).replace(/\s+/g, ' ');
+    if (!shown.includes(line.slice(-Math.min(line.length, 24)))) return;
+    // …nor a pasted token / login code
+    if (!line.includes(' ') && line.length > 20 && /^[\w#.+/=-]+$/.test(line)) return;
     const agent = this.kind === 'agy' || this.kind === 'claude';
     if (agent && this.task) return; // the first real prompt names the work
     if (!agent && /^(ls|ll|la|cd|clear|pwd|exit|history)( |$)/.test(line)) return;

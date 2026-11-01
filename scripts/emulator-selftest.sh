@@ -69,9 +69,11 @@ while [ $SECONDS -lt $deadline ]; do
   fi
   if [ $notified -eq 0 ] && grep -q "SELFTEST_NOTIFY_SENT" <<<"$log"; then
     sleep 4
-    if adb shell dumpsys notification --noredact | grep -q "SELFTEST-NOTIFY"; then
+    rec=$(adb shell dumpsys notification --noredact | grep -B3 -A12 "SELFTEST-NOTIFY" || true)
+    if [ -n "$rec" ]; then
+      grep -E "NotificationRecord|channel=|android.title|android.text|importance|flags" <<<"$rec" | head -12 || true
       echo "--- 'task finished' notification posted"
-      adb shell cmd statusbar expand-notifications >/dev/null 2>&1; sleep 1; shot 3b-notification
+      adb shell cmd statusbar expand-notifications >/dev/null 2>&1; sleep 2; shot 3b-notification
       adb shell cmd statusbar collapse >/dev/null 2>&1
       notified=1
     else

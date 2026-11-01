@@ -18,6 +18,9 @@ alias ls='ls --color=auto'
 alias ll='ls -alh --color=auto'
 alias la='ls -A --color=auto'
 alias grep='grep --color=auto'
+# after clearing the screen the prompt starts at the very top, without the blank line
+clear() { command clear "$@"; __agy_prompted=; }
+reset() { command reset "$@"; __agy_prompted=; }
 
 __agy_style_file="$HOME/.config/agy-terminal/prompt"
 
@@ -55,6 +58,8 @@ __agy_git_branch() {
 __agy_prompt() {
   local status=$?
   __agy_in_prompt=1
+  # tell the app the command is done (its "task finished" notification)
+  printf '\e]7770;done\a'
 
   local took=
   if [ -n "$__agy_t0" ]; then
