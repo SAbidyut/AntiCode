@@ -278,8 +278,15 @@ class UbuntuManager(private val context: Context) {
             "BROWSER=/usr/local/bin/xdg-open",
             "AGY_TERMINAL=1",
         )
-        if (kind == "agy") args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
-        else args += listOf("/bin/bash", "-l")
+        when (kind) {
+            "agy" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
+            // used by the debug-only self test (see SessionService.runSelfTest)
+            "selftest" -> args += listOf(
+                "/bin/bash", "-lc",
+                "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && echo SELFTEST_OK",
+            )
+            else -> args += listOf("/bin/bash", "-l")
+        }
 
         val env = arrayOf(
             "PATH=/system/bin:/system/xbin",

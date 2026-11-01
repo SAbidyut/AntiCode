@@ -11,6 +11,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import com.sabidyut.agyterm.term.TermSession
 import com.sabidyut.agyterm.ubuntu.UbuntuManager
 import java.util.UUID
@@ -56,7 +57,7 @@ class SessionService : Service() {
 
     fun createSession(kind: String, cols: Int, rows: Int): TermSession {
         val launch = when (kind) {
-            "ubuntu", "agy" -> ubuntu.launch(kind)
+            "ubuntu", "agy", "selftest" -> ubuntu.launch(kind)
             else -> ubuntu.launchAndroidShell()
         }
         val id = UUID.randomUUID().toString().substring(0, 8)
@@ -76,6 +77,48 @@ class SessionService : Service() {
     fun closeSession(id: String) {
         sessions.remove(id)?.kill()
         updateForeground()
+    }
+
+    /**
+     * Debug builds only: installs Ubuntu, then runs first-time setup and `agy --version`
+     * inside it, logging everything to logcat (tag AgySelfTest). Used by CI on an emulator:
+     *   adb shell am start -n com.sabidyut.agyterm/.MainActivity --ez selftest true
+     */
+    fun runSelfTest() {
+        Thread({
+            Log.i(SELFTEST, "start")
+            if (!ubuntu.isInstalled()) {
+                ubuntu.install()
+                var last = ""
+                while (ubuntu.state == UbuntuManager.State.INSTALLING) {
+                    if (ubuntu.message != last) {
+                        last = ubuntu.message
+                        Log.i(SELFTEST, "install: $last")
+                    }
+                    Thread.sleep(2000)
+                }
+                if (ubuntu.state != UbuntuManager.State.READY) {
+                    Log.e(SELFTEST, "SELFTEST_FAIL install: ${ubuntu.message}")
+                    return@Thread
+                }
+            }
+            Log.i(SELFTEST, "ubuntu installed, starting session")
+            val s = createSession("selftest", 100, 30)
+            val line = StringBuilder()
+            s.attach(object : TermSession.OutputListener {
+                override fun onOutput(session: TermSession, data: ByteArray, len: Int) {
+                    for (ch in String(data, 0, len, Charsets.UTF_8)) {
+                        if (ch == '\n') {
+                            Log.i(SELFTEST, "out: " + line.toString().replace(Regex("\u001b\\[[0-9;?]*[A-Za-z]"), "").trimEnd('\r'))
+                            line.setLength(0)
+                        } else if (line.length < 400) line.append(ch)
+                    }
+                }
+            })
+            while (s.alive) Thread.sleep(1000)
+            Log.i(SELFTEST, "out: $line")
+            Log.i(SELFTEST, "session exited with code ${s.exitCode}")
+        }, "selftest").start()
     }
 
     /** Foreground while anything runs; otherwise let the system stop us when unbound. */
@@ -150,6 +193,7 @@ class SessionService : Service() {
     companion object {
         private const val CHANNEL_ID = "sessions"
         private const val NOTIFICATION_ID = 1
+        private const val SELFTEST = "AgySelfTest"
         const val ACTION_STOP = "com.sabidyut.agyterm.STOP"
     }
 }

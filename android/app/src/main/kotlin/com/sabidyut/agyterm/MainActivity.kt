@@ -102,6 +102,8 @@ class MainActivity : ComponentActivity() {
             }
             // Only now load the UI: every bridge call needs the service.
             if (web.url == null) web.loadUrl(START_URL)
+            val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+            if (debuggable && intent?.getBooleanExtra("selftest", false) == true) svc.runSelfTest()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {

@@ -44,15 +44,22 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew --no-daemon assembleRelease
+        run: ./gradlew --no-daemon assembleRelease assembleDebug
 
       - name: Rename
-        run: cp android/app/build/outputs/apk/release/app-release.apk AgyTerminal.apk
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk AgyTerminal.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk AgyTerminal-debug.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: AgyTerminal-apk
           path: AgyTerminal.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgyTerminal-debug-apk
+          path: AgyTerminal-debug.apk
 
       # Easiest way to get the APK on a phone: the "latest" release on the repo page.
       # Needs Settings → Actions → General → Workflow permissions → "Read and write".
@@ -70,15 +77,19 @@ jobs:
             --title "Agy টার্মিনাল — সর্বশেষ বিল্ড" \
             --notes "ফোনে এই পেজ খুলে **AgyTerminal.apk** নামিয়ে ইনস্টল করুন। (commit ${GITHUB_SHA::7}, branch ${GITHUB_REF_NAME})"
 
-  # Boots an emulator and checks that the app starts and proot can run.
+  # Boots an emulator and runs the app's self test: download + install Ubuntu, start it
+  # with proot, run the first-time setup (apt + official Antigravity installer) and
+  # `agy --version`. Everything is logged under the logcat tag AgySelfTest.
   smoke-test:
     needs: apk
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 45
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
-          name: AgyTerminal-apk
+          name: AgyTerminal-debug-apk
 
       - name: Enable KVM
         run: |
@@ -92,12 +103,5 @@ jobs:
           arch: x86_64
           target: default
           disable-animations: true
-          script: |
-            adb install -r AgyTerminal.apk
-            adb shell am start -W -n com.sabidyut.agyterm/.MainActivity
-            sleep 8
-            adb shell pidof com.sabidyut.agyterm
-            LIB=$(adb shell pm path com.sabidyut.agyterm | tr -d '\r' | sed 's/^package://; s#/base.apk##')/lib/x86_64
-            adb shell ls -l $LIB
-            adb shell "LD_LIBRARY_PATH=$LIB $LIB/libproot.so --version" | head -5
-            adb logcat -d | grep -E "AndroidRuntime|agyterm|UbuntuManager" | tail -40 || true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -partition-size 4096
+          script: bash scripts/emulator-selftest.sh AgyTerminal-debug.apk

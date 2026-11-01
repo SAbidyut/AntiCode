@@ -54,11 +54,25 @@ android {
 
     sourceSets["main"].assets.srcDir(webAssetsDir)
 
+    signingConfigs {
+        // A fixed key committed to the repo, so every build (CI or local) is signed the
+        // same way and a newer APK installs over the old one. Fine for a personal,
+        // sideloaded app; use a private key (e.g. from CI secrets) before publishing widely.
+        create("sideload") {
+            storeFile = file("agyterm-sideload.jks")
+            storePassword = "agyterminal"
+            keyAlias = "agyterm"
+            keyPassword = "agyterminal"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the CI artifact installs directly.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("sideload")
         }
     }
 
