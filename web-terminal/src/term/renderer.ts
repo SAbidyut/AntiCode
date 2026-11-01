@@ -256,8 +256,34 @@ export class BanglaRenderer {
   /** Visual-only zoom while pinching (cheap); the real font size is set when it ends. */
   previewZoom(scale: number | null) {
     this.zoom = scale ?? 1;
-    this.el.style.setProperty('--zoom', String(this.zoom));
-    this.el.classList.toggle('zooming', scale !== null);
+    this.applyLayerTransform();
+  }
+
+  /** Vertical pan of the whole screen (keeps the cursor above the keyboard) + pinch zoom. */
+  private pan = 0;
+  private applyLayerTransform() {
+    const t = `translateY(${(-this.pan).toFixed(1)}px)` + (this.zoom !== 1 ? ` scale(${this.zoom})` : '');
+    if (this.zoomLayer.style.transform !== t) this.zoomLayer.style.transform = t;
+  }
+
+  // ---- don't show half-drawn frames ----
+  /** Time of the last output (set by the session). */
+  lastOutput = 0;
+  private holdUntil = 0;
+  private syncSince = 0;
+  /** After a resize, programs clear and redraw: keep the old picture until they're done. */
+  holdForRedraw(ms = 300) {
+    this.holdUntil = performance.now() + ms;
+  }
+  private shouldWait(): boolean {
+    const now = performance.now();
+    // DEC 2026 synchronized output: the program says "frame in progress"
+    if (this.term.modes.synchronizedOutputMode) {
+      if (!this.syncSince) this.syncSince = now;
+      if (now - this.syncSince < 250) return true;
+    } else this.syncSince = 0;
+    // after a resize: wait until output has been quiet for 60 ms (at most holdForRedraw ms)
+    return now < this.holdUntil && now - this.lastOutput < 60;
   }
 
   private applyMetrics() {
@@ -513,6 +539,10 @@ export class BanglaRenderer {
   }
 
   render() {
+    if (this.shouldWait()) {
+      if (!this.frame) this.frame = window.setTimeout(() => { this.frame = 0; this.render(); }, 20) as unknown as number;
+      return;
+    }
     const term = this.term;
     const buf = term.buffer.active;
     const rows = term.rows;
@@ -564,10 +594,22 @@ export class BanglaRenderer {
     }
 
     this.viewport.style.transform = `translateY(${(-topPx).toFixed(2)}px)`;
-    // Anchored to the bottom: while the keyboard slides in (before the terminal is
-    // resized) the prompt stays visible and the top lines are the ones clipped.
     const h = `${rows * lh}px`;
     if (this.zoomLayer.style.height !== h) this.zoomLayer.style.height = h;
+    // When the keyboard covers part of the screen the terminal is NOT resized (that makes
+    // programs redraw and flicker); instead the screen slides up just enough to keep the
+    // cursor — and a line of context under it — visible. A prompt at the top never moves.
+    if (this.scrollPx === 0) {
+      const visible = this.el.clientHeight - 12;
+      const overflow = rows * lh - visible;
+      let pan = 0;
+      if (overflow > 0) {
+        const below = (buf.cursorY + 2) * lh - visible;
+        pan = Math.max(0, Math.min(overflow, below));
+      }
+      this.pan = pan;
+    }
+    this.applyLayerTransform();
 
     const cursorLine = buf.baseY + buf.cursorY;
     const showCursor = this.cursorVisible && this.scrollPx < lh;

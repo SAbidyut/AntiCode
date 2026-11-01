@@ -17,6 +17,9 @@ function xtermRgb(hex: string): string {
 const URL_RE = /https?:\/\/[^\s'"<>`]+[^\s'"<>`.,;:)\]}]/g;
 
 export class TerminalSession {
+  /** Height (CSS px) currently covered by the on-screen keyboard; set by the app. */
+  static keyboardInset = 0;
+
   readonly term: Terminal;
   readonly renderer: BanglaRenderer;
   readonly el: HTMLDivElement;
@@ -62,6 +65,7 @@ export class TerminalSession {
     this.term.onData((d) => this.bridge.write(this.id, d));
     this.term.onBinary((d) => this.bridge.write(this.id, d));
     this.term.onWriteParsed(() => {
+      this.renderer.lastOutput = performance.now();
       this.renderer.schedule();
       if (this.readerOpen) this.scheduleReader();
       this.onActivity?.();
@@ -192,8 +196,10 @@ export class TerminalSession {
   fit() {
     const box = this.el.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;
-    const { cols, rows } = this.renderer.fit(box.width, box.height);
+    // The on-screen keyboard doesn't count: size the terminal as if it were closed.
+    const { cols, rows } = this.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
     if (cols !== this.term.cols || rows !== this.term.rows) {
+      this.renderer.holdForRedraw();
       this.term.resize(cols, rows);
       this.renderer.schedule();
     }

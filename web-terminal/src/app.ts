@@ -97,6 +97,7 @@ const latch: Mods = {};
 let screen: 'home' | 'term' = 'home';
 let keyboardShown = false;
 let fitTimer = 0;
+let navBottom = 0;
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -133,6 +134,10 @@ const bridge: Bridge = createBridge({
     const root = document.documentElement.style;
     root.setProperty('--safe-top', `${top}px`);
     root.setProperty('--safe-bottom', `${bottom}px`);
+    // The keyboard's height doesn't resize the terminal (see TerminalSession.fit).
+    if (!keyboard) navBottom = bottom;
+    TerminalSession.keyboardInset = keyboard ? Math.max(0, bottom - navBottom) : 0;
+    active?.renderer.schedule();
     if (settled) {
       keyboardShown = keyboard;
       clearTimeout(fitTimer);
@@ -977,7 +982,10 @@ async function boot() {
     if (list.length) activate([...sessions.values()].pop()!);
   } catch { /* nothing to restore */ }
 
-  new ResizeObserver(fitSoon).observe($('#sessions'));
+  new ResizeObserver(() => {
+    active?.renderer.schedule(); // re-pan right away; resize (if any) once things settle
+    fitSoon();
+  }).observe($('#sessions'));
   window.addEventListener('resize', fitSoon);
 }
 

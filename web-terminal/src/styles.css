@@ -250,8 +250,7 @@ body[data-theme='paper'] .tint-green { color: #2b8a3e; }
   contain: strict;
 }
 /* pinch-zoom preview: scale the drawn screen, resize the terminal once at the end */
-.term-zoom { position: absolute; left: 8px; right: 8px; bottom: 6px; transform-origin: 0 100%; overflow: visible; }
-.term-screen.zooming .term-zoom { transform: scale(var(--zoom, 1)); }
+.term-zoom { position: absolute; left: 8px; right: 8px; top: 6px; transform-origin: 0 0; overflow: visible; will-change: transform; }
 .term-viewport { position: absolute; left: 0; top: 0; right: 0; height: 0; will-change: transform; }
 .term-row {
   position: absolute; left: 0; top: 0; right: 0;
