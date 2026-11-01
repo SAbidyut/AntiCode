@@ -206,9 +206,9 @@ async function newSession(kind: SessionKind) {
   showTerm();
   const box = $('#sessions').getBoundingClientRect();
   const probe = new TerminalSession(bridge, '_probe', kind, rendererOpts());
-  const { cols, rows } = probe.renderer.fit(box.width, box.height);
+  const { cols, rows } = probe.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
   probe.dispose();
-  console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px → ${cols}x${rows}`);
+  console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px (+${TerminalSession.keyboardInset}px keyboard) → ${cols}x${rows}`);
   const id = await bridge.createSession(kind, cols, rows);
   if (!id) {
     toast('Could not start the session');
