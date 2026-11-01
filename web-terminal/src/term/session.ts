@@ -39,7 +39,7 @@ export class TerminalSession {
     readonly kind: SessionKind,
     opts: RendererOptions,
   ) {
-    this.title = kind === 'agy' ? 'Antigravity' : kind === 'ubuntu' ? 'Ubuntu' : 'Android';
+    this.title = kind === 'agy' ? 'Antigravity' : kind === 'ubuntu' ? 'Ubuntu' : 'Android shell';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
     this.term.loadAddon(new UnicodeGraphemesAddon() as never);
     this.renderer = new BanglaRenderer(this.term, opts);
@@ -49,7 +49,14 @@ export class TerminalSession {
     this.readerEl = document.createElement('div');
     this.readerEl.className = 'reader';
     this.readerEl.hidden = true;
-    this.el.append(this.renderer.el, this.readerEl);
+    // "jump to the bottom" button, shown while scrolled back in history
+    const fab = document.createElement('button');
+    fab.className = 'fab-bottom hidden';
+    fab.setAttribute('aria-label', 'Scroll to bottom');
+    fab.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>';
+    fab.addEventListener('click', () => this.scrollToBottom());
+    this.renderer.onScrolled = (up) => fab.classList.toggle('hidden', !up);
+    this.el.append(this.renderer.el, this.readerEl, fab);
 
     // Replies the terminal generates itself (cursor position reports, device attributes…)
     this.term.onData((d) => this.bridge.write(this.id, d));
@@ -79,6 +86,7 @@ export class TerminalSession {
     this.term.parser.registerOscHandler(7770, (data) => {
       const [cmd, ...rest] = data.split(';');
       if (cmd === 'open' && rest.length) this.bridge.openUrl(rest.join(';'));
+      else if (cmd === 'storage') this.bridge.requestStorage(); // `setup-storage` inside Ubuntu
       return true;
     });
     // Colour queries (OSC 10/11/12 ; ?) — TUIs like the Antigravity CLI ask for the
@@ -333,7 +341,7 @@ export class TerminalSession {
 
   markExited(code: number) {
     this.alive = false;
-    this.term.write(`\r\n\x1b[2m[প্রসেস শেষ হয়েছে (code ${code}) — ট্যাব বন্ধ করতে × চাপুন]\x1b[0m\r\n`);
+    this.term.write(`\r\n\x1b[2m[process exited with code ${code} — close the tab with ×]\x1b[0m\r\n`);
   }
 
   dispose() {

@@ -96,7 +96,7 @@ class InAppBrowser(private val activity: Activity) {
         try {
             activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(activity, "লিংক খোলার মতো কোনো ব্রাউজার নেই", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "No browser found to open the link", Toast.LENGTH_LONG).show()
         }
     }
 

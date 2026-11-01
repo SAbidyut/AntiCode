@@ -1,6 +1,13 @@
 package com.sabidyut.agyterm
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.widget.FrameLayout
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -34,7 +41,8 @@ import java.io.ByteArrayOutputStream
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var web: TermWebView
+    private lateinit var web: WebView
+    private lateinit var keys: KeyCaptureView
     private var service: SessionService? = null
     private val main = Handler(Looper.getMainLooper())
     private lateinit var imm: InputMethodManager
@@ -114,18 +122,24 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.parseColor("#181b25")
-        window.navigationBarColor = Color.parseColor("#181b25")
+        window.statusBarColor = Color.parseColor(BG)
+        window.navigationBarColor = Color.parseColor(BG)
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         browser = InAppBrowser(this).apply { warmup() }
 
-        web = TermWebView(this, object : TermWebView.KeySink {
+        web = WebView(this)
+        web.setBackgroundColor(Color.parseColor(BG))
+        // Owns the keyboard while typing into the terminal (see KeyCaptureView).
+        keys = KeyCaptureView(this, object : KeyCaptureView.Sink {
             override fun onText(text: String) = js("__native.onImeText(${JSONObject.quote(text)})")
             override fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean) =
                 js("__native.onImeKey($keyCode, $ctrl, $alt, $shift)")
         })
-        web.setBackgroundColor(Color.parseColor("#0f1117"))
-        setContentView(web)
+        keys.compatMode = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_COMPAT, false)
+        setContentView(FrameLayout(this).apply {
+            addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(keys, FrameLayout.LayoutParams(1, 1))
+        })
 
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
         with(web.settings) {
@@ -188,6 +202,47 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    // ---------------------------------------------------------------- phone storage
+    private val storagePermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { onStorageResult() }
+
+    /** Like Termux's termux-setup-storage: ask for access to the phone's shared storage. */
+    private fun requestStorageAccess() {
+        if (Storage.hasAccess(this)) {
+            onStorageResult()
+            return
+        }
+        storagePermissions.launch(
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
+        )
+    }
+
+    private fun onStorageResult() {
+        if (!Storage.hasAccess(this) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Some Android 11+ devices also want "All files access" for full /sdcard access.
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")),
+                )
+                Toast.makeText(this, "Turn on \"Allow access to manage all files\", then come back", Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+        }
+        pushState()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pushState() // storage access may have been granted in Settings
+    }
+
+    private fun pushState() {
+        val svc = service ?: return
+        js("__native.onState(${JSONObject.quote(svc.ubuntu.stateJson())})")
+    }
+
     // ---------------------------------------------------------------- self test (debug builds)
     private fun selftestEnabled() =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
@@ -211,6 +266,59 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var typingTestStarted = false
+
+    private fun selftestScreen(cb: (String) -> Unit) {
+        web.evaluateJavascript("__selftest.screen()") { raw ->
+            cb(try { JSONObject("{\"v\":$raw}").getString("v") } catch (_: Exception) { "" })
+        }
+    }
+
+    /**
+     * Phase 3: type into an Ubuntu shell through the native key view (the CI script injects
+     * key presses with `adb shell input text` once SELFTEST_TYPE_READY is logged), then check
+     * that the phone's storage is visible under /sdcard.
+     */
+    private fun selftestTyping() {
+        Log.i(SELFTEST, "phase 3: typing through the native key view")
+        web.evaluateJavascript("__selftest.open('ubuntu')", null)
+        main.postDelayed({
+            web.evaluateJavascript("__selftest.focusKeys()", null)
+            main.postDelayed({
+                Log.i(SELFTEST, "SELFTEST_TYPE_READY keyViewFocused=${keys.hasFocus()}")
+                pollTyping(0)
+            }, 1500)
+        }, 5000)
+    }
+
+    private fun pollTyping(n: Int) {
+        selftestScreen { screen ->
+            if (screen.lines().any { it.trim() == "42" }) {
+                Log.i(SELFTEST, "SELFTEST_TYPE_OK")
+                web.evaluateJavascript("__selftest.send('ls /sdcard/ >/dev/null && ls -d ~/storage/downloads/ && echo SD\$((1+1))OK')", null)
+                main.postDelayed({ pollStorage(0) }, 2000)
+            } else if (n < 20) {
+                main.postDelayed({ pollTyping(n + 1) }, 3000)
+            } else {
+                for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "ui| $line")
+                Log.e(SELFTEST, "SELFTEST_TYPE_FAIL typed text never reached the shell")
+            }
+        }
+    }
+
+    private fun pollStorage(n: Int) {
+        selftestScreen { screen ->
+            if (screen.contains("SD2OK")) {
+                Log.i(SELFTEST, "SELFTEST_STORAGE_OK")
+            } else if (n < 10) {
+                main.postDelayed({ pollStorage(n + 1) }, 2000)
+            } else {
+                for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "ui| $line")
+                Log.e(SELFTEST, "SELFTEST_STORAGE_FAIL /sdcard not readable inside Ubuntu")
+            }
+        }
+    }
+
     private fun scheduleScreenChecks() {
         val checks = listOf(15_000L, 30_000L, 60_000L, 90_000L)
         for ((i, delay) in checks.withIndex()) {
@@ -228,8 +336,12 @@ class MainActivity : ComponentActivity() {
                     if (errors.isNotBlank()) Log.e(SELFTEST, "ui js errors: $errors")
                     val ok = errors.isBlank() && Regex("Antigravity|sign|Sign|login|Login").containsMatchIn(screen)
                     if (ok) {
-                        Log.i(SELFTEST, "SELFTEST_AGY_OK")
-                    } else if (i == checks.lastIndex) {
+                        if (!typingTestStarted) {
+                            typingTestStarted = true
+                            Log.i(SELFTEST, "SELFTEST_AGY_OK")
+                            selftestTyping()
+                        }
+                    } else if (i == checks.lastIndex && !typingTestStarted) {
                         // Log the raw terminal output so the cause is visible in CI.
                         web.evaluateJavascript("__selftest.dump()") { dump ->
                             val text = try {
@@ -256,7 +368,7 @@ class MainActivity : ComponentActivity() {
             s.attach(outputListener)
             s.id
         } catch (e: Exception) {
-            main.post { Toast.makeText(this@MainActivity, "সেশন শুরু হয়নি: ${e.message}", Toast.LENGTH_LONG).show() }
+            main.post { Toast.makeText(this@MainActivity, "Could not start the session: ${e.message}", Toast.LENGTH_LONG).show() }
             ""
         }
 
@@ -321,27 +433,39 @@ class MainActivity : ComponentActivity() {
             return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString() ?: ""
         }
 
+        /** on: the terminal gets the keyboard (raw keys). off: the WebView does (compose box). */
         @JavascriptInterface
         fun setTerminalKeyboard(on: Boolean) {
-            main.post {
-                if (web.terminalMode != on) {
-                    web.terminalMode = on
-                    imm.restartInput(web)
-                }
-            }
+            main.post { if (on) keys.requestFocus() else web.requestFocus() }
         }
 
         @JavascriptInterface
         fun showKeyboard() {
             main.post {
-                web.requestFocus()
-                imm.showSoftInput(web, 0)
+                keys.requestFocus()
+                imm.restartInput(keys)
+                imm.showSoftInput(keys, InputMethodManager.SHOW_IMPLICIT)
             }
         }
 
         @JavascriptInterface
         fun hideKeyboard() {
             main.post { imm.hideSoftInputFromWindow(web.windowToken, 0) }
+        }
+
+        /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
+        @JavascriptInterface
+        fun setKeyboardCompat(on: Boolean) {
+            main.post {
+                keys.compatMode = on
+                getPreferences(Context.MODE_PRIVATE).edit().putBoolean(PREF_KEYBOARD_COMPAT, on).apply()
+                if (keys.hasFocus()) imm.restartInput(keys)
+            }
+        }
+
+        @JavascriptInterface
+        fun requestStorage() {
+            main.post { requestStorageAccess() }
         }
 
         @JavascriptInterface
@@ -354,6 +478,8 @@ class MainActivity : ComponentActivity() {
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
+        private const val BG = "#0b0d12"
+        private const val PREF_KEYBOARD_COMPAT = "keyboard_compat"
         private const val SELFTEST = "AgySelfTest"
     }
 }

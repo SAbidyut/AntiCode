@@ -1,0 +1,9 @@
+#!/bin/sh
+# Like termux-setup-storage: ask Agy Terminal for access to the phone's storage.
+printf '\033]7770;storage\007' > /dev/tty 2>/dev/null || printf '\033]7770;storage\007'
+echo "Allow storage access in the dialog on your phone."
+echo "Your phone's files are then in /sdcard and ~/storage:"
+echo "  ~/storage/shared      whole shared storage"
+echo "  ~/storage/downloads   Download"
+echo "  ~/storage/dcim        camera photos"
+echo "  ~/storage/pictures  ~/storage/music  ~/storage/movies  ~/storage/documents"

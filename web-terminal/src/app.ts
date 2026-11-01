@@ -3,26 +3,48 @@ import { createBridge, type Bridge, type HostState, type SessionKind } from './b
 import { TerminalSession } from './term/session';
 import { THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
+import { hydrateIcons, icon } from './icons';
 
-// ---------------------------------------------------------------- prefs
+// ================================================================ prefs
+type ThemeName = 'midnight' | 'dracula' | 'solarized' | 'paper';
+type CursorStyle = 'block' | 'bar' | 'underline';
 interface Prefs {
   fontSize: number;
-  theme: keyof typeof THEMES;
+  theme: ThemeName;
   bnScale: number;
   remoteUrl: string;
+  cursor: CursorStyle;
+  /** Show the compose bar (for Bangla keyboards / long text). */
+  compose: boolean;
+  /** Keyboard compatibility mode (keyboards that misbehave with raw keys). */
+  kbCompat: boolean;
 }
 const DEFAULT_PREFS: Prefs = {
   fontSize: 14,
-  theme: 'night',
+  theme: 'midnight',
   bnScale: 1,
   remoteUrl: 'https://antigravity.google.com',
+  cursor: 'block',
+  compose: false,
+  kbCompat: false,
+};
+const THEME_LABELS: Record<ThemeName, string> = {
+  midnight: 'Midnight',
+  dracula: 'Dracula',
+  solarized: 'Solarized',
+  paper: 'Paper',
 };
 function loadPrefs(): Prefs {
+  let p: Prefs;
   try {
-    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem('prefs') ?? '{}') };
+    p = { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem('prefs') ?? '{}') };
   } catch {
-    return { ...DEFAULT_PREFS };
+    p = { ...DEFAULT_PREFS };
   }
+  const legacy: Record<string, ThemeName> = { night: 'midnight', light: 'paper' };
+  p.theme = legacy[p.theme] ?? p.theme;
+  if (!(p.theme in THEMES)) p.theme = 'midnight';
+  return p;
 }
 function savePrefs() {
   try {
@@ -31,21 +53,29 @@ function savePrefs() {
 }
 const prefs = loadPrefs();
 
-// ---------------------------------------------------------------- helpers
+// ================================================================ helpers
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]) {
+type Kid = Node | string | null | undefined | false;
+function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: Kid[]) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  el.append(...kids);
+  for (const k of kids) if (k) el.append(k);
   return el;
 }
-const bnDigits = (n: number | string) => String(n).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[+d]);
+function svg(name: string, cls = ''): Node {
+  const t = document.createElement('template');
+  t.innerHTML = icon(name, cls);
+  return t.content.firstChild!;
+}
+const haptic = () => navigator.vibrate?.(6);
+
+let toastTimer = 0;
 function toast(msg: string) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.add('show');
-  clearTimeout((t as unknown as { _t: number })._t);
-  (t as unknown as { _t: number })._t = window.setTimeout(() => t.classList.remove('show'), 2200);
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => t.classList.remove('show'), 2400);
 }
 
 // JavaScript errors are collected so the user can send them with the debug log.
@@ -53,18 +83,19 @@ const jsErrors: string[] = [];
 function reportError(msg: string) {
   jsErrors.push(`${new Date().toISOString()} ${msg}`);
   if (jsErrors.length > 20) jsErrors.shift();
-  toast('টার্মিনালে একটা সমস্যা হয়েছে — ⋮ → "ডিবাগ লগ কপি" করে পাঠান');
+  toast('Something went wrong — use ⋮ → Copy debug log and send it');
 }
 window.addEventListener('error', (e) => reportError(`${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
 window.addEventListener('unhandledrejection', (e) => reportError(`unhandled rejection: ${String(e.reason)}`));
 
-// ---------------------------------------------------------------- state
+// ================================================================ state
 const sessions = new Map<string, TerminalSession>();
 const early = new Map<string, Uint8Array[]>();
 let active: TerminalSession | null = null;
 let hostState: HostState = { host: 'dev', ubuntu: 'none' };
 const latch: Mods = {};
 let screen: 'home' | 'term' = 'home';
+let keyboardShown = false;
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -96,9 +127,12 @@ const bridge: Bridge = createBridge({
     if (seq) active.input(seq);
   },
   onBack() {
+    if (sheetOpen()) {
+      closeSheet();
+      return true;
+    }
     if (active?.isReaderOpen) {
       active.toggleReader(false);
-      updateReaderBtn();
       return true;
     }
     if (screen === 'term') {
@@ -122,9 +156,12 @@ function rendererOpts() {
   return { fontSize: prefs.fontSize, theme: THEMES[prefs.theme], bnScale: prefs.bnScale };
 }
 
-// ---------------------------------------------------------------- sessions
+// ================================================================ sessions
+const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', ubuntu: 'terminal', android: 'android' };
+
 function addSession(id: string, kind: SessionKind): TerminalSession {
   const s = new TerminalSession(bridge, id, kind, rendererOpts());
+  s.renderer.el.dataset.cursor = prefs.cursor;
   s.onTitle = renderTabs;
   sessions.set(id, s);
   for (const d of early.get(id) ?? []) s.write(d);
@@ -136,7 +173,7 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
 
 async function newSession(kind: SessionKind) {
   if ((kind === 'ubuntu' || kind === 'agy') && hostState.ubuntu !== 'ready') {
-    toast('আগে Ubuntu সেটআপ করুন');
+    toast('Install Ubuntu first');
     showHome();
     return;
   }
@@ -148,7 +185,7 @@ async function newSession(kind: SessionKind) {
   console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px → ${cols}x${rows}`);
   const id = await bridge.createSession(kind, cols, rows);
   if (!id) {
-    toast('সেশন শুরু করা যায়নি');
+    toast('Could not start the session');
     if (!sessions.size) showHome();
     return;
   }
@@ -169,11 +206,9 @@ function activate(s: TerminalSession | null) {
     requestAnimationFrame(() => s.fit());
   }
   renderTabs();
-  updateReaderBtn();
 }
 
 function closeSession(s: TerminalSession) {
-  if (s.alive && !confirm(`"${s.title}" সেশন বন্ধ করবেন? এর ভিতরে চলা প্রোগ্রাম বন্ধ হয়ে যাবে।`)) return;
   bridge.close(s.id);
   sessions.delete(s.id);
   s.dispose();
@@ -182,32 +217,51 @@ function closeSession(s: TerminalSession) {
   if (!next) showHome();
 }
 
+function confirmClose(s: TerminalSession) {
+  if (!s.alive) {
+    closeSession(s);
+    return;
+  }
+  openSheet(
+    `Close “${s.title}”?`,
+    h('p', { class: 'note' }, 'Anything running in this session will be stopped.'),
+    h('div', { class: 'action-list' },
+      action('power', 'Close session', '', () => closeSession(s), true),
+      action('x', 'Cancel', '', () => {}),
+    ),
+  );
+}
+
 function renderTabs() {
   const tabs = $('#tabs');
   tabs.replaceChildren(
     ...[...sessions.values()].map((s) => {
-      const icon = s.kind === 'agy' ? '✦' : s.kind === 'ubuntu' ? '◉' : '▣';
       const tab = h('div', { class: 'tab' + (s === active ? ' active' : '') + (s.alive ? '' : ' dead') },
-        h('span', { class: 'ti' }, icon), h('span', { class: 'tt' }, s.title));
-      const x = h('button', { class: 'tx', 'aria-label': 'বন্ধ' }, '×');
+        svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.title));
+      const x = h('button', { class: 'tx', 'aria-label': 'Close' }, svg('x'));
       x.onclick = (e) => {
         e.stopPropagation();
-        closeSession(s);
+        confirmClose(s);
       };
       tab.append(x);
-      tab.onclick = () => activate(s);
+      tab.onclick = () => {
+        haptic();
+        activate(s);
+      };
       return tab;
     }),
   );
+  tabs.querySelector('.tab.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   renderHomeSessions();
 }
 
-// ---------------------------------------------------------------- screens
+// ================================================================ screens
 function showHome() {
   screen = 'home';
   document.body.dataset.screen = 'home';
   bridge.setTerminalKeyboard(false);
   bridge.hideKeyboard();
+  keyboardShown = false;
   renderHome();
 }
 function showTerm() {
@@ -217,42 +271,70 @@ function showTerm() {
 }
 
 function renderHome() {
-  const card = $('#ubuntu-card');
+  const hero = $('#hero');
   const st = hostState;
-  const body: (Node | string)[] = [];
+  const pill = (cls: string, text: string) => h('span', { class: `status-pill ${cls}` }, h('span', { class: 'dot' }), text);
+  const btn = (cls: string, ic: string, label: string, onClick: () => void) => {
+    const b = h('button', { class: `btn ${cls}` }, svg(ic), h('span', {}, label));
+    b.onclick = () => {
+      haptic();
+      onClick();
+    };
+    return b;
+  };
+  let body: Kid[];
   if (st.ubuntu === 'ready') {
-    const agy = h('button', { class: 'btn primary big' }, '✦ Antigravity চালান');
-    agy.onclick = () => newSession('agy');
-    const ub = h('button', { class: 'btn' }, '◉ Ubuntu টার্মিনাল');
-    ub.onclick = () => newSession('ubuntu');
-    body.push(
-      h('p', { class: 'muted' }, 'Ubuntu প্রস্তুত। প্রথমবার Antigravity চালালে অটোমেটিক ইনস্টল হবে, তারপর Google অ্যাকাউন্টে লগইন চাইবে।'),
-      h('div', { class: 'row' }, agy, ub),
-    );
+    body = [
+      pill('ok', 'Ubuntu 24.04 · ready'),
+      h('h2', {}, 'Antigravity, in your pocket'),
+      h('p', {}, 'Run the Antigravity CLI in a real Ubuntu terminal. The first launch installs it and asks you to sign in with Google.'),
+      h('div', { class: 'actions' },
+        btn('btn-primary', 'sparkle', 'Launch Antigravity', () => newSession('agy')),
+        btn('btn-secondary', 'terminal', 'Ubuntu shell', () => newSession('ubuntu')),
+      ),
+    ];
   } else if (st.ubuntu === 'installing') {
     const pct = Math.round((st.progress ?? 0) * 100);
-    body.push(
-      h('p', {}, st.message ?? 'Ubuntu নামানো হচ্ছে…'),
+    body = [
+      pill('busy', 'Installing Ubuntu'),
+      h('h2', {}, 'Setting things up'),
       h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` })),
-      h('p', { class: 'muted' }, `${bnDigits(pct)}% — অ্যাপ খোলা রাখুন`),
-    );
+      h('div', { class: 'progress-row' }, h('span', {}, st.message ?? 'Downloading…'), h('span', {}, `${pct}%`)),
+      h('p', { style: 'margin-top:12px' }, 'Keep the app open — this only happens once.'),
+    ];
   } else {
-    const btn = h('button', { class: 'btn primary big' }, st.ubuntu === 'error' ? 'আবার চেষ্টা করুন' : 'Ubuntu সেটআপ করুন');
-    btn.onclick = () => {
-      if (hostState.host === 'dev') {
-        toast('ডেভ মোডে Ubuntu লাগে না');
-        return;
-      }
-      bridge.installUbuntu();
-    };
-    body.push(
-      st.ubuntu === 'error' ? h('p', { class: 'err' }, st.message ?? 'সমস্যা হয়েছে') : '',
-      h('p', { class: 'muted' }, 'একবারই করতে হবে: ফোনের ভিতরে পুরো Ubuntu 24.04 নামানো হবে (~৩০MB ডাউনলোড, পরে ~৫০০MB জায়গা)। এরপর অ্যাপ খুললেই সরাসরি Ubuntu।'),
-      btn,
-    );
+    const failed = st.ubuntu === 'error';
+    body = [
+      failed ? pill('err', 'Setup failed') : pill('', 'Not installed yet'),
+      h('h2', {}, failed ? 'Let’s try that again' : 'Welcome!'),
+      failed && st.message ? h('p', { class: 'err' }, st.message) : null,
+      h('p', {}, 'First, download a full Ubuntu 24.04 into the app (about 30 MB; ~500 MB once installed). After that, the terminal opens straight into Ubuntu.'),
+      h('div', { class: 'actions' },
+        btn('btn-primary', 'down', failed ? 'Try again' : 'Install Ubuntu', () => {
+          if (hostState.host === 'dev') toast('Not needed in the browser preview');
+          else bridge.installUbuntu();
+        }),
+      ),
+    ];
   }
-  card.querySelector('.card-body')!.replaceChildren(...body);
+  hero.replaceChildren(...(body.filter(Boolean) as Node[]));
+  renderStorage();
   renderHomeSessions();
+}
+
+function renderStorage() {
+  const status = $('#storage-status');
+  const button = $('#storage-btn');
+  if (hostState.host === 'dev') {
+    status.textContent = 'Available in the Android app.';
+    button.hidden = true;
+  } else if (hostState.storage) {
+    status.replaceChildren(h('span', { class: 'ok-text' }, 'Access granted'), ' — your files are in /sdcard and ~/storage.');
+    button.hidden = true;
+  } else {
+    status.textContent = 'Not allowed yet.';
+    button.hidden = false;
+  }
 }
 
 function renderHomeSessions() {
@@ -262,29 +344,39 @@ function renderHomeSessions() {
   box.querySelector('.list')!.replaceChildren(
     ...list.map((s) => {
       const item = h('button', { class: 'list-item' },
-        h('span', { class: 'dot' + (s.alive ? ' on' : '') }), h('span', {}, s.title));
+        h('span', { class: 'li-icon' }, svg(KIND_ICON[s.kind] ?? 'terminal')),
+        h('span', { class: 'li-main' },
+          h('div', { class: 'li-title' }, s.title),
+          h('div', { class: 'li-sub' }, s.alive ? 'Running' : 'Exited')),
+        svg('chevron', 'chev'));
       item.onclick = () => activate(s);
       return item;
     }),
   );
 }
 
-// ---------------------------------------------------------------- input
+// ================================================================ keyboard input
 const kbd = $<HTMLTextAreaElement>('#kbd');
 let composing = false;
 
 function focusTerminalKeyboard() {
   if (!active) return;
   active.setFocused(true);
+  keyboardShown = true;
   if (bridge.host === 'android') {
-    // Leave the compose box, otherwise tapping it again fires no focus event and
-    // the keyboard would stay in raw terminal mode.
+    // Leave the compose box: the native key view takes over the keyboard.
     (document.activeElement as HTMLElement | null)?.blur?.();
     bridge.setTerminalKeyboard(true);
     bridge.showKeyboard();
   } else {
     kbd.focus({ preventScroll: true });
   }
+}
+function hideKeyboard() {
+  keyboardShown = false;
+  active?.setFocused(false);
+  (document.activeElement as HTMLElement | null)?.blur?.();
+  bridge.hideKeyboard();
 }
 
 kbd.addEventListener('keydown', (e) => {
@@ -318,14 +410,44 @@ kbd.addEventListener('paste', (e) => {
 });
 kbd.addEventListener('blur', () => active?.setFocused(false));
 
+// ================================================================ touch: tap, scroll (with inertia), pinch, long-press
 function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
-  let startX = 0, startY = 0, lastY = 0, acc = 0, moved = false, t0 = 0;
-  let longTimer = 0;
+  let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0, vel = 0;
+  let longTimer = 0, inertia = 0;
   let pinch0 = 0, font0 = prefs.fontSize;
   const touches = new Map<number, { x: number; y: number }>();
 
+  const stopInertia = () => {
+    cancelAnimationFrame(inertia);
+    inertia = 0;
+  };
+  const scrollBy = (px: number, x: number, y: number) => {
+    acc += px;
+    const lh = s.renderer.lineHeight;
+    const lines = Math.trunc(acc / lh);
+    if (lines) {
+      acc -= lines * lh;
+      s.scrollLines(lines, x, y);
+    }
+  };
+  const startInertia = (v: number, x: number, y: number) => {
+    // only for the scrollback; full-screen apps get discrete wheel steps
+    if (s.term.buffer.active.type === 'alternate') return;
+    let prev = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(32, now - prev);
+      prev = now;
+      scrollBy(v * dt, x, y);
+      v *= Math.pow(0.94, dt / 16);
+      const atEdge = s.renderer.scrollOffset === 0 && v < 0;
+      inertia = Math.abs(v) > 0.03 && !atEdge ? requestAnimationFrame(step) : 0;
+    };
+    inertia = requestAnimationFrame(step);
+  };
+
   el.addEventListener('pointerdown', (e) => {
+    stopInertia();
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2) {
       const [a, b] = [...touches.values()];
@@ -336,15 +458,17 @@ function bindTerminalGestures(s: TerminalSession) {
     }
     startX = e.clientX;
     startY = lastY = e.clientY;
+    lastT = performance.now();
     acc = 0;
+    vel = 0;
     moved = false;
     t0 = Date.now();
     clearTimeout(longTimer);
     longTimer = window.setTimeout(() => {
       if (!moved) {
+        haptic();
         s.toggleReader(true);
-        updateReaderBtn();
-        toast('পাঠ মোড: এখানে লেখা সিলেক্ট করে কপি করা যায়');
+        toast('Reader view — select text to copy. Back to return.');
       }
     }, 650);
   });
@@ -363,26 +487,30 @@ function bindTerminalGestures(s: TerminalSession) {
       clearTimeout(longTimer);
     }
     if (!moved) return;
-    acc += e.clientY - lastY;
+    const now = performance.now();
+    const dy = e.clientY - lastY;
+    const dt = Math.max(1, now - lastT);
+    vel = 0.75 * (dy / dt) + 0.25 * vel;
     lastY = e.clientY;
-    const lh = s.renderer.lineHeight;
-    const lines = Math.trunc(acc / lh);
-    if (lines) {
-      acc -= lines * lh;
-      s.scrollLines(lines, e.clientX, e.clientY);
-    }
+    lastT = now;
+    scrollBy(dy, e.clientX, e.clientY);
   });
   const end = (e: PointerEvent) => {
     touches.delete(e.pointerId);
     clearTimeout(longTimer);
-    if (pinch0 && touches.size < 2) {
+    if (pinch0) {
       if (touches.size === 0) {
         pinch0 = 0;
         setFontSize(prefs.fontSize, true);
       }
       return;
     }
-    if (e.type === 'pointerup' && !moved && Date.now() - t0 < 600) {
+    if (e.type !== 'pointerup') return;
+    if (moved) {
+      if (performance.now() - lastT < 80 && Math.abs(vel) > 0.25) startInertia(vel, e.clientX, e.clientY);
+      return;
+    }
+    if (Date.now() - t0 < 600) {
       const url = s.urlAt(e.clientX, e.clientY);
       if (url) {
         bridge.openUrl(url);
@@ -406,77 +534,117 @@ function setFontSize(size: number, persist: boolean) {
   active?.fit();
   if (persist) {
     savePrefs();
-    toast(`ফন্ট সাইজ ${bnDigits(size)}`);
+    toast(`Text size ${size}`);
   }
 }
 
-// ---------------------------------------------------------------- key bar
-const KEYS: { label: string; key?: NamedKey; text?: string; latch?: 'ctrl' | 'alt'; act?: string }[] = [
-  { label: 'Esc', key: 'Escape' },
-  { label: 'Tab', key: 'Tab' },
-  { label: 'Ctrl', latch: 'ctrl' },
-  { label: 'Alt', latch: 'alt' },
-  { label: '↑', key: 'ArrowUp' },
-  { label: '↓', key: 'ArrowDown' },
-  { label: '←', key: 'ArrowLeft' },
-  { label: '→', key: 'ArrowRight' },
-  { label: '^C', text: '\x03' },
-  { label: '/', text: '/' },
-  { label: '⏎', key: 'Enter' },
-  { label: '-', text: '-' },
-  { label: '|', text: '|' },
-  { label: '~', text: '~' },
-  { label: 'Home', key: 'Home' },
-  { label: 'End', key: 'End' },
-  { label: 'PgUp', key: 'PageUp' },
-  { label: 'PgDn', key: 'PageDown' },
-  { label: 'পেস্ট', act: 'paste' },
+// ================================================================ extra keys (two rows, Termux style)
+interface KeyDef {
+  label?: string;
+  icon?: string;
+  key?: NamedKey;
+  text?: string;
+  latch?: 'ctrl' | 'alt';
+  act?: 'compose' | 'keyboard';
+  small?: boolean;
+  repeat?: boolean;
+}
+const KEY_ROWS: KeyDef[][] = [
+  [
+    { label: 'Esc', key: 'Escape' },
+    { label: 'Tab', key: 'Tab' },
+    { label: '^C', text: '\x03' },
+    { label: '/', text: '/' },
+    { label: '-', text: '-' },
+    { label: '|', text: '|' },
+    { label: '↑', key: 'ArrowUp', repeat: true },
+    { icon: 'pencil', act: 'compose' },
+  ],
+  [
+    { label: 'Ctrl', latch: 'ctrl' },
+    { label: 'Alt', latch: 'alt' },
+    { label: 'Home', key: 'Home', small: true },
+    { label: 'End', key: 'End', small: true },
+    { label: '←', key: 'ArrowLeft', repeat: true },
+    { label: '↓', key: 'ArrowDown', repeat: true },
+    { label: '→', key: 'ArrowRight', repeat: true },
+    { icon: 'keyboard', act: 'keyboard' },
+  ],
 ];
 
 function buildKeyBar() {
-  const bar = $('#keybar');
-  for (const k of KEYS) {
-    const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') }, k.label);
-    let repeat = 0;
-    const fire = async () => {
-      if (!active) return;
-      if (k.latch) {
-        latch[k.latch] = !latch[k.latch];
-        b.classList.toggle('on', !!latch[k.latch]);
-        return;
+  const bar = $('#extra-keys');
+  for (const row of KEY_ROWS) {
+    for (const k of row) {
+      const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') + (k.small ? ' small' : '') });
+      if (k.icon) b.append(svg(k.icon));
+      else b.textContent = k.label!;
+      if (k.act === 'compose') {
+        b.id = 'compose-key';
+        b.setAttribute('aria-label', 'Compose bar');
+        b.classList.toggle('on', prefs.compose);
       }
-      if (k.act === 'paste') {
-        const t = await bridge.readClipboard();
-        if (t) active.paste(t);
-        return;
-      }
-      const m = consumeLatch();
-      active.input(k.key ? namedKeySeq(k.key, m, active.appCursor) : applyMods(k.text!, m));
-    };
-    // pointerdown + preventDefault keeps the soft keyboard open
-    b.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      navigator.vibrate?.(8);
-      fire();
-      if (k.key?.startsWith('Arrow') || k.key === 'Backspace') {
-        repeat = window.setTimeout(function loop() {
-          fire();
-          repeat = window.setTimeout(loop, 60);
-        }, 400);
-      }
-    });
-    const stop = () => clearTimeout(repeat);
-    b.addEventListener('pointerup', stop);
-    b.addEventListener('pointerleave', stop);
-    b.addEventListener('pointercancel', stop);
-    bar.append(b);
+      if (k.act === 'keyboard') b.setAttribute('aria-label', 'Keyboard');
+      let repeat = 0;
+      const fire = () => {
+        if (k.act === 'compose') {
+          setCompose(!prefs.compose);
+          return;
+        }
+        if (k.act === 'keyboard') {
+          if (keyboardShown) hideKeyboard();
+          else focusTerminalKeyboard();
+          return;
+        }
+        if (!active) return;
+        if (k.latch) {
+          latch[k.latch] = !latch[k.latch];
+          b.classList.toggle('on', !!latch[k.latch]);
+          return;
+        }
+        const m = consumeLatch();
+        active.input(k.key ? namedKeySeq(k.key, m, active.appCursor) : applyMods(k.text!, m));
+      };
+      // pointerdown + preventDefault keeps the soft keyboard open
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        haptic();
+        b.classList.add('pressed');
+        fire();
+        if (k.repeat) {
+          repeat = window.setTimeout(function loop() {
+            fire();
+            repeat = window.setTimeout(loop, 55);
+          }, 380);
+        }
+      });
+      const stop = () => {
+        clearTimeout(repeat);
+        b.classList.remove('pressed');
+      };
+      b.addEventListener('pointerup', stop);
+      b.addEventListener('pointerleave', stop);
+      b.addEventListener('pointercancel', stop);
+      bar.append(b);
+    }
   }
 }
 
-// ---------------------------------------------------------------- compose box
+// ================================================================ compose bar
+function setCompose(on: boolean) {
+  prefs.compose = on;
+  savePrefs();
+  $('#compose-bar').hidden = !on;
+  $('#compose-key')?.classList.toggle('on', on);
+  if (on) {
+    bridge.setTerminalKeyboard(false);
+    $<HTMLTextAreaElement>('#compose').focus();
+  }
+  requestAnimationFrame(() => active?.fit());
+}
+
 function bindCompose() {
   const ta = $<HTMLTextAreaElement>('#compose');
-  const send = $('#send');
   const grow = () => {
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
@@ -499,8 +667,9 @@ function bindCompose() {
     ta.value = '';
     grow();
   };
-  send.addEventListener('pointerdown', (e) => {
+  $('#send').addEventListener('pointerdown', (e) => {
     e.preventDefault(); // keep focus (and the keyboard) in the textarea
+    haptic();
     doSend();
   });
   ta.addEventListener('keydown', (e) => {
@@ -510,151 +679,244 @@ function bindCompose() {
       doSend();
     }
   });
-  $('#kbd-btn').onclick = () => focusTerminalKeyboard();
+  $('#compose-bar').hidden = !prefs.compose;
 }
 
-// ---------------------------------------------------------------- top bar & menus
-function updateReaderBtn() {
-  $('#reader-btn').classList.toggle('on', !!active?.isReaderOpen);
+// ================================================================ bottom sheet
+function sheetOpen() {
+  return !$('#sheet').hidden;
+}
+function openSheet(title: string, ...content: Kid[]) {
+  const sheet = $('#sheet');
+  sheet.classList.remove('closing');
+  sheet.querySelector('.sheet-body')!.replaceChildren(...([title ? h('h3', {}, title) : null, ...content].filter(Boolean) as Node[]));
+  $('#sheet-backdrop').hidden = false;
+  sheet.hidden = false;
+  sheet.scrollTop = 0;
+}
+function closeSheet() {
+  const sheet = $('#sheet');
+  if (sheet.hidden) return;
+  sheet.classList.add('closing');
+  $('#sheet-backdrop').hidden = true;
+  setTimeout(() => {
+    sheet.hidden = true;
+    sheet.classList.remove('closing');
+  }, 190);
+}
+function action(ic: string, title: string, sub: string, run: () => void, danger = false) {
+  const b = h('button', { class: 'action' + (danger ? ' danger' : '') },
+    h('span', { class: 'a-icon' }, svg(ic)),
+    h('span', { class: 'a-main' }, title, sub ? h('span', { class: 'a-sub' }, sub) : null));
+  b.onclick = () => {
+    haptic();
+    closeSheet();
+    run();
+  };
+  return b;
 }
 
-function bindTopBar() {
-  $('#home-btn').onclick = () => showHome();
-  $('#remote-top-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
-  $('#reader-btn').onclick = () => {
-    if (!active) return;
-    active.toggleReader();
-    updateReaderBtn();
-  };
-  const plus = $('#plus-btn');
-  const menu = $('#new-menu');
-  plus.onclick = (e) => {
-    e.stopPropagation();
-    menu.hidden = !menu.hidden;
-  };
-  menu.querySelectorAll<HTMLButtonElement>('[data-kind]').forEach((b) => {
-    b.onclick = () => {
-      menu.hidden = true;
-      newSession(b.dataset.kind as SessionKind);
+function openNewSessionSheet() {
+  openSheet('New session', h('div', { class: 'action-list' },
+    action('sparkle', 'Antigravity', 'Launch the Antigravity CLI', () => newSession('agy')),
+    action('terminal', 'Ubuntu shell', 'Bash in Ubuntu 24.04', () => newSession('ubuntu')),
+    action('android', 'Android shell', 'The phone’s own /system/bin/sh', () => newSession('android')),
+  ));
+}
+
+function openMoreSheet() {
+  const s = active;
+  openSheet('', h('div', { class: 'action-list' },
+    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', 'Read and copy text with perfect Bangla', () => s.toggleReader()),
+    s && action('copy', 'Copy all text', '', () => {
+      bridge.copyText(s.allText());
+      toast('Copied');
+    }),
+    s && action('paste', 'Paste', '', async () => {
+      const t = await bridge.readClipboard();
+      if (t) s.paste(t);
+    }),
+    action('remote', 'Remote dashboard', 'Antigravity running on your computer', () => bridge.openRemote(prefs.remoteUrl)),
+    action('zoomIn', 'Bigger text', '', () => setFontSize(Math.min(28, prefs.fontSize + 1), true)),
+    action('zoomOut', 'Smaller text', '', () => setFontSize(Math.max(9, prefs.fontSize - 1), true)),
+    s && action('eraser', 'Clear screen', '', () => s.term.clear()),
+    action('settings', 'Settings', '', openSettingsSheet),
+    s && action('bug', 'Copy debug log', 'Paste it into a chat if something misbehaves', () => {
+      bridge.copyText(
+        [
+          `Agy Terminal debug log — ${new Date().toISOString()}`,
+          `host=${bridge.host} ubuntu=${hostState.ubuntu} storage=${hostState.storage} ua=${navigator.userAgent}`,
+          `--- JavaScript errors (${jsErrors.length}) ---`,
+          ...jsErrors,
+          s.debugDump(),
+        ].join('\n'),
+      );
+      toast('Debug log copied');
+    }),
+    s && action('power', 'Close session', '', () => confirmClose(s), true),
+  ));
+}
+
+// ================================================================ settings
+let sample: TerminalSession | null = null;
+function samplePreview(): HTMLElement {
+  sample?.dispose();
+  sample = new TerminalSession({ write() {}, resize() {} } as unknown as Bridge, '_sample', 'ubuntu', rendererOpts());
+  sample.renderer.el.dataset.cursor = prefs.cursor;
+  sample.term.resize(38, 4);
+  sample.term.write(
+    '\x1b[38;2;166;227;161m~\x1b[0m \x1b[38;2;137;180;250m❯\x1b[0m agy "বাংলায় লিখুন"\r\n' +
+    '\x1b[38;2;245;169;127m✦\x1b[0m Hello! ক্ষমা, স্ত্রী, কৃষ্ণ, জ্ঞান\r\n' +
+    '\x1b[2m│\x1b[0m Bangla + English │ সন্ত্রাস │\r\n' +
+    '\x1b[38;2;137;180;250m❯\x1b[0m ',
+  );
+  return h('div', { class: 'preview' }, sample.renderer.el);
+}
+
+function openSettingsSheet() {
+  const preview = h('div', {}, samplePreview());
+  const refreshPreview = () => preview.replaceChildren(samplePreview());
+
+  const range = (label: string, min: number, max: number, step: number, value: number, fmt: (v: number) => string,
+    onInput: (v: number) => void, onDone: () => void) => {
+    const val = h('span', { class: 'val' }, fmt(value));
+    const input = h('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(value) }) as HTMLInputElement;
+    input.oninput = () => {
+      val.textContent = fmt(+input.value);
+      onInput(+input.value);
     };
-  });
-  const more = $('#more-menu');
-  $('#more-btn').onclick = (e) => {
-    e.stopPropagation();
-    more.hidden = !more.hidden;
+    input.onchange = onDone;
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-row' }, h('span', { class: 's-title' }, label), val), input);
   };
-  more.querySelectorAll<HTMLButtonElement>('[data-act]').forEach((b) => {
-    b.onclick = async () => {
-      more.hidden = true;
-      if (!active) return;
-      switch (b.dataset.act) {
-        case 'copy': bridge.copyText(active.allText()); toast('সব লেখা কপি হয়েছে'); break;
-        case 'paste': { const t = await bridge.readClipboard(); if (t) active.paste(t); break; }
-        case 'bigger': setFontSize(Math.min(28, prefs.fontSize + 1), true); break;
-        case 'smaller': setFontSize(Math.max(9, prefs.fontSize - 1), true); break;
-        case 'bottom': active.scrollToBottom(); break;
-        case 'clear': active.term.clear(); break;
-        case 'debug':
-          bridge.copyText(
-            [
-              `Agy Terminal debug log — ${new Date().toISOString()}`,
-              `host=${bridge.host} ubuntu=${hostState.ubuntu} ua=${navigator.userAgent}`,
-              `--- JavaScript errors (${jsErrors.length}) ---`,
-              ...jsErrors,
-              active.debugDump(),
-            ].join('\n'),
-          );
-          toast('ডিবাগ লগ কপি হয়েছে — চ্যাটে পেস্ট করে পাঠান');
-          break;
-      }
-    };
-  });
-  document.addEventListener('click', () => {
-    menu.hidden = true;
-    more.hidden = true;
-  });
-}
 
-function bindHome() {
-  $('#remote-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
-  const url = $<HTMLInputElement>('#remote-url');
+  const swatches = h('div', { class: 'swatches' },
+    ...(Object.keys(THEME_LABELS) as ThemeName[]).map((name) => {
+      const t = THEMES[name];
+      const b = h('button', { class: 'swatch' + (prefs.theme === name ? ' on' : '') },
+        h('div', { class: 'sw-colors' },
+          ...[t.background, t.ansi[1], t.ansi[2], t.ansi[4], t.ansi[5]].map((c) => h('span', { style: `background:${c}` }))),
+        THEME_LABELS[name]);
+      b.onclick = () => {
+        prefs.theme = name;
+        savePrefs();
+        applyTheme();
+        swatches.querySelectorAll('.swatch').forEach((x) => x.classList.toggle('on', x === b));
+        refreshPreview();
+      };
+      return b;
+    }));
+
+  const cursorSeg = h('div', { class: 'segmented' },
+    ...(['block', 'bar', 'underline'] as CursorStyle[]).map((c) => {
+      const b = h('button', { class: prefs.cursor === c ? 'on' : '' }, c[0].toUpperCase() + c.slice(1));
+      b.onclick = () => {
+        prefs.cursor = c;
+        savePrefs();
+        for (const s of sessions.values()) s.renderer.el.dataset.cursor = c;
+        cursorSeg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+        refreshPreview();
+      };
+      return b;
+    }));
+
+  const toggle = (title: string, sub: string, checked: boolean, onChange: (v: boolean) => void) => {
+    const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    input.checked = checked;
+    input.onchange = () => onChange(input.checked);
+    return h('div', { class: 'setting' },
+      h('div', { class: 'setting-row' },
+        h('div', {}, h('div', { class: 's-title' }, title), h('div', { class: 's-sub' }, sub)),
+        h('label', { class: 'switch' }, input, h('span', {}))));
+  };
+
+  const url = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
   url.value = prefs.remoteUrl;
   url.onchange = () => {
     prefs.remoteUrl = url.value.trim() || DEFAULT_PREFS.remoteUrl;
     savePrefs();
   };
-  $('#copy-remote-cmd').onclick = () => {
-    bridge.copyText('agy --remote-control');
-    toast('কমান্ড কপি হয়েছে');
-  };
-  const theme = $<HTMLSelectElement>('#theme');
-  theme.value = prefs.theme;
-  theme.onchange = () => {
-    prefs.theme = theme.value as Prefs['theme'];
-    savePrefs();
-    applyTheme();
-  };
-  const fs = $<HTMLInputElement>('#font-size');
-  fs.value = String(prefs.fontSize);
-  fs.oninput = () => setFontSize(+fs.value, false);
-  fs.onchange = () => setFontSize(+fs.value, true);
-  const bn = $<HTMLInputElement>('#bn-scale');
-  bn.value = String(prefs.bnScale);
-  bn.oninput = () => {
-    prefs.bnScale = +bn.value;
-    for (const s of sessions.values()) s.renderer.setOptions({ bnScale: prefs.bnScale });
-    renderSample();
-  };
-  bn.onchange = () => savePrefs();
+
+  openSheet('Settings',
+    h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Theme'), swatches),
+    h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Preview'), preview),
+    range('Text size', 9, 24, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
+      setFontSize(v, false);
+      sample?.renderer.setOptions({ fontSize: v });
+    }, () => setFontSize(prefs.fontSize, true)),
+    range('Bangla letter size', 0.8, 1.3, 0.05, prefs.bnScale, (v) => `${Math.round(v * 100)}%`, (v) => {
+      prefs.bnScale = v;
+      for (const s of sessions.values()) s.renderer.setOptions({ bnScale: v });
+      sample?.renderer.setOptions({ bnScale: v });
+    }, savePrefs),
+    h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
+    toggle('Compose bar', 'A text box under the terminal — handy for Bangla keyboards and long prompts.', prefs.compose, setCompose),
+    toggle('Keyboard compatibility mode', 'Turn on if your keyboard types nothing or wrong characters in the terminal.', prefs.kbCompat, (v) => {
+      prefs.kbCompat = v;
+      savePrefs();
+      bridge.setKeyboardCompat(v);
+    }),
+    h('div', { class: 'setting' },
+      h('div', { class: 's-title' }, 'Remote dashboard address'),
+      h('div', { class: 's-sub' }, 'Paste the link agy shows if it differs.'),
+      url),
+  );
 }
 
 function applyTheme() {
+  const t = THEMES[prefs.theme];
   document.body.dataset.theme = prefs.theme;
-  for (const s of sessions.values()) s.renderer.setOptions({ theme: THEMES[prefs.theme] });
-  renderSample();
+  document.body.style.setProperty('--term-bg', t.background);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t.background);
+  for (const s of sessions.values()) s.renderer.setOptions({ theme: t });
 }
 
-/** Small preview on the home screen so the user can judge the Bangla rendering. */
-let sample: TerminalSession | null = null;
-function renderSample() {
-  const host = $('#sample');
-  if (!sample) {
-    sample = new TerminalSession({ write() {}, resize() {} } as unknown as Bridge, '_sample', 'ubuntu', rendererOpts());
-    sample.term.resize(34, 4);
-    host.append(sample.renderer.el);
-    sample.term.write(
-      '\x1b[32m❯\x1b[0m agy "বাংলায় ক্ষমা চাই"\r\n' +
-      '\x1b[36m✦\x1b[0m ঠিক আছে! স্ত্রী, কৃষ্ণ, জ্ঞান\r\n' +
-      '\x1b[33m│\x1b[0m Hello world │ সন্ত্রাস │\r\n' +
-      '\x1b[2m১২৩ — বাংলা + English\x1b[0m',
-    );
-  } else {
-    sample.renderer.setOptions(rendererOpts());
-  }
+// ================================================================ wiring
+function bindChrome() {
+  $('#home-btn').onclick = () => showHome();
+  $('#plus-btn').onclick = () => openNewSessionSheet();
+  $('#more-btn').onclick = () => openMoreSheet();
+  $('#remote-top-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
+  $('#settings-btn').onclick = () => openSettingsSheet();
+  $('#sheet-backdrop').onclick = () => closeSheet();
+  $('#remote-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
+  $('#storage-btn').onclick = () => bridge.requestStorage();
+  $('#copy-remote-cmd').onclick = () => {
+    bridge.copyText('agy --remote-control');
+    toast('Command copied');
+  };
+  // Keyboard closed by the system (back button / swipe) → forget it was open.
+  let lastH = window.innerHeight;
+  window.addEventListener('resize', () => {
+    if (window.innerHeight > lastH + 120) keyboardShown = false;
+    lastH = window.innerHeight;
+  });
 }
 
-// ---------------------------------------------------------------- boot
+// ================================================================ boot
 async function boot() {
   console.info(`boot: ${location.href} host=${bridge.host}`);
   // Hook for the emulator self test (debug builds load the page with ?selftest=1).
   if (new URLSearchParams(location.search).has('selftest')) {
     (window as unknown as Record<string, unknown>).__selftest = {
       open: (kind: SessionKind) => newSession(kind),
+      focusKeys: () => focusTerminalKeyboard(),
+      send: (line: string) => active?.sendLine(line),
       screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
       errors: () => jsErrors.join('\n'),
       dump: () => (active ? active.debugDump() : ''),
     };
   }
+  hydrateIcons();
   buildKeyBar();
   bindCompose();
-  bindTopBar();
-  bindHome();
-  document.body.dataset.theme = prefs.theme;
+  bindChrome();
+  applyTheme();
   document.body.dataset.host = bridge.host;
+  if (prefs.kbCompat) bridge.setKeyboardCompat(true);
   showHome();
 
-  // Measure the cell size only after the fonts are really there.
-  // (bounded: a font that never finishes loading must not stall the whole UI)
+  // Measure the cell size only after the fonts are really there
+  // (bounded: a font that never finishes loading must not stall the whole UI).
   try {
     await Promise.race([
       Promise.all([
@@ -666,12 +928,11 @@ async function boot() {
     ]);
   } catch { /* fall back to whatever is available */ }
   console.info(`boot: fonts ready=${document.fonts.check(`${prefs.fontSize}px Kalpurush`, 'বাংলা')}`);
-  renderSample();
 
   try {
     hostState = await bridge.getState();
   } catch {
-    hostState = { host: bridge.host, ubuntu: 'error', message: 'হোস্টের সাথে সংযোগ হয়নি' };
+    hostState = { host: bridge.host, ubuntu: 'error', message: 'Could not reach the app' };
   }
   renderHome();
 
@@ -689,7 +950,6 @@ async function boot() {
 
   new ResizeObserver(() => active?.fit()).observe($('#sessions'));
   window.addEventListener('resize', () => active?.fit());
-
 }
 
 boot();

@@ -18,23 +18,41 @@ export interface TermTheme {
 }
 
 export const THEMES: Record<string, TermTheme> = {
-  // Tokyo-Night-ish dark theme (default)
-  night: {
-    background: '#14161f',
-    foreground: '#d5d9f0',
-    cursor: '#ffb86c',
+  // Default: deep blue-black, Catppuccin-inspired accents
+  midnight: {
+    background: '#0b0d12',
+    foreground: '#dde3f3',
+    cursor: '#f5c2a0',
     ansi: [
-      '#1d202f', '#f7768e', '#9ece6a', '#e0af68', '#7aa2f7', '#bb9af7', '#7dcfff', '#c0caf5',
-      '#414868', '#ff8fa4', '#b9f27c', '#ffc777', '#8db0ff', '#c7a9ff', '#a4daff', '#ffffff',
+      '#1c1f2b', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#cba6f7', '#89dceb', '#bac2de',
+      '#45495e', '#f6a0b8', '#b8ebb4', '#fbe9bf', '#a0c3fb', '#d6baf9', '#a3e4f0', '#ffffff',
     ],
   },
-  light: {
-    background: '#fbf8f1',
-    foreground: '#2b2b33',
-    cursor: '#d9480f',
+  dracula: {
+    background: '#1e1f29',
+    foreground: '#f8f8f2',
+    cursor: '#ff79c6',
     ansi: [
-      '#2b2b33', '#c92a2a', '#2b8a3e', '#b7791f', '#1c64d1', '#9c36b5', '#0c8599', '#6c6f7d',
-      '#5c5f6e', '#e03131', '#37b24d', '#d9a400', '#3b82f6', '#be4bdb', '#15aabf', '#2b2b33',
+      '#21222c', '#ff5555', '#50fa7b', '#f1fa8c', '#bd93f9', '#ff79c6', '#8be9fd', '#f8f8f2',
+      '#6272a4', '#ff6e6e', '#69ff94', '#ffffa5', '#d6acff', '#ff92df', '#a4ffff', '#ffffff',
+    ],
+  },
+  solarized: {
+    background: '#002b36',
+    foreground: '#cfd8d3',
+    cursor: '#b58900',
+    ansi: [
+      '#073642', '#dc322f', '#859900', '#b58900', '#268bd2', '#d33682', '#2aa198', '#eee8d5',
+      '#3f5f68', '#cb4b16', '#93a86a', '#c9a227', '#6c9fd8', '#9b8fe0', '#5fb3ab', '#fdf6e3',
+    ],
+  },
+  paper: {
+    background: '#fbfaf7',
+    foreground: '#2a2c33',
+    cursor: '#e8590c',
+    ansi: [
+      '#2a2c33', '#d6336c', '#2b8a3e', '#b7791f', '#1c64d1', '#9c36b5', '#0c8599', '#6c6f7d',
+      '#5c5f6e', '#e64980', '#37b24d', '#d9a400', '#3b82f6', '#be4bdb', '#15aabf', '#2a2c33',
     ],
   },
 };
@@ -107,6 +125,9 @@ export class BanglaRenderer {
   scrollOffset = 0;
   cursorVisible = true;
   focused = false;
+  /** Called when the view leaves / returns to the bottom of the output. */
+  onScrolled?: (scrolledUp: boolean) => void;
+  private wasScrolled = false;
 
   constructor(private term: Terminal, private opts: RendererOptions) {
     this.el = document.createElement('div');
@@ -115,6 +136,7 @@ export class BanglaRenderer {
     this.rowsEl.className = 'term-rows';
     this.cursorEl = document.createElement('div');
     this.cursorEl.className = 'term-cursor';
+    this.el.dataset.cursor = 'block';
     this.el.append(this.rowsEl, this.cursorEl);
     this.palette = build256(opts.theme);
     this.applyMetrics();
@@ -151,8 +173,9 @@ export class BanglaRenderer {
   /** How many columns/rows fit into the given pixel box. */
   fit(width: number, height: number): { cols: number; rows: number } {
     return {
-      cols: Math.max(10, Math.floor((width - 4) / this.cellWidth)),
-      rows: Math.max(4, Math.floor(height / this.lineHeight)),
+      // minus the screen's padding (8px left/right, 6px top/bottom)
+      cols: Math.max(10, Math.floor((width - 16) / this.cellWidth)),
+      rows: Math.max(4, Math.floor((height - 12) / this.lineHeight)),
     };
   }
 
@@ -337,7 +360,11 @@ export class BanglaRenderer {
       this.cursorEl.style.transform = `translate(${(buf.cursorX * this.cellWidth).toFixed(2)}px, ${cursorRow * this.lineHeight}px)`;
       this.cursorEl.classList.toggle('focused', this.focused);
     }
-    this.el.classList.toggle('scrolled', this.scrollOffset > 0);
+    const scrolled = this.scrollOffset > 0;
+    if (scrolled !== this.wasScrolled) {
+      this.wasScrolled = scrolled;
+      this.onScrolled?.(scrolled);
+    }
   }
 
   /** Map a client point to a terminal cell (in viewport coordinates). */

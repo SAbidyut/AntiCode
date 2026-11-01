@@ -18,7 +18,8 @@ await page.waitForTimeout(1200);
 if ((await page.getAttribute('body', 'data-screen')) === 'term') await page.click('#home-btn');
 await page.screenshot({ path: `${out}/01-home.png` });
 
-await page.click('#ubuntu-card .btn.primary');
+await page.click('#hero .btn-secondary');
+if (await page.isHidden('#compose-bar')) await page.dispatchEvent('#compose-key', 'pointerdown');
 await page.waitForTimeout(800);
 const lines = [
   "printf '\\e[1;36m✦ Antigravity\\e[0m বাংলা টেস্ট\\n'",
@@ -37,7 +38,8 @@ await page.screenshot({ path: `${out}/02-terminal.png` });
 const text = await page.evaluate(() => document.querySelector('.session:not([hidden]) .term-rows')?.textContent ?? '');
 console.log('HAS_BANGLA', text.includes('ক্ষমা স্ত্রী সন্ত্রাস'));
 
-await page.click('#reader-btn');
+await page.click('#more-btn');
+await page.click('.action:has-text("Reader view")');
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${out}/03-reader.png` });
 await browser.close();

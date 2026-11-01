@@ -1,0 +1,21 @@
+#!/bin/bash
+# Agy Terminal — first-time setup (run again any time with: agy-setup)
+set -o pipefail
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+echo -e "${Y}✦ First-time setup — this takes a few minutes, keep the app open.${N}"
+export DEBIAN_FRONTEND=noninteractive
+step() { echo -e "\n${G}▸ $*${N}"; }
+step "Updating package lists"
+apt-get update || { echo -e "${R}apt update failed — check your connection and run 'agy-setup' again.${N}"; exit 1; }
+step "Installing basic tools (curl, git, nano …)"
+apt-get install -y --no-install-recommends ca-certificates curl git nano less procps unzip xz-utils openssh-client \
+  || { echo -e "${R}Install failed — run 'agy-setup' to try again.${N}"; exit 1; }
+if [ ! -x "$HOME/.local/bin/agy" ]; then
+  step "Installing the Antigravity CLI (Google's official installer)"
+  curl -fsSL https://antigravity.google/cli/install.sh | bash \
+    || { echo -e "${R}Installing agy failed — run 'agy-setup' to try again.${N}"; exit 1; }
+fi
+grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+touch "$HOME/.agy-terminal-setup-done"
+echo -e "\n${G}✓ All set! Type 'agy' to start Antigravity.${N}"
+echo -e "  Tip: run 'setup-storage' to use your phone's files (~/storage).\n"

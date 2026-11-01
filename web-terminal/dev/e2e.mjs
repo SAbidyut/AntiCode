@@ -32,8 +32,11 @@ const waitFor = async (fn, ms = 4000) => {
 };
 
 // 1. new Ubuntu session from the home screen
-await page.click('#ubuntu-card .btn:not(.primary)');
+await page.click('#hero .btn-secondary');
 check('terminal screen opens', await waitFor(async () => (await page.getAttribute('body', 'data-screen')) === 'term'));
+// the compose bar is optional: turn it on from the key bar
+if (await page.isHidden('#compose-bar')) await page.dispatchEvent('#compose-key', 'pointerdown');
+check('compose bar toggles on', await page.isVisible('#compose-bar'));
 
 // 2. compose box → Bangla command
 await page.fill('#compose', "echo 'ক্ষমা-'$((40+2))");
@@ -75,11 +78,15 @@ await page.fill('#compose', "printf '\\033]7770;open;https://example.com/login\\
 await page.dispatchEvent('#send', 'pointerdown');
 check('xdg-open escape opens the browser', await popup);
 
-// 6. reader view shows logical lines
-await page.click('#reader-btn');
+// 6. reader view (from the ⋮ sheet) shows logical lines
+await page.click('#more-btn');
+await page.click('.action:has-text("Reader view")');
+await page.waitForTimeout(300);
 const readerText = await page.evaluate(() => document.querySelector('.session:not([hidden]) .reader')?.textContent ?? '');
 check('reader view has text', readerText.includes('ক্ষমা-42') && readerText.includes('typed-42'));
-await page.click('#reader-btn');
+await page.click('#more-btn');
+await page.click('.action:has-text("Back to terminal")');
+await page.waitForTimeout(300);
 
 // 7. resize → stty sees the new size
 await page.setViewportSize({ width: 700, height: 860 });

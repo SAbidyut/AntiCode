@@ -150,19 +150,19 @@ class SessionService : Service() {
         else @Suppress("DEPRECATION") Notification.Builder(this)
         return builder
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Agy টার্মিনাল")
-            .setContentText("${running}টি সেশন চলছে — চাপ দিয়ে খুলুন")
+            .setContentTitle("Agy Terminal")
+            .setContentText(if (running == 1) "1 session running — tap to open" else "$running sessions running — tap to open")
             .setOngoing(true)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(null, "সব বন্ধ করুন", stop).build())
+            .addAction(Notification.Action.Builder(null, "Stop all", stop).build())
             .build()
     }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT < 26) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val ch = NotificationChannel(CHANNEL_ID, "চলমান সেশন", NotificationManager.IMPORTANCE_LOW)
-        ch.description = "টার্মিনাল সেশন ব্যাকগ্রাউন্ডে চালু রাখে"
+        val ch = NotificationChannel(CHANNEL_ID, "Running sessions", NotificationManager.IMPORTANCE_LOW)
+        ch.description = "Keeps terminal sessions running in the background"
         nm.createNotificationChannel(ch)
     }
 

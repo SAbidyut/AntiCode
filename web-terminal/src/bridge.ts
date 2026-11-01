@@ -18,6 +18,8 @@ export interface HostState {
   ubuntu: 'none' | 'installing' | 'ready' | 'error';
   progress?: number; // 0..1
   message?: string;
+  /** Access to the phone's shared storage (/sdcard) has been granted. */
+  storage?: boolean;
 }
 
 export interface BridgeEvents {
@@ -50,6 +52,10 @@ export interface Bridge {
   setTerminalKeyboard(on: boolean): void;
   showKeyboard(): void;
   hideKeyboard(): void;
+  /** Keyboard compatibility mode (for keyboards that misbehave with raw key input). */
+  setKeyboardCompat(on: boolean): void;
+  /** Ask for access to the phone's storage (like termux-setup-storage). */
+  requestStorage(): void;
   exitApp(): void;
 }
 
@@ -76,6 +82,8 @@ interface AndroidBridgeApi {
   setTerminalKeyboard(on: boolean): void;
   showKeyboard(): void;
   hideKeyboard(): void;
+  setKeyboardCompat(on: boolean): void;
+  requestStorage(): void;
   exitApp(): void;
 }
 
@@ -106,6 +114,8 @@ class AndroidHostBridge implements Bridge {
   setTerminalKeyboard(on: boolean) { this.api.setTerminalKeyboard(on); }
   showKeyboard() { this.api.showKeyboard(); }
   hideKeyboard() { this.api.hideKeyboard(); }
+  setKeyboardCompat(on: boolean) { this.api.setKeyboardCompat(on); }
+  requestStorage() { this.api.requestStorage(); }
   exitApp() { this.api.exitApp(); }
 }
 
@@ -163,6 +173,8 @@ class DevBridge implements Bridge {
   setTerminalKeyboard() {}
   showKeyboard() {}
   hideKeyboard() {}
+  setKeyboardCompat() {}
+  requestStorage() {}
   exitApp() {}
 }
 

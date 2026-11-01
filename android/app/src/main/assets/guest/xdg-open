@@ -1,0 +1,6 @@
+#!/bin/sh
+# Opens a URL on the phone (handled by the Agy Terminal app).
+url="$1"
+[ -z "$url" ] && exit 1
+printf '\033]7770;open;%s\007' "$url" > /dev/tty 2>/dev/null || printf '\033]7770;open;%s\007' "$url"
+echo "Opening: $url" >&2

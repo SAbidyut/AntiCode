@@ -45,6 +45,7 @@ class UbuntuManager(private val context: Context) {
         .put("ubuntu", state.name.lowercase())
         .put("progress", progress)
         .put("message", message)
+        .put("storage", com.sabidyut.agyterm.Storage.hasAccess(context))
         .toString()
 
     private fun update(s: State, p: Double, m: String) {
@@ -59,15 +60,15 @@ class UbuntuManager(private val context: Context) {
     @Synchronized
     fun install() {
         if (state == State.INSTALLING || isInstalled()) return
-        update(State.INSTALLING, 0.0, "Ubuntu নামানো শুরু হচ্ছে…")
+        update(State.INSTALLING, 0.0, "Starting Ubuntu download…")
         Thread({
             try {
                 doInstall()
                 marker.writeText("ubuntu-base ${UBUNTU_VERSION}\n")
-                update(State.READY, 1.0, "Ubuntu প্রস্তুত")
+                update(State.READY, 1.0, "Ubuntu is ready")
             } catch (t: Throwable) {
                 Log.e(TAG, "install failed", t)
-                update(State.ERROR, 0.0, "সেটআপ ব্যর্থ: ${t.message ?: t.javaClass.simpleName}। ইন্টারনেট দেখে আবার চেষ্টা করুন।")
+                update(State.ERROR, 0.0, "Setup failed: ${t.message ?: t.javaClass.simpleName}. Check your internet connection and try again.")
             }
         }, "ubuntu-install").start()
     }
@@ -77,7 +78,7 @@ class UbuntuManager(private val context: Context) {
         return when {
             abi.startsWith("arm64") -> "arm64"
             abi.startsWith("x86_64") -> "amd64"
-            else -> throw IllegalStateException("এই ফোনের প্রসেসর ($abi) সাপোর্টেড না — 64-bit ARM লাগবে")
+            else -> throw IllegalStateException("This phone's processor ($abi) is not supported — a 64-bit ARM device is required")
         }
     }
 
@@ -101,7 +102,7 @@ class UbuntuManager(private val context: Context) {
         }
         lastError?.let { throw it }
 
-        update(State.INSTALLING, 0.97, "Ubuntu সাজানো হচ্ছে…")
+        update(State.INSTALLING, 0.97, "Configuring Ubuntu…")
         configure()
     }
 
@@ -125,7 +126,7 @@ class UbuntuManager(private val context: Context) {
                         lastReport = read
                         val mb = read / (1024 * 1024)
                         val totalMb = total / (1024 * 1024)
-                        update(State.INSTALLING, 0.95 * read / total, "Ubuntu নামানো হচ্ছে… $mb / $totalMb MB")
+                        update(State.INSTALLING, 0.95 * read / total, "Downloading Ubuntu… $mb / $totalMb MB")
                     }
                 }
                 return n
@@ -221,10 +222,29 @@ class UbuntuManager(private val context: Context) {
             Os.chmod(f.absolutePath, mode)
         }
         val exec = 0x1ed // 0755
-        write("usr/local/bin/xdg-open", ASSET_XDG_OPEN, exec)
-        write("usr/local/bin/agy-setup", ASSET_FIRSTBOOT, exec)
-        write("usr/local/bin/agy-start", ASSET_AGY_START, exec)
-        write("etc/profile.d/zz-agy-terminal.sh", ASSET_PROFILE, 0x1a4)
+        fun asset(name: String) = context.assets.open("guest/$name").bufferedReader().use { it.readText() }
+        write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
+        write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
+        write("usr/local/bin/agy-setup", asset("agy-setup"), exec)
+        write("usr/local/bin/agy-start", asset("agy-start"), exec)
+        write("etc/profile.d/zz-agy-terminal.sh", asset("profile.sh"), 0x1a4)
+        write("etc/agy-terminal.bashrc", asset("bashrc"), 0x1a4)
+        // Hook the prompt/aliases into root's .bashrc (after Ubuntu's own PS1).
+        val bashrc = File(rootfs, "root/.bashrc")
+        val hook = "[ -f /etc/agy-terminal.bashrc ] && . /etc/agy-terminal.bashrc"
+        if (!bashrc.exists() || !bashrc.readText().contains(hook)) bashrc.appendText("\n$hook\n")
+        // ~/storage/* → the phone's folders (like Termux), dangling until access is granted.
+        val storageDir = File(rootfs, "root/storage").apply { mkdirs() }
+        for ((name, target) in com.sabidyut.agyterm.Storage.links) {
+            val link = File(storageDir, name)
+            if (!isSymlink(link)) {
+                link.delete()
+                try {
+                    Os.symlink(target, link.absolutePath)
+                } catch (_: Exception) {
+                }
+            }
+        }
         nameAndroidGroups()
         guestFilesSynced = true
     }
@@ -315,8 +335,11 @@ class UbuntuManager(private val context: Context) {
         for (name in listOf("loadavg", "stat", "uptime", "version", "vmstat")) {
             if (!File("/proc/$name").canRead()) args += listOf("-b", "${fakeProc.absolutePath}/$name:/proc/$name")
         }
-        val sdcard = File("/storage/emulated/0")
-        if (sdcard.canRead()) args += listOf("-b", "${sdcard.absolutePath}:/sdcard")
+        // The phone's storage. Bound even before access is granted, so a grant later works
+        // without restarting the session (the kernel checks permission on each access).
+        val sdcard = com.sabidyut.agyterm.Storage.root
+        if (sdcard.exists()) args += listOf("-b", "${sdcard.absolutePath}:/sdcard")
+        if (File("/storage").exists()) args += listOf("-b", "/storage")
         args += listOf("-w", "/root", "/usr/bin/env", "-i")
         args += listOf(
             "HOME=/root",
@@ -380,62 +403,5 @@ class UbuntuManager(private val context: Context) {
         const val UBUNTU_VERSION = "24.04"
         // Newest first; the installer falls back if a point release isn't published.
         private val UBUNTU_POINT_RELEASES = listOf("24.04.5", "24.04.4", "24.04.3")
-
-        /** xdg-open / $BROWSER inside Ubuntu: asks the app (via an OSC escape) to open the URL on the phone. */
-        private val ASSET_XDG_OPEN = """
-            #!/bin/sh
-            # Opens a URL in the phone's browser (handled by the Agy Terminal app).
-            url="${'$'}1"
-            [ -z "${'$'}url" ] && exit 1
-            printf '\033]7770;open;%s\007' "${'$'}url" > /dev/tty 2>/dev/null || printf '\033]7770;open;%s\007' "${'$'}url"
-            echo "ব্রাউজারে খোলা হচ্ছে: ${'$'}url" >&2
-        """.trimIndent() + "\n"
-
-        /** One-time setup inside Ubuntu: base tools + the official Antigravity CLI installer. */
-        private val ASSET_FIRSTBOOT = """
-            #!/bin/bash
-            # Agy Terminal — first-time setup (run again any time with: agy-setup)
-            set -o pipefail
-            G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
-            echo -e "${'$'}{Y}✦ প্রথমবারের সেটআপ — কয়েক মিনিট লাগতে পারে, অ্যাপ খোলা রাখুন${'$'}{N}"
-            export DEBIAN_FRONTEND=noninteractive
-            step() { echo -e "\n${'$'}{G}▸ ${'$'}*${'$'}{N}"; }
-            step "প্যাকেজ তালিকা আপডেট (apt update)"
-            apt-get update || { echo -e "${'$'}{R}apt update ব্যর্থ — ইন্টারনেট দেখে 'agy-setup' চালান${'$'}{N}"; exit 1; }
-            step "দরকারি টুল ইনস্টল (curl, git, nano …)"
-            apt-get install -y --no-install-recommends ca-certificates curl git nano less procps unzip xz-utils openssh-client \
-              || { echo -e "${'$'}{R}ইনস্টল ব্যর্থ — আবার চেষ্টা করতে 'agy-setup' চালান${'$'}{N}"; exit 1; }
-            if [ ! -x "${'$'}HOME/.local/bin/agy" ]; then
-              step "Antigravity CLI ইনস্টল (Google এর অফিসিয়াল ইনস্টলার)"
-              curl -fsSL https://antigravity.google/cli/install.sh | bash \
-                || { echo -e "${'$'}{R}agy ইনস্টল ব্যর্থ — আবার চেষ্টা করতে 'agy-setup' চালান${'$'}{N}"; exit 1; }
-            fi
-            grep -q '.local/bin' "${'$'}HOME/.bashrc" 2>/dev/null || echo 'export PATH="${'$'}HOME/.local/bin:${'$'}PATH"' >> "${'$'}HOME/.bashrc"
-            touch "${'$'}HOME/.agy-terminal-setup-done"
-            echo -e "\n${'$'}{G}✓ সেটআপ শেষ! 'agy' লিখে Antigravity চালান।${'$'}{N}\n"
-        """.trimIndent() + "\n"
-
-        /** Started by the "Antigravity" button: setup if needed, run agy, then stay in a shell. */
-        private val ASSET_AGY_START = """
-            #!/bin/bash
-            [ -f "${'$'}HOME/.agy-terminal-setup-done" ] || /usr/local/bin/agy-setup
-            export PATH="${'$'}HOME/.local/bin:${'$'}PATH"
-            if command -v agy >/dev/null 2>&1; then
-              agy
-            else
-              echo "agy পাওয়া যায়নি — 'agy-setup' চালিয়ে আবার চেষ্টা করুন।"
-            fi
-            exec bash -l
-        """.trimIndent() + "\n"
-
-        /** Runs for every login shell: first-time setup + a friendly prompt. */
-        private val ASSET_PROFILE = """
-            # Agy Terminal
-            export PATH="${'$'}HOME/.local/bin:${'$'}PATH"
-            if [ -n "${'$'}PS1" ] && [ -z "${'$'}AGY_SETUP_RUNNING" ] && [ ! -f "${'$'}HOME/.agy-terminal-setup-done" ] && [ "${'$'}0" != "/usr/local/bin/agy-start" ]; then
-              AGY_SETUP_RUNNING=1 /usr/local/bin/agy-setup
-            fi
-            PS1='\[\e[1;32m\]ubuntu\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
-        """.trimIndent() + "\n"
     }
 }

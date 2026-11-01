@@ -1,0 +1,12 @@
+# Agy Terminal shell look — sourced from ~/.bashrc (rewritten when the app updates)
+__agy_prompt() {
+  local s=$?
+  local mark='\[\e[38;2;137;180;250m\]❯'
+  [ $s -ne 0 ] && mark='\[\e[38;2;243;139;168m\]❯'
+  PS1="\[\e[38;2;166;227;161m\]\w\[\e[0m\] ${mark}\[\e[0m\] "
+}
+PROMPT_COMMAND=__agy_prompt
+alias ls='ls --color=auto'
+alias ll='ls -alh --color=auto'
+alias la='ls -A --color=auto'
+alias grep='grep --color=auto'
