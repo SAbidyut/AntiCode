@@ -238,9 +238,24 @@ class UbuntuManager(private val context: Context) {
 
     data class Launch(val command: String, val args: Array<String>, val env: Array<String>, val cwd: String)
 
+    private val libDir: File get() = File(context.filesDir, "lib")
+
+    /**
+     * proot (an unmodified Termux build) links against "libtalloc.so.2", but Android only
+     * ships files named lib*.so in the APK. Point that name at the bundled copy. The native
+     * library dir changes on every app update, so this is refreshed before each launch.
+     */
+    private fun prepareLibs() {
+        libDir.mkdirs()
+        val link = File(libDir, "libtalloc.so.2")
+        link.delete()
+        Os.symlink("$nativeDir/libtalloc.so", link.absolutePath)
+    }
+
     /** kind = "ubuntu" (login shell) or "agy" (Antigravity CLI, then a shell). */
     fun launch(kind: String): Launch {
         tmpDir.mkdirs()
+        prepareLibs()
         val proot = "$nativeDir/libproot.so"
         val args = mutableListOf(
             proot,
@@ -292,7 +307,7 @@ class UbuntuManager(private val context: Context) {
             "PATH=/system/bin:/system/xbin",
             "HOME=${context.filesDir.absolutePath}",
             "TMPDIR=${tmpDir.absolutePath}",
-            "LD_LIBRARY_PATH=$nativeDir",
+            "LD_LIBRARY_PATH=${libDir.absolutePath}:$nativeDir",
             "PROOT_TMP_DIR=${tmpDir.absolutePath}",
             "PROOT_LOADER=$nativeDir/libproot-loader.so",
             "PROOT_LOADER_32=$nativeDir/libproot-loader32.so",

@@ -13,7 +13,7 @@ adb shell pidof "$PKG" || { echo "app is not running"; adb logcat -d | tail -100
 
 LIB=$(adb shell pm path "$PKG" | tr -d '\r' | sed 's/^package://; s#/base.apk##')/lib/x86_64
 echo "--- proot --version"
-adb shell "LD_LIBRARY_PATH=$LIB $LIB/libproot.so --version" | head -3
+adb shell "mkdir -p /data/local/tmp/agylib && ln -sf $LIB/libtalloc.so /data/local/tmp/agylib/libtalloc.so.2 && LD_LIBRARY_PATH=/data/local/tmp/agylib:$LIB $LIB/libproot.so --version" | head -3
 
 echo "--- self test (up to 30 min)"
 deadline=$((SECONDS + 1800))

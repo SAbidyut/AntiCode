@@ -5,7 +5,7 @@
 #
 #   scripts/fetch-proot.sh            # arm64-v8a and x86_64
 #
-# Needs: curl, ar (binutils), tar, xz, patchelf.
+# Needs: curl, ar (binutils), tar, xz.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,16 +29,15 @@ for arch in aarch64 x86_64; do
     (cd "$WORK/$arch" && ar x "../$pkg.deb" && tar -xf data.tar.* && rm -f data.tar.* control.tar.* debian-binary)
   done
   usr="$WORK/$arch/data/data/com.termux/files/usr"
-  talloc=$(ls "$usr"/lib/libtalloc.so.* | grep -E 'libtalloc\.so\.[0-9]+$' | head -1)
-  # Android only extracts files named lib*.so, so rename everything and fix the links.
+  # Android only extracts files named lib*.so, so rename them. The binaries themselves
+  # are NOT modified (patchelf output crashes on Android's linker): proot still asks for
+  # "libtalloc.so.2", which the app provides as a symlink at runtime
+  # (UbuntuManager.prepareLibs → files/lib/libtalloc.so.2 → nativeLibraryDir/libtalloc.so).
   cp "$usr/bin/proot"                      "$JNI/$abi/libproot.so"
   cp "$usr/libexec/proot/loader"           "$JNI/$abi/libproot-loader.so"
   [ -f "$usr/libexec/proot/loader32" ] && cp "$usr/libexec/proot/loader32" "$JNI/$abi/libproot-loader32.so"
-  cp "$(readlink -f "$talloc")"            "$JNI/$abi/libtalloc.so"
-  cp "$(readlink -f "$usr/lib/libandroid-shmem.so")" "$JNI/$abi/libandroid-shmem.so"
-  patchelf --replace-needed "$(basename "$talloc")" libtalloc.so "$JNI/$abi/libproot.so"
-  patchelf --remove-rpath "$JNI/$abi/libproot.so" || true
-  patchelf --set-soname libtalloc.so "$JNI/$abi/libtalloc.so"
-  echo "    NEEDED: $(patchelf --print-needed "$JNI/$abi/libproot.so" | tr '\n' ' ')"
+  cp "$(readlink -f "$usr/lib/libtalloc.so.2")"       "$JNI/$abi/libtalloc.so"
+  cp "$(readlink -f "$usr/lib/libandroid-shmem.so")"  "$JNI/$abi/libandroid-shmem.so"
+  ls -l "$JNI/$abi"
 done
 echo "done → $JNI"
