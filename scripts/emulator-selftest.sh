@@ -27,6 +27,6 @@ while [ $SECONDS -lt $deadline ]; do
   if grep -q "session exited with code [^0]" <<<"$log"; then break; fi
   sleep 15
 done
-adb logcat -d -s AgySelfTest:* AndroidRuntime:E | grep -vE "out: (Get|Hit|Selecting|Preparing|Unpacking|Setting up|update-alternatives)" | tail -150
+adb logcat -d -s AgySelfTest:* AgyWeb:* AndroidRuntime:E | grep -vE "out: (Get|Hit|Selecting|Preparing|Unpacking|Setting up|update-alternatives)" | tail -150
 if [ $result -eq 0 ]; then echo "SELF TEST PASSED"; else echo "SELF TEST FAILED"; fi
 exit $result

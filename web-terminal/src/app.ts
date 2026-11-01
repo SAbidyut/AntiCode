@@ -631,6 +631,15 @@ function renderSample() {
 
 // ---------------------------------------------------------------- boot
 async function boot() {
+  console.info(`boot: ${location.href} host=${bridge.host}`);
+  // Hook for the emulator self test (debug builds load the page with ?selftest=1).
+  if (new URLSearchParams(location.search).has('selftest')) {
+    (window as unknown as Record<string, unknown>).__selftest = {
+      open: (kind: SessionKind) => newSession(kind),
+      screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
+      errors: () => jsErrors.join('\n'),
+    };
+  }
   buildKeyBar();
   bindCompose();
   bindTopBar();
@@ -640,13 +649,18 @@ async function boot() {
   showHome();
 
   // Measure the cell size only after the fonts are really there.
+  // (bounded: a font that never finishes loading must not stall the whole UI)
   try {
-    await Promise.all([
-      document.fonts.load(`${prefs.fontSize}px "JetBrains Mono"`),
-      document.fonts.load(`bold ${prefs.fontSize}px "JetBrains Mono"`),
-      document.fonts.load(`${prefs.fontSize}px Kalpurush`, 'বাংলা'),
+    await Promise.race([
+      Promise.all([
+        document.fonts.load(`${prefs.fontSize}px "JetBrains Mono"`),
+        document.fonts.load(`bold ${prefs.fontSize}px "JetBrains Mono"`),
+        document.fonts.load(`${prefs.fontSize}px Kalpurush`, 'বাংলা'),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, 4000)),
     ]);
   } catch { /* fall back to whatever is available */ }
+  console.info(`boot: fonts ready=${document.fonts.check(`${prefs.fontSize}px Kalpurush`, 'বাংলা')}`);
   renderSample();
 
   try {
@@ -671,14 +685,6 @@ async function boot() {
   new ResizeObserver(() => active?.fit()).observe($('#sessions'));
   window.addEventListener('resize', () => active?.fit());
 
-  // Hook for the emulator self test (debug builds load the page with ?selftest=1).
-  if (new URLSearchParams(location.search).has('selftest')) {
-    (window as unknown as Record<string, unknown>).__selftest = {
-      open: (kind: SessionKind) => newSession(kind),
-      screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
-      errors: () => jsErrors.join('\n'),
-    };
-  }
 }
 
 boot();

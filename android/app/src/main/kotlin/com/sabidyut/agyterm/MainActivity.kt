@@ -16,7 +16,9 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -147,6 +149,17 @@ class MainActivity : ComponentActivity() {
                 return true
             }
         }
+        // Page console → logcat (tag AgyWeb), for debugging and the CI self test.
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                Log.println(
+                    if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR) Log.ERROR else Log.INFO,
+                    "AgyWeb",
+                    "${m.message()} (${m.sourceId()?.substringAfterLast('/')}:${m.lineNumber()})",
+                )
+                return true
+            }
+        }
         web.addJavascriptInterface(Bridge(), "AndroidBridge")
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -185,11 +198,20 @@ class MainActivity : ComponentActivity() {
      * (same path as the "Antigravity" button) and log what the screen shows, so CI catches
      * a blank/frozen terminal — the bug users actually hit.
      */
-    private fun selftestAgyInUi() {
-        Log.i(SELFTEST, "phase 2: starting agy in the real UI")
+    private fun selftestAgyInUi(attempt: Int = 0) {
+        Log.i(SELFTEST, "phase 2: starting agy in the real UI (attempt ${attempt + 1})")
         web.evaluateJavascript("window.__selftest ? (__selftest.open('agy'), 'started') : 'no hook'") {
             Log.i(SELFTEST, "ui: $it")
+            if (it != "\"started\"") {
+                if (attempt < 10) main.postDelayed({ selftestAgyInUi(attempt + 1) }, 3000)
+                else Log.e(SELFTEST, "SELFTEST_AGY_FAIL web UI never became ready (url=${web.url})")
+                return@evaluateJavascript
+            }
+            scheduleScreenChecks()
         }
+    }
+
+    private fun scheduleScreenChecks() {
         val checks = listOf(15_000L, 30_000L, 50_000L)
         for ((i, delay) in checks.withIndex()) {
             main.postDelayed({
