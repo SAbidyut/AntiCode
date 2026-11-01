@@ -84,7 +84,7 @@ class SessionService : Service() {
      * inside it, logging everything to logcat (tag AgySelfTest). Used by CI on an emulator:
      *   adb shell am start -n com.sabidyut.agyterm/.MainActivity --ez selftest true
      */
-    fun runSelfTest() {
+    fun runSelfTest(onDone: (Boolean) -> Unit = {}) {
         Thread({
             Log.i(SELFTEST, "start")
             if (!ubuntu.isInstalled()) {
@@ -118,6 +118,8 @@ class SessionService : Service() {
             while (s.alive) Thread.sleep(1000)
             Log.i(SELFTEST, "out: $line")
             Log.i(SELFTEST, "session exited with code ${s.exitCode}")
+            closeSession(s.id)
+            onDone(s.exitCode == 0)
         }, "selftest").start()
     }
 

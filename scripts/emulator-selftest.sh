@@ -16,14 +16,17 @@ echo "--- proot --version"
 adb shell "mkdir -p /data/local/tmp/agylib && ln -sf $LIB/libtalloc.so /data/local/tmp/agylib/libtalloc.so.2 && LD_LIBRARY_PATH=/data/local/tmp/agylib:$LIB $LIB/libproot.so --version" | head -3
 
 echo "--- self test (up to 30 min)"
+# Phase 1: Ubuntu install + agy-setup + `agy --version` (SELFTEST_OK)
+# Phase 2: `agy` opened through the real web UI must draw its screen (SELFTEST_AGY_OK)
 deadline=$((SECONDS + 1800))
 result=1
 while [ $SECONDS -lt $deadline ]; do
   log=$(adb logcat -d -s AgySelfTest:* AndroidRuntime:E 2>/dev/null)
-  if grep -q "SELFTEST_OK" <<<"$log"; then result=0; break; fi
-  if grep -qE "SELFTEST_FAIL|session exited|FATAL EXCEPTION" <<<"$log"; then break; fi
+  if grep -q "SELFTEST_AGY_OK" <<<"$log"; then result=0; break; fi
+  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
+  if grep -q "session exited with code [^0]" <<<"$log"; then break; fi
   sleep 15
 done
-adb logcat -d -s AgySelfTest:* AndroidRuntime:E | tail -200
+adb logcat -d -s AgySelfTest:* AndroidRuntime:E | grep -vE "out: (Get|Hit|Selecting|Preparing|Unpacking|Setting up|update-alternatives)" | tail -150
 if [ $result -eq 0 ]; then echo "SELF TEST PASSED"; else echo "SELF TEST FAILED"; fi
 exit $result

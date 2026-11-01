@@ -1,7 +1,6 @@
 package com.sabidyut.agyterm
 
 import android.annotation.SuppressLint
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -10,12 +9,12 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Base64
+import android.util.Log
 import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
@@ -25,8 +24,6 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import androidx.browser.customtabs.CustomTabColorSchemeParams
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.webkit.WebViewAssetLoader
 import com.sabidyut.agyterm.term.TermSession
 import org.json.JSONArray
@@ -39,6 +36,7 @@ class MainActivity : ComponentActivity() {
     private var service: SessionService? = null
     private val main = Handler(Looper.getMainLooper())
     private lateinit var imm: InputMethodManager
+    private lateinit var browser: InAppBrowser
 
     // ---------------------------------------------------------------- output pump
     // PTY output arrives on reader threads; batch it and hand it to the web UI ~60×/s.
@@ -101,9 +99,8 @@ class MainActivity : ComponentActivity() {
                 js("__native.onState(${JSONObject.quote(svc.ubuntu.stateJson())})")
             }
             // Only now load the UI: every bridge call needs the service.
-            if (web.url == null) web.loadUrl(START_URL)
-            val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
-            if (debuggable && intent?.getBooleanExtra("selftest", false) == true) svc.runSelfTest()
+            if (web.url == null) web.loadUrl(if (selftestEnabled()) "$START_URL?selftest=1" else START_URL)
+            if (selftestEnabled()) svc.runSelfTest { ok -> if (ok) main.post { selftestAgyInUi() } }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -118,6 +115,7 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = Color.parseColor("#181b25")
         window.navigationBarColor = Color.parseColor("#181b25")
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        browser = InAppBrowser(this).apply { warmup() }
 
         web = TermWebView(this, object : TermWebView.KeySink {
             override fun onText(text: String) = js("__native.onImeText(${JSONObject.quote(text)})")
@@ -145,7 +143,7 @@ class MainActivity : ComponentActivity() {
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (request.url.host == ASSET_HOST) return false
-                openExternal(request.url.toString(), customTab = true)
+                browser.open(request.url.toString())
                 return true
             }
         }
@@ -172,28 +170,45 @@ class MainActivity : ComponentActivity() {
             svc.updateForeground()
         }
         unbindService(connection)
+        browser.release()
         web.destroy()
         super.onDestroy()
     }
 
-    // ---------------------------------------------------------------- helpers
-    private fun openExternal(url: String, customTab: Boolean) {
-        val uri = Uri.parse(url)
-        try {
-            if (customTab && (uri.scheme == "https" || uri.scheme == "http")) {
-                val colors = CustomTabColorSchemeParams.Builder()
-                    .setToolbarColor(Color.parseColor("#181b25"))
-                    .build()
-                CustomTabsIntent.Builder()
-                    .setDefaultColorSchemeParams(colors)
-                    .setShowTitle(true)
-                    .build()
-                    .launchUrl(this, uri)
-            } else {
-                startActivity(Intent(Intent.ACTION_VIEW, uri))
-            }
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, "লিংক খোলার মতো কোনো ব্রাউজার নেই", Toast.LENGTH_LONG).show()
+    // ---------------------------------------------------------------- self test (debug builds)
+    private fun selftestEnabled() =
+        applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
+            intent?.getBooleanExtra("selftest", false) == true
+
+    /**
+     * Phase 2 of the emulator self test: open the Antigravity CLI through the real web UI
+     * (same path as the "Antigravity" button) and log what the screen shows, so CI catches
+     * a blank/frozen terminal — the bug users actually hit.
+     */
+    private fun selftestAgyInUi() {
+        Log.i(SELFTEST, "phase 2: starting agy in the real UI")
+        web.evaluateJavascript("window.__selftest ? (__selftest.open('agy'), 'started') : 'no hook'") {
+            Log.i(SELFTEST, "ui: $it")
+        }
+        val checks = listOf(15_000L, 30_000L, 50_000L)
+        for ((i, delay) in checks.withIndex()) {
+            main.postDelayed({
+                web.evaluateJavascript("JSON.stringify({s: __selftest.screen(), e: __selftest.errors()})") { raw ->
+                    val obj = try {
+                        JSONObject(JSONObject("{\"v\":$raw}").getString("v"))
+                    } catch (_: Exception) {
+                        JSONObject().put("s", "").put("e", "unreadable: $raw")
+                    }
+                    val screen = obj.optString("s")
+                    val errors = obj.optString("e")
+                    Log.i(SELFTEST, "ui screen after ${delay / 1000}s:")
+                    for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "ui| $line")
+                    if (errors.isNotBlank()) Log.e(SELFTEST, "ui js errors: $errors")
+                    val ok = errors.isBlank() && Regex("Antigravity|sign|Sign|login|Login").containsMatchIn(screen)
+                    if (ok) Log.i(SELFTEST, "SELFTEST_AGY_OK")
+                    else if (i == checks.lastIndex) Log.e(SELFTEST, "SELFTEST_AGY_FAIL screen blank or JS errors")
+                }
+            }, delay)
         }
     }
 
@@ -250,12 +265,12 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun openUrl(url: String) {
-            main.post { openExternal(url, customTab = true) }
+            main.post { browser.open(url) }
         }
 
         @JavascriptInterface
         fun openRemote(url: String) {
-            main.post { openExternal(url, customTab = true) }
+            main.post { browser.open(url) }
         }
 
         @JavascriptInterface
@@ -305,5 +320,6 @@ class MainActivity : ComponentActivity() {
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
+        private const val SELFTEST = "AgySelfTest"
     }
 }

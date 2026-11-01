@@ -14,6 +14,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The terminal UI against real bash in Chromium (includes the startup queries the
+  # Antigravity CLI sends — a minifier bug once froze the screen on them).
+  web-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-terminal/package-lock.json
+      - name: Build and test
+        working-directory: web-terminal
+        run: |
+          npm ci
+          npm run build
+          npm i --no-save playwright@1
+          npx playwright install --with-deps chromium
+          node dev/bridge-server.mjs > bridge.log 2>&1 &
+          npx vite preview --port 4173 --strictPort > preview.log 2>&1 &
+          sleep 4
+          node dev/e2e.mjs
+
   apk:
     runs-on: ubuntu-latest
     steps:

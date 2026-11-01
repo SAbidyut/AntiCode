@@ -12,7 +12,11 @@ const check = (name, ok) => {
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 412, height: 860 } });
-page.on('pageerror', (e) => console.log('[pageerror]', e.message));
+const pageErrors = [];
+page.on('pageerror', (e) => {
+  pageErrors.push(e.message);
+  console.log('[pageerror]', e.message);
+});
 await page.goto(url);
 await page.waitForTimeout(1000);
 if ((await page.getAttribute('body', 'data-screen')) === 'term') await page.click('#home-btn');
@@ -35,6 +39,19 @@ check('terminal screen opens', await waitFor(async () => (await page.getAttribut
 await page.fill('#compose', "echo 'ক্ষমা-'$((40+2))");
 await page.dispatchEvent('#send', 'pointerdown');
 check('compose box runs Bangla command', await waitFor(async () => (await screenText()).includes('ক্ষমা-42')));
+
+// 2b. the queries the Antigravity CLI sends at startup must not break the terminal
+//     (regression: a minifier bug made DECRQM throw and froze the screen) and get answers.
+await page.fill(
+  '#compose',
+  "printf '\\e[>q\\e[c\\e[?2026$p\\e[?2027$p\\e]11;?\\a\\e]7501;?\\a\\e[?u'; read -rs -t 1 -N 300 r; " +
+    "printf '%q\\n' \"$r\" | tr -d '\\\\' | head -c 200; echo; echo AFTER-$((2+2))",
+);
+await page.dispatchEvent('#send', 'pointerdown');
+check('agy startup queries keep the screen alive', await waitFor(async () => (await screenText()).includes('AFTER-4')));
+const replies = await screenText();
+check('DA1 + DECRQM + XTVERSION answered', replies.includes('?1;2c') && replies.includes('2026;2$y') && replies.includes('AgyTerminal'));
+check('background colour (OSC 11) answered', replies.includes('11;rgb:'));
 
 // 3. direct typing (hardware keyboard path)
 await page.focus('#kbd');
@@ -82,6 +99,8 @@ check(`resize reaches the PTY (stty: ${m?.[0]?.trim()}, width ${Math.round(cols)
 await page.reload();
 await page.waitForTimeout(1500);
 check('session restored after reload', await waitFor(async () => (await screenText()).includes('typed-42')));
+
+check('no JavaScript errors', pageErrors.length === 0);
 
 await browser.close();
 console.log(failures ? `${failures} failed` : 'all passed');

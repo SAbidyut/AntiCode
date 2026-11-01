@@ -3,7 +3,16 @@
 import { Terminal } from '@xterm/headless';
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 import type { Bridge, SessionKind } from '../bridge';
-import { BanglaRenderer, type RendererOptions } from './renderer';
+import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
+
+const RAW_KEEP = 64 * 1024;
+
+/** '#14161f' → 'rgb:1414/1616/1f1f' (the format xterm uses in colour reports). */
+function xtermRgb(hex: string): string {
+  const h = hex.replace('#', '');
+  const part = (i: number) => h.slice(i, i + 2).repeat(2);
+  return `rgb:${part(0)}/${part(2)}/${part(4)}`;
+}
 
 const URL_RE = /https?:\/\/[^\s'"<>`]+[^\s'"<>`.,;:)\]}]/g;
 
@@ -17,6 +26,8 @@ export class TerminalSession {
   private readerOpen = false;
   private readerFrame = 0;
   private resizeTimer = 0;
+  private raw: Uint8Array[] = [];
+  private rawSize = 0;
   onTitle?: () => void;
   onActivity?: () => void;
 
@@ -68,6 +79,24 @@ export class TerminalSession {
       if (cmd === 'open' && rest.length) this.bridge.openUrl(rest.join(';'));
       return true;
     });
+    // Colour queries (OSC 10/11/12 ; ?) — TUIs like the Antigravity CLI ask for the
+    // background colour to pick a light or dark palette.
+    for (const [osc, pick] of [
+      [10, (t: TermTheme) => t.foreground],
+      [11, (t: TermTheme) => t.background],
+      [12, (t: TermTheme) => t.cursor],
+    ] as const) {
+      this.term.parser.registerOscHandler(osc, (data) => {
+        if (data !== '?') return false;
+        this.bridge.write(this.id, `\x1b]${osc};${xtermRgb(pick(this.renderer.options.theme))}\x1b\\`);
+        return true;
+      });
+    }
+    // XTVERSION (CSI > q): name the terminal.
+    this.term.parser.registerCsiHandler({ prefix: '>', final: 'q' }, () => {
+      this.bridge.write(this.id, '\x1bP>|AgyTerminal 0.2\x1b\\');
+      return true;
+    });
     // OSC 52 clipboard copy (used by many TUIs).
     this.term.parser.registerOscHandler(52, (data) => {
       const b64 = data.split(';')[1];
@@ -82,7 +111,32 @@ export class TerminalSession {
   }
 
   write(data: Uint8Array) {
+    this.raw.push(data);
+    this.rawSize += data.length;
+    while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;
     this.term.write(data);
+  }
+
+  /** Diagnostics for bug reports: terminal state + the last output with escapes made visible. */
+  debugDump(): string {
+    const m = this.term.modes;
+    const buf = this.term.buffer.active;
+    const all = new Uint8Array(this.rawSize);
+    let off = 0;
+    for (const c of this.raw) {
+      all.set(c, off);
+      off += c.length;
+    }
+    const text = new TextDecoder().decode(all).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, (c) =>
+      c === '\x1b' ? '⎋' : `<${c.charCodeAt(0).toString(16).padStart(2, '0')}>`,
+    );
+    return [
+      `session ${this.id} kind=${this.kind} alive=${this.alive} size=${this.term.cols}x${this.term.rows}`,
+      `buffer=${buf.type} cursor=${buf.cursorX},${buf.cursorY} baseY=${buf.baseY}`,
+      `modes: appCursor=${m.applicationCursorKeysMode} bracketedPaste=${m.bracketedPasteMode} mouse=${m.mouseTrackingMode} sync=${m.synchronizedOutputMode}`,
+      `--- last ${this.rawSize} bytes of output ---`,
+      text.slice(-RAW_KEEP),
+    ].join('\n');
   }
 
   /** User input → PTY. Jumps back to the live view. */

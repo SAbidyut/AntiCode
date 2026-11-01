@@ -192,25 +192,62 @@ class UbuntuManager(private val context: Context) {
             f.writeText(text)
             Os.chmod(f.absolutePath, mode)
         }
-        val exec = 0x1ed // 0755
 
         write("etc/resolv.conf", "nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
         write("etc/hosts", "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n127.0.1.1 android\n")
         write("etc/hostname", "android\n")
         // apt drops privileges to "_apt", which proot's fake root can't do.
         write("etc/apt/apt.conf.d/99-agy-terminal", "APT::Sandbox::User \"root\";\nAcquire::Retries \"3\";\n")
-        // Name the Android groups so "groups: cannot find name for group ID" disappears.
-        val gid = Os.getgid()
-        File(rootfs, "etc/group").appendText("aid_app:x:$gid:\n")
-
-        write("usr/local/bin/xdg-open", ASSET_XDG_OPEN, exec)
-        write("usr/local/bin/agy-setup", ASSET_FIRSTBOOT, exec)
-        write("usr/local/bin/agy-start", ASSET_AGY_START, exec)
-        write("etc/profile.d/zz-agy-terminal.sh", ASSET_PROFILE)
 
         File(rootfs, "tmp").apply { mkdirs(); Os.chmod(absolutePath, 0x3ff /* 1777 */) }
         File(rootfs, "root").mkdirs()
         writeFakeProc()
+        syncGuestFiles()
+    }
+
+    @Volatile private var guestFilesSynced = false
+
+    /**
+     * Files this app owns inside Ubuntu (helper scripts, group names). Rewritten once per
+     * app start so fixes reach Ubuntu installs made by older versions of the app.
+     */
+    private fun syncGuestFiles() {
+        if (guestFilesSynced) return
+        fun write(path: String, text: String, mode: Int) {
+            val f = File(rootfs, path)
+            f.parentFile?.mkdirs()
+            if (f.exists() || isSymlink(f)) f.delete()
+            f.writeText(text)
+            Os.chmod(f.absolutePath, mode)
+        }
+        val exec = 0x1ed // 0755
+        write("usr/local/bin/xdg-open", ASSET_XDG_OPEN, exec)
+        write("usr/local/bin/agy-setup", ASSET_FIRSTBOOT, exec)
+        write("usr/local/bin/agy-start", ASSET_AGY_START, exec)
+        write("etc/profile.d/zz-agy-terminal.sh", ASSET_PROFILE, 0x1a4)
+        nameAndroidGroups()
+        guestFilesSynced = true
+    }
+
+    /**
+     * Android apps belong to several supplementary groups (e.g. 3003 inet, 9997 everybody,
+     * 20xxx/50xxx per-app groups). Give each a name in /etc/group, otherwise every login
+     * prints "groups: cannot find name for group ID …".
+     */
+    private fun nameAndroidGroups() {
+        val groupFile = File(rootfs, "etc/group")
+        if (!groupFile.exists()) return
+        val gids = sortedSetOf(Os.getgid())
+        try {
+            File("/proc/self/status").readLines()
+                .firstOrNull { it.startsWith("Groups:") }
+                ?.removePrefix("Groups:")?.trim()?.split(Regex("\\s+"))
+                ?.mapNotNullTo(gids) { it.toIntOrNull() }
+        } catch (_: Exception) {
+        }
+        val known = groupFile.readLines().mapNotNull { it.split(':').getOrNull(2)?.toIntOrNull() }.toSet()
+        val missing = gids.filter { it !in known }
+        if (missing.isNotEmpty()) groupFile.appendText(missing.joinToString("") { "aid_$it:x:$it:\n" })
     }
 
     private fun isSymlink(f: File) = try {
@@ -256,6 +293,7 @@ class UbuntuManager(private val context: Context) {
     fun launch(kind: String): Launch {
         tmpDir.mkdirs()
         prepareLibs()
+        syncGuestFiles()
         val proot = "$nativeDir/libproot.so"
         val args = mutableListOf(
             proot,

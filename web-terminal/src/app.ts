@@ -47,6 +47,16 @@ function toast(msg: string) {
   (t as unknown as { _t: number })._t = window.setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+// JavaScript errors are collected so the user can send them with the debug log.
+const jsErrors: string[] = [];
+function reportError(msg: string) {
+  jsErrors.push(`${new Date().toISOString()} ${msg}`);
+  if (jsErrors.length > 20) jsErrors.shift();
+  toast('টার্মিনালে একটা সমস্যা হয়েছে — ⋮ → "ডিবাগ লগ কপি" করে পাঠান');
+}
+window.addEventListener('error', (e) => reportError(`${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
+window.addEventListener('unhandledrejection', (e) => reportError(`unhandled rejection: ${String(e.reason)}`));
+
 // ---------------------------------------------------------------- state
 const sessions = new Map<string, TerminalSession>();
 const early = new Map<string, Uint8Array[]>();
@@ -506,6 +516,7 @@ function updateReaderBtn() {
 
 function bindTopBar() {
   $('#home-btn').onclick = () => showHome();
+  $('#remote-top-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
   $('#reader-btn').onclick = () => {
     if (!active) return;
     active.toggleReader();
@@ -539,6 +550,18 @@ function bindTopBar() {
         case 'smaller': setFontSize(Math.max(9, prefs.fontSize - 1), true); break;
         case 'bottom': active.scrollToBottom(); break;
         case 'clear': active.term.clear(); break;
+        case 'debug':
+          bridge.copyText(
+            [
+              `Agy Terminal debug log — ${new Date().toISOString()}`,
+              `host=${bridge.host} ubuntu=${hostState.ubuntu} ua=${navigator.userAgent}`,
+              `--- JavaScript errors (${jsErrors.length}) ---`,
+              ...jsErrors,
+              active.debugDump(),
+            ].join('\n'),
+          );
+          toast('ডিবাগ লগ কপি হয়েছে — চ্যাটে পেস্ট করে পাঠান');
+          break;
       }
     };
   });
@@ -647,6 +670,15 @@ async function boot() {
 
   new ResizeObserver(() => active?.fit()).observe($('#sessions'));
   window.addEventListener('resize', () => active?.fit());
+
+  // Hook for the emulator self test (debug builds load the page with ?selftest=1).
+  if (new URLSearchParams(location.search).has('selftest')) {
+    (window as unknown as Record<string, unknown>).__selftest = {
+      open: (kind: SessionKind) => newSession(kind),
+      screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
+      errors: () => jsErrors.join('\n'),
+    };
+  }
 }
 
 boot();
