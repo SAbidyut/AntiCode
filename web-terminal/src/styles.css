@@ -194,6 +194,8 @@ input[type='url'] {
 .term-screen[hidden] { display: none; }
 .term-rows { position: relative; }
 .term-row { height: var(--lh); white-space: pre; overflow: visible; }
+/* styled runs fill the whole line height, so background colours form solid bars */
+.term-row span { display: inline-block; height: var(--lh); vertical-align: top; }
 .term-row .bn {
   display: inline-block;
   vertical-align: top;

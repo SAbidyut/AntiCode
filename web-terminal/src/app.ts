@@ -263,6 +263,9 @@ function focusTerminalKeyboard() {
   if (!active) return;
   active.setFocused(true);
   if (bridge.host === 'android') {
+    // Leave the compose box, otherwise tapping it again fires no focus event and
+    // the keyboard would stay in raw terminal mode.
+    (document.activeElement as HTMLElement | null)?.blur?.();
     bridge.setTerminalKeyboard(true);
     bridge.showKeyboard();
   } else {
@@ -465,10 +468,12 @@ function bindCompose() {
     ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
   };
   ta.addEventListener('input', grow);
-  ta.addEventListener('focus', () => {
+  const normalKeyboard = () => {
     bridge.setTerminalKeyboard(false);
     active?.setFocused(false);
-  });
+  };
+  ta.addEventListener('focus', normalKeyboard);
+  ta.addEventListener('pointerdown', normalKeyboard);
   const doSend = () => {
     if (!active) return;
     const text = ta.value;
