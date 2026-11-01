@@ -24,18 +24,6 @@ reset() { command reset "$@"; __agy_prompted=; }
 
 __agy_style_file="$HOME/.config/agy-terminal/prompt"
 
-# ---------------------------------------------------------------- command timer
-__agy_timer_start() {
-  # (the DEBUG trap also fires for PROMPT_COMMAND itself: that's not a command)
-  [[ $BASH_COMMAND == __agy_prompt* ]] && return
-  [ -z "$__agy_in_prompt" ] && [ -z "$__agy_t0" ] && __agy_t0=${EPOCHREALTIME/[.,]/}
-}
-if [[ ${BLE_VERSION-} ]]; then
-  blehook PREEXEC+=__agy_timer_start
-else
-  trap '__agy_timer_start' DEBUG
-fi
-
 # ---------------------------------------------------------------- git branch (no subprocess)
 __agy_git_branch() {
   __agy_branch=
@@ -61,15 +49,6 @@ __agy_prompt() {
   # tell the app the command is done (its "task finished" notification)
   printf '\e]7770;done\a'
 
-  local took=
-  if [ -n "$__agy_t0" ]; then
-    local ms=$(( (${EPOCHREALTIME/[.,]/} - __agy_t0) / 1000 ))
-    if (( ms >= 60000 )); then took="$((ms / 60000))m$(( (ms / 1000) % 60 ))s"
-    elif (( ms >= 1000 )); then took="$((ms / 1000)).$(( (ms % 1000) / 100 ))s"
-    else took="${ms}ms"; fi
-  fi
-  unset __agy_t0
-
   local style=powerline
   [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
 
@@ -85,16 +64,21 @@ __agy_prompt() {
   local ok='166;227;161' bad='243;139;168'
   local mark=$ok
   (( status != 0 )) && mark=$bad
+  # The clock sits at the right edge of the screen. The app draws it there (it's not
+  # text in the terminal), so it stays at the edge through zooming and resizing.
+  local cols=${COLUMNS:-80} clock= rclock=
+  if (( cols >= 30 )); then
+    printf -v clock '%(%I:%M %p)T' -1
+    rclock="\[\e]7770;rprompt;${clock}\a\]"
+  fi
 
   if [ "$style" = simple ]; then
-    PS1="\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+    PS1="${gap}${rclock}\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
     __agy_in_prompt=
     return
   fi
 
   __agy_git_branch
-  local clock
-  printf -v clock '%(%I:%M %p)T' -1
 
   # segments: "r;g;b|icon text" — dark text on pastel backgrounds
   local dir_icon=$''
@@ -104,34 +88,22 @@ __agy_prompt() {
   segs+=("243;139;168|${dir_icon} ${path}")
   [ -n "$__agy_branch" ] && segs+=("249;226;175|"$''" ${__agy_branch}")
   (( status != 0 )) && segs+=("235;111;146|"$''" ${status}")
-  [ -n "$took" ] && segs+=("203;166;247|"$''" ${took}")
-  segs+=("137;180;250|"$''" ${clock}")
 
-  # Fit the phone's width: drop the clock, then the timer, then shorten the path.
-  local cols=${COLUMNS:-80} width i
+  # Fit the phone's width (leaving room for the clock): shorten the path.
+  local width i room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
   __agy_width() {
     local t
     width=2
     for i in "${segs[@]}"; do t=${i#*|}; width=$(( width + ${#t} + 3 )); done
   }
   __agy_width
-  if (( width > cols - 1 )); then
-    local -a keep=()
-    for i in "${segs[@]}"; do [[ $i == "137;180;250|"* ]] || keep+=("$i"); done
-    segs=("${keep[@]}"); __agy_width
-  fi
-  if (( width > cols - 1 )); then
-    local -a keep=()
-    for i in "${segs[@]}"; do [[ $i == "203;166;247|"* ]] || keep+=("$i"); done
-    segs=("${keep[@]}"); __agy_width
-  fi
-  if (( width > cols - 1 )); then
+  if (( width > room )); then
     local short=${path##*/}
     local parent=${path%/*}; parent=${parent##*/}
     [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
     segs[1]="243;139;168|${dir_icon} ${short}"
     __agy_width
-    (( width > cols - 1 )) && segs[1]="243;139;168|${dir_icon} ${path##*/}"
+    (( width > room )) && segs[1]="243;139;168|${dir_icon} ${path##*/}"
   fi
 
   local fg='30;30;46' line= n=${#segs[@]} bg next
@@ -149,7 +121,7 @@ __agy_prompt() {
   done
 
   # window title (shown on the app's tab) + segments + input line
-  PS1="${gap}\[\e]0;\${__agy_path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${gap}${rclock}\[\e]0;\${__agy_path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
   __agy_in_prompt=
 }
 PROMPT_COMMAND=__agy_prompt
@@ -173,7 +145,11 @@ if [[ ${BLE_VERSION-} ]]; then
   bleopt complete_menu_style=align-nowrap
   bleopt edit_abell= edit_vbell=       # no beeps or flashes
   bleopt exec_errexit_mark=            # the prompt already shows a failed command's status
-  bleopt exec_elapsed_mark=            # …and how long it took
+  bleopt exec_elapsed_mark=            # no "[ble: elapsed …]" lines
+  # After a resize (zooming changes the width), redraw the prompt where it was. The
+  # default guesses how the terminal re-wrapped it and gets it wrong for a two-line
+  # prompt: every zoom left an extra blank line or a copy of the prompt bar behind.
+  bleopt canvas_winch_action=redraw-prev
   bleopt prompt_eol_mark=$'\e[38;2;108;112;134m⏎\e[m'
   ble-face auto_complete='fg=#6c7086'
   ble-face command_builtin='fg=#f38ba8' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'

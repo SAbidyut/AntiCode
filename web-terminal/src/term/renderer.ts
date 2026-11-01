@@ -198,6 +198,34 @@ export class BanglaRenderer {
   private lastCursorLine = -1;
   private typingTimer = 0;
   private animBaseY = 0;
+  // ---- right-aligned labels (the prompt's clock): drawn by us at the right edge of a
+  // line, not text in the terminal, so they stay at the edge through zoom and resize ----
+  private rightLabels: { marker: IMarker; text: string }[] = [];
+
+  /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
+  setRightLabel(text: string) {
+    if (this.term.buffer.active.type !== 'normal') return;
+    const marker = this.term.registerMarker(0);
+    if (!marker) return;
+    // a redraw of the same prompt replaces its label
+    this.rightLabels = this.rightLabels.filter((l) => {
+      const same = l.marker.isDisposed || l.marker.line === marker.line;
+      if (same) l.marker.dispose();
+      return !same;
+    });
+    this.rightLabels.push({ marker, text: text.slice(0, 24) });
+    while (this.rightLabels.length > 300) this.rightLabels.shift()!.marker.dispose();
+    this.schedule();
+  }
+
+  private labelsByLine(): Map<number, string> {
+    const m = new Map<number, string>();
+    if (this.term.buffer.active.type !== 'normal') return m;
+    this.rightLabels = this.rightLabels.filter((l) => !l.marker.isDisposed);
+    for (const l of this.rightLabels) m.set(l.marker.line, l.text);
+    return m;
+  }
+
   // ---- scrollback trimming (a full scrollback drops its oldest lines) ----
   private trimMarker: IMarker | null = null;
   private trimLine = 0;
@@ -671,13 +699,15 @@ export class BanglaRenderer {
     const motion = !!this.opts.animate && buf.type === 'normal';
     const canReveal = motion && !this.suppressReveal && this.scrollPx === 0;
     const revealed: HTMLDivElement[] = [];
+    const labels = this.labelsByLine();
     for (let i = first; i <= last; i++) {
       let r = this.rows.get(i);
       const live = i >= buf.baseY; // the live screen can still change; scrollback can't
       if (r && !live && !r.live) continue;
       if (r) r.live = live;
       const line = buf.getLine(i);
-      const html = this.rowToHtml(line, cols);
+      const label = labels.get(i);
+      const html = this.rowToHtml(line, cols) + (label ? `<span class="rlabel"><b>\uf017</b>${esc(label)}</span>` : '');
       let el: HTMLDivElement | null = null;
       if (!r) {
         el = this.spare.pop() ?? document.createElement('div');

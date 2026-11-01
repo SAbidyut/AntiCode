@@ -978,6 +978,8 @@ async function boot() {
       focusKeys: () => focusTerminalKeyboard(),
       send: (line: string) => active?.sendLine(line),
       home: () => showHome(),
+      /** change the text size like a pinch does */
+      zoom: (px: number) => setFontSize(px, true),
       /** the active session, for tests */
       session: () => active,
       /** raw keys, e.g. '\x03' */

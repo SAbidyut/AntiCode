@@ -101,6 +101,7 @@ export class TerminalSession {
     this.term.parser.registerOscHandler(7770, (data) => {
       const [cmd, ...rest] = data.split(';');
       if (cmd === 'open' && rest.length) this.bridge.openUrl(rest.join(';'));
+      else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
       else if (cmd === 'storage') this.bridge.requestStorage(); // `setup-storage` inside Ubuntu
       return true;
     });

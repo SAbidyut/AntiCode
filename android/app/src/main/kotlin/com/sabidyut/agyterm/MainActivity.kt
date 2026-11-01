@@ -513,7 +513,7 @@ class MainActivity : ComponentActivity() {
                 // the session → a "task finished" notification (the CI script checks it)
                 web.evaluateJavascript("__selftest.home(); __selftest.send(\"printf '\\\\033]9;SELFTEST-NOTIFY\\\\007'\")", null)
                 Log.i(SELFTEST, "SELFTEST_NOTIFY_SENT")
-                main.postDelayed({ selftestClaudeInUi() }, 9000)
+                main.postDelayed({ selftestZoom() }, 9000)
             } else if (n < 10) {
                 main.postDelayed({ pollStorage(n + 1) }, 2000)
             } else {
@@ -521,6 +521,35 @@ class MainActivity : ComponentActivity() {
                 Log.e(SELFTEST, "SELFTEST_STORAGE_FAIL /sdcard not readable inside Ubuntu")
             }
         }
+    }
+
+    /**
+     * Phase 3c: zooming (text size → terminal width → the shell redraws its prompt) must not
+     * leave blank lines or copies of the prompt bar behind (ble.sh redraw after resize).
+     */
+    private fun selftestZoom() {
+        Log.i(SELFTEST, "phase 3c: zooming a shell")
+        web.evaluateJavascript("__selftest.open('ubuntu')", null)
+        main.postDelayed({ web.evaluateJavascript("__selftest.send('clear')", null) }, 6000)
+        main.postDelayed({ web.evaluateJavascript("__selftest.send('echo ZOOM-A1')", null) }, 8000)
+        val sizes = listOf(20, 11, 17, 14)
+        for ((i, px) in sizes.withIndex()) {
+            main.postDelayed({ web.evaluateJavascript("__selftest.zoom($px)", null) }, 10_000L + i * 2500L)
+        }
+        main.postDelayed({
+            selftestScreen { screen ->
+                val lines = screen.lines().dropLastWhile { it.isBlank() }
+                val bars = lines.count { it.contains("root") }
+                for (line in lines) Log.i(SELFTEST, "zoom| $line")
+                // bar, ❯ echo ZOOM-A1, ZOOM-A1, gap, bar, ❯
+                if (bars == 2 && lines.size == 6 && lines.any { it.trim() == "ZOOM-A1" }) {
+                    Log.i(SELFTEST, "SELFTEST_ZOOM_OK")
+                } else {
+                    Log.e(SELFTEST, "SELFTEST_ZOOM_FAIL bars=$bars lines=${lines.size}")
+                }
+                selftestClaudeInUi()
+            }
+        }, 10_000L + sizes.size * 2500L + 2500L)
     }
 
     /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */

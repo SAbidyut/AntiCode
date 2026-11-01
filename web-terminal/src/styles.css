@@ -370,6 +370,14 @@ body[data-screen='home']::before {
 .term-row .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
 .term-row .dg i.r-ul { right: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); left: 0; top: 0; border-bottom-width: var(--bw); border-right-width: var(--bw); border-bottom-right-radius: calc(var(--cw) * 0.75); }
 .term-row .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
+/* the prompt's clock, always at the right edge of its line */
+.term-row .rlabel {
+  position: absolute; right: 0; top: 0; z-index: 1;
+  display: inline-flex; align-items: center; gap: 0.45em; height: var(--lh);
+  padding: 0 0.75em; border-radius: calc(var(--lh) / 2);
+  background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
+}
+.term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
 .term-cursor {
   position: absolute; left: 0; top: 0;
   width: var(--cw); height: var(--lh);
