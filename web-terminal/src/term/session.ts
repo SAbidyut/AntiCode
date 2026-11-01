@@ -152,8 +152,8 @@ export class TerminalSession {
   /** User input → PTY. Jumps back to the live view. */
   input(data: string) {
     if (!this.alive) return;
-    if (this.renderer.scrollOffset) {
-      this.renderer.scrollOffset = 0;
+    if (this.renderer.scrollPx) {
+      this.renderer.scrollPx = 0;
       this.renderer.schedule();
     }
     this.bridge.write(this.id, data);
@@ -228,13 +228,11 @@ export class TerminalSession {
       }
       return;
     }
-    const max = this.term.buffer.active.baseY;
-    this.renderer.scrollOffset = Math.max(0, Math.min(max, this.renderer.scrollOffset + n));
-    this.renderer.schedule();
+    this.renderer.scrollByPixels(n * this.renderer.lineHeight);
   }
 
   scrollToBottom() {
-    this.renderer.scrollOffset = 0;
+    this.renderer.scrollPx = 0;
     this.renderer.schedule();
   }
 
@@ -248,16 +246,16 @@ export class TerminalSession {
 
   /** If a URL is under the point, return it. */
   urlAt(clientX: number, clientY: number): string | null {
-    const { x, y } = this.renderer.cellAt(clientX, clientY);
+    const { x, line: at } = this.renderer.cellAt(clientX, clientY);
     const buf = this.term.buffer.active;
-    let start = this.renderer.bufferLineAt(y);
+    let start = at;
     while (start > 0 && buf.getLine(start)?.isWrapped) start--;
     let text = '';
     let offset = -1;
     for (let i = start; i < buf.length; i++) {
       const line = buf.getLine(i);
       if (!line || (i > start && !line.isWrapped)) break;
-      if (i === this.renderer.bufferLineAt(y)) offset = text.length + x;
+      if (i === at) offset = text.length + x;
       text += line.translateToString(false);
     }
     for (const m of text.matchAll(URL_RE)) {

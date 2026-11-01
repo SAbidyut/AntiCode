@@ -27,6 +27,7 @@
 | পড়া/কপি, পেস্ট, টেক্সট ছোট-বড়, থিম | টপবারের ⋮ মেনু; সেটিংস (Midnight / Dracula / Solarized / Paper, কার্সর স্টাইল) |
 | স্ক্রল / ফন্ট | আঙুলে স্ক্রল (মোমেন্টাম সহ), দুই আঙুলে পিঞ্চ; লম্বা চাপ = Reader view |
 | কীবোর্ড ঠিকমতো টাইপ না করলে | Settings → **Keyboard compatibility mode** |
+| prompt এর ডিজাইন | ডিফল্ট Oh-My-Posh ধাঁচের powerline prompt; `agy-prompt simple` বা `agy-prompt powerline` দিয়ে বদলান |
 | আবার সেটআপ | Ubuntu তে `agy-setup` |
 | কিছু ঠিকমতো না চললে | ⋮ → **Copy debug log** → চ্যাটে পেস্ট করুন |
 

@@ -1,12 +1,123 @@
-# Agy Terminal shell look — sourced from ~/.bashrc (rewritten when the app updates)
-__agy_prompt() {
-  local s=$?
-  local mark='\[\e[38;2;137;180;250m\]❯'
-  [ $s -ne 0 ] && mark='\[\e[38;2;243;139;168m\]❯'
-  PS1="\[\e[38;2;166;227;161m\]\w\[\e[0m\] ${mark}\[\e[0m\] "
-}
-PROMPT_COMMAND=__agy_prompt
+# Agy Terminal shell look — sourced from ~/.bashrc (rewritten when the app updates).
+# Prompt styles:  agy-prompt powerline   (default, Oh-My-Posh-like segments)
+#                 agy-prompt simple      (one short line)
+
 alias ls='ls --color=auto'
 alias ll='ls -alh --color=auto'
 alias la='ls -A --color=auto'
 alias grep='grep --color=auto'
+
+__agy_style_file="$HOME/.config/agy-terminal/prompt"
+
+# ---------------------------------------------------------------- command timer
+__agy_timer_start() {
+  [ -z "$__agy_in_prompt" ] && [ -z "$__agy_t0" ] && __agy_t0=${EPOCHREALTIME/[.,]/}
+}
+trap '__agy_timer_start' DEBUG
+
+# ---------------------------------------------------------------- git branch (no subprocess)
+__agy_git_branch() {
+  __agy_branch=
+  local d=$PWD head
+  while :; do
+    if [ -f "$d/.git/HEAD" ]; then
+      read -r head < "$d/.git/HEAD"
+      case $head in
+        ref:\ refs/heads/*) __agy_branch=${head#ref: refs/heads/} ;;
+        *) __agy_branch=${head:0:7} ;;
+      esac
+      return
+    fi
+    [ -z "$d" ] || [ "$d" = / ] && return
+    d=${d%/*}
+  done
+}
+
+# ---------------------------------------------------------------- prompt
+__agy_prompt() {
+  local status=$?
+  __agy_in_prompt=1
+
+  local took=
+  if [ -n "$__agy_t0" ]; then
+    local ms=$(( (${EPOCHREALTIME/[.,]/} - __agy_t0) / 1000 ))
+    if (( ms >= 60000 )); then took="$((ms / 60000))m$(( (ms / 1000) % 60 ))s"
+    elif (( ms >= 1000 )); then took="$((ms / 1000)).$(( (ms % 1000) / 100 ))s"
+    else took="${ms}ms"; fi
+  fi
+  unset __agy_t0
+
+  local style=powerline
+  [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
+
+  local path=${PWD/#$HOME/\~}
+  local ok='166;227;161' bad='243;139;168'
+  local mark=$ok
+  (( status != 0 )) && mark=$bad
+
+  if [ "$style" = simple ]; then
+    PS1="\[\e]0;${path}\a\]\[\e[38;2;137;220;235m\]${path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+    __agy_in_prompt=
+    return
+  fi
+
+  __agy_git_branch
+  local clock
+  printf -v clock '%(%I:%M %p)T' -1
+
+  # segments: "r;g;b|icon text" — dark text on pastel backgrounds
+  local dir_icon=$''
+  [ "$PWD" = "$HOME" ] && dir_icon=$''
+  local -a segs=()
+  segs+=("245;169;127|"$''" ${USER:-root}")
+  segs+=("243;139;168|${dir_icon} ${path}")
+  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$''" ${__agy_branch}")
+  (( status != 0 )) && segs+=("235;111;146|"$''" ${status}")
+  [ -n "$took" ] && segs+=("203;166;247|"$''" ${took}")
+  segs+=("137;180;250|"$''" ${clock}")
+
+  # Fit the phone's width: drop the clock, then the timer, then shorten the path.
+  local cols=${COLUMNS:-80} width i
+  __agy_width() {
+    local t
+    width=2
+    for i in "${segs[@]}"; do t=${i#*|}; width=$(( width + ${#t} + 3 )); done
+  }
+  __agy_width
+  if (( width > cols - 1 )); then
+    local -a keep=()
+    for i in "${segs[@]}"; do [[ $i == "137;180;250|"* ]] || keep+=("$i"); done
+    segs=("${keep[@]}"); __agy_width
+  fi
+  if (( width > cols - 1 )); then
+    local -a keep=()
+    for i in "${segs[@]}"; do [[ $i == "203;166;247|"* ]] || keep+=("$i"); done
+    segs=("${keep[@]}"); __agy_width
+  fi
+  if (( width > cols - 1 )); then
+    local short=${path##*/}
+    local parent=${path%/*}; parent=${parent##*/}
+    [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
+    segs[1]="243;139;168|${dir_icon} ${short}"
+    __agy_width
+    (( width > cols - 1 )) && segs[1]="243;139;168|${dir_icon} ${path##*/}"
+  fi
+
+  local fg='30;30;46' line= n=${#segs[@]} bg next
+  for (( i = 0; i < n; i++ )); do
+    bg=${segs[i]%%|*}
+    (( i == 0 )) && line+="\[\e[0m\e[38;2;${bg}m\]"$''
+    line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\] ${segs[i]#*|} "
+    if (( i + 1 < n )); then
+      next=${segs[i + 1]%%|*}
+      line+="\[\e[48;2;${next}m\e[38;2;${bg}m\]"$''
+    else
+      line+="\[\e[0m\e[38;2;${bg}m\]"$''"\[\e[0m\]"
+    fi
+  done
+
+  # window title (shown on the app's tab) + segments + input line
+  PS1="\[\e]0;${path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  __agy_in_prompt=
+}
+PROMPT_COMMAND=__agy_prompt

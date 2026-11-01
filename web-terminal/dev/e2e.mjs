@@ -21,7 +21,15 @@ await page.goto(url);
 await page.waitForTimeout(1000);
 if ((await page.getAttribute('body', 'data-screen')) === 'term') await page.click('#home-btn');
 
-const screenText = () => page.evaluate(() => document.querySelector('.session:not([hidden]) .term-rows')?.textContent ?? '');
+// Rows are absolutely positioned by line number; read them back in order.
+const screenText = () =>
+  page.evaluate(() =>
+    [...document.querySelectorAll('.session:not([hidden]) .term-row')]
+      .map((r) => [Number(/translateY\(([-\d.]+)px\)/.exec(r.style.transform)?.[1] ?? 0), r.textContent])
+      .sort((a, b) => a[0] - b[0])
+      .map((r) => r[1])
+      .join('\n'),
+  );
 const waitFor = async (fn, ms = 4000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) {

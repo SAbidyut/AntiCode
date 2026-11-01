@@ -22,6 +22,7 @@ echo "--- self test (up to 30 min)"
 # Phase 1: Ubuntu install + agy-setup + `agy --version`          (SELFTEST_OK)
 # Phase 2: `agy` opened through the real web UI draws its screen  (SELFTEST_AGY_OK)
 # Phase 3: keys typed on the keyboard reach the shell             (SELFTEST_TYPE_OK)
+#          …and still do after scrolling the terminal             (SELFTEST_TYPE_AFTER_SWIPE_OK)
 #          and the phone's storage is visible in /sdcard           (SELFTEST_STORAGE_OK)
 deadline=$((SECONDS + 1800))
 result=1
@@ -33,6 +34,14 @@ while [ $SECONDS -lt $deadline ]; do
     adb shell input text 'expr%s40%s+%s2'
     adb shell input keyevent 66
     typed=1
+  fi
+  if [ $typed -eq 1 ] && grep -q "SELFTEST_SWIPE_READY" <<<"$log"; then
+    echo "--- scrolling the terminal with a swipe, then typing 'expr 50 + 5'"
+    adb shell input swipe 160 220 160 400 250
+    sleep 1
+    adb shell input text 'expr%s50%s+%s5'
+    adb shell input keyevent 66
+    typed=2
   fi
   if grep -q "SELFTEST_STORAGE_OK" <<<"$log"; then result=0; break; fi
   if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_STORAGE_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi

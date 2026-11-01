@@ -41,7 +41,7 @@ import java.io.ByteArrayOutputStream
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var web: WebView
+    private lateinit var web: TermWebView
     private lateinit var keys: KeyCaptureView
     private var service: SessionService? = null
     private val main = Handler(Looper.getMainLooper())
@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         browser = InAppBrowser(this).apply { warmup() }
 
-        web = WebView(this)
+        web = TermWebView(this)
         web.setBackgroundColor(Color.parseColor(BG))
         // Owns the keyboard while typing into the terminal (see KeyCaptureView).
         keys = KeyCaptureView(this, object : KeyCaptureView.Sink {
@@ -200,6 +200,21 @@ class MainActivity : ComponentActivity() {
         browser.release()
         web.destroy()
         super.onDestroy()
+    }
+
+    // ---------------------------------------------------------------- keyboard focus
+    private fun focusTerminalKeys() {
+        web.holdFocusAway = true
+        if (!keys.hasFocus()) keys.requestFocus()
+    }
+
+    /** A text field in the page (compose box, settings) was tapped: give the keyboard to it. */
+    private fun releaseToWebView() {
+        if (!web.holdFocusAway && web.hasFocus()) return
+        web.holdFocusAway = false
+        web.requestFocus()
+        // only if the page really has a text field focused (not e.g. when going home)
+        main.postDelayed({ if (web.hasFocus() && web.onCheckIsTextEditor()) imm.showSoftInput(web, 0) }, 80)
     }
 
     // ---------------------------------------------------------------- phone storage
@@ -291,19 +306,31 @@ class MainActivity : ComponentActivity() {
         }, 5000)
     }
 
-    private fun pollTyping(n: Int) {
+    /** Wait until the shell printed [expect] on a line of its own. */
+    private fun pollLine(expect: String, tries: Int, onOk: () -> Unit, failTag: String) {
         selftestScreen { screen ->
-            if (screen.lines().any { it.trim() == "42" }) {
-                Log.i(SELFTEST, "SELFTEST_TYPE_OK")
-                web.evaluateJavascript("__selftest.send('ls /sdcard/ >/dev/null && ls -d ~/storage/downloads/ && echo SD\$((1+1))OK')", null)
-                main.postDelayed({ pollStorage(0) }, 2000)
-            } else if (n < 20) {
-                main.postDelayed({ pollTyping(n + 1) }, 3000)
-            } else {
-                for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "ui| $line")
-                Log.e(SELFTEST, "SELFTEST_TYPE_FAIL typed text never reached the shell")
+            when {
+                screen.lines().any { it.trim() == expect } -> onOk()
+                tries > 0 -> main.postDelayed({ pollLine(expect, tries - 1, onOk, failTag) }, 3000)
+                else -> {
+                    for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "ui| $line")
+                    Log.e(SELFTEST, "$failTag keyViewFocused=${keys.hasFocus()}")
+                }
             }
         }
+    }
+
+    private fun pollTyping(@Suppress("UNUSED_PARAMETER") n: Int) {
+        pollLine("42", 20, {
+            Log.i(SELFTEST, "SELFTEST_TYPE_OK")
+            // Scrolling the terminal used to steal the keyboard: swipe, then type again.
+            Log.i(SELFTEST, "SELFTEST_SWIPE_READY")
+            pollLine("55", 20, {
+                Log.i(SELFTEST, "SELFTEST_TYPE_AFTER_SWIPE_OK keyViewFocused=${keys.hasFocus()}")
+                web.evaluateJavascript("__selftest.send('ls /sdcard/ >/dev/null && ls -d ~/storage/downloads/ && echo SD\$((1+1))OK')", null)
+                main.postDelayed({ pollStorage(0) }, 2000)
+            }, "SELFTEST_TYPE_FAIL typing stopped working after scrolling")
+        }, "SELFTEST_TYPE_FAIL typed text never reached the shell")
     }
 
     private fun pollStorage(n: Int) {
@@ -433,16 +460,16 @@ class MainActivity : ComponentActivity() {
             return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString() ?: ""
         }
 
-        /** on: the terminal gets the keyboard (raw keys). off: the WebView does (compose box). */
+        /** on: the terminal gets the keyboard (raw keys). off: the WebView does (compose box, inputs). */
         @JavascriptInterface
         fun setTerminalKeyboard(on: Boolean) {
-            main.post { if (on) keys.requestFocus() else web.requestFocus() }
+            main.post { if (on) focusTerminalKeys() else releaseToWebView() }
         }
 
         @JavascriptInterface
         fun showKeyboard() {
             main.post {
-                keys.requestFocus()
+                focusTerminalKeys()
                 imm.restartInput(keys)
                 imm.showSoftInput(keys, InputMethodManager.SHOW_IMPLICIT)
             }
@@ -450,7 +477,10 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun hideKeyboard() {
-            main.post { imm.hideSoftInputFromWindow(web.windowToken, 0) }
+            main.post {
+                imm.hideSoftInputFromWindow(web.windowToken, 0)
+                web.holdFocusAway = false
+            }
         }
 
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */

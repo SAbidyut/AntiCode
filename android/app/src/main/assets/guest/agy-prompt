@@ -1,0 +1,12 @@
+#!/bin/sh
+# Choose the shell prompt style of Agy Terminal.
+case "$1" in
+  powerline|simple)
+    mkdir -p "$HOME/.config/agy-terminal"
+    echo "$1" > "$HOME/.config/agy-terminal/prompt"
+    echo "Prompt style: $1 (takes effect at the next prompt)"
+    ;;
+  *)
+    echo "usage: agy-prompt powerline | simple"
+    ;;
+esac

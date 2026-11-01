@@ -259,7 +259,6 @@ function renderTabs() {
 function showHome() {
   screen = 'home';
   document.body.dataset.screen = 'home';
-  bridge.setTerminalKeyboard(false);
   bridge.hideKeyboard();
   keyboardShown = false;
   renderHome();
@@ -415,14 +414,16 @@ function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
   let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0, vel = 0;
   let longTimer = 0, inertia = 0;
-  let pinch0 = 0, font0 = prefs.fontSize;
+  let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize;
   const touches = new Map<number, { x: number; y: number }>();
 
   const stopInertia = () => {
     cancelAnimationFrame(inertia);
     inertia = 0;
   };
-  const scrollBy = (px: number, x: number, y: number) => {
+  /** Scroll by pixels. Scrollback moves pixel-smooth; full-screen apps get wheel steps. */
+  const scrollBy = (px: number, x: number, y: number): boolean => {
+    if (s.term.buffer.active.type !== 'alternate') return s.renderer.scrollByPixels(px);
     acc += px;
     const lh = s.renderer.lineHeight;
     const lines = Math.trunc(acc / lh);
@@ -430,18 +431,17 @@ function bindTerminalGestures(s: TerminalSession) {
       acc -= lines * lh;
       s.scrollLines(lines, x, y);
     }
+    return true;
   };
   const startInertia = (v: number, x: number, y: number) => {
-    // only for the scrollback; full-screen apps get discrete wheel steps
     if (s.term.buffer.active.type === 'alternate') return;
     let prev = performance.now();
     const step = (now: number) => {
       const dt = Math.min(32, now - prev);
       prev = now;
-      scrollBy(v * dt, x, y);
-      v *= Math.pow(0.94, dt / 16);
-      const atEdge = s.renderer.scrollOffset === 0 && v < 0;
-      inertia = Math.abs(v) > 0.03 && !atEdge ? requestAnimationFrame(step) : 0;
+      const moving = scrollBy(v * dt, x, y);
+      v *= Math.pow(0.95, dt / 16);
+      inertia = moving && Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
     };
     inertia = requestAnimationFrame(step);
   };
@@ -452,7 +452,7 @@ function bindTerminalGestures(s: TerminalSession) {
     if (touches.size === 2) {
       const [a, b] = [...touches.values()];
       pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
-      font0 = prefs.fontSize;
+      font0 = pinchSize = prefs.fontSize;
       clearTimeout(longTimer);
       return;
     }
@@ -476,9 +476,10 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2 && pinch0) {
+      // Pinch: only scale the picture now (smooth); resize the terminal once at the end.
       const [a, b] = [...touches.values()];
-      const size = Math.round(Math.max(9, Math.min(28, font0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch0))));
-      if (size !== prefs.fontSize) setFontSize(size, false);
+      pinchSize = Math.round(Math.max(9, Math.min(28, font0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch0))));
+      s.renderer.previewZoom(pinchSize / font0);
       moved = true;
       return;
     }
@@ -490,7 +491,7 @@ function bindTerminalGestures(s: TerminalSession) {
     const now = performance.now();
     const dy = e.clientY - lastY;
     const dt = Math.max(1, now - lastT);
-    vel = 0.75 * (dy / dt) + 0.25 * vel;
+    vel = 0.7 * (dy / dt) + 0.3 * vel;
     lastY = e.clientY;
     lastT = now;
     scrollBy(dy, e.clientX, e.clientY);
@@ -501,13 +502,14 @@ function bindTerminalGestures(s: TerminalSession) {
     if (pinch0) {
       if (touches.size === 0) {
         pinch0 = 0;
-        setFontSize(prefs.fontSize, true);
+        s.renderer.previewZoom(null);
+        if (pinchSize !== prefs.fontSize) setFontSize(pinchSize, true);
       }
       return;
     }
     if (e.type !== 'pointerup') return;
     if (moved) {
-      if (performance.now() - lastT < 80 && Math.abs(vel) > 0.25) startInertia(vel, e.clientX, e.clientY);
+      if (performance.now() - lastT < 80 && Math.abs(vel) > 0.2) startInertia(vel, e.clientX, e.clientY);
       return;
     }
     if (Date.now() - t0 < 600) {
@@ -524,8 +526,15 @@ function bindTerminalGestures(s: TerminalSession) {
   el.addEventListener('pointercancel', end);
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
-    s.scrollLines(Math.round(-e.deltaY / s.renderer.lineHeight) || (e.deltaY < 0 ? 1 : -1), e.clientX, e.clientY);
+    scrollBy(-e.deltaY, e.clientX, e.clientY);
   }, { passive: false });
+}
+
+/** Resize after the layout has settled (keyboard animations fire many resizes). */
+let fitTimer = 0;
+function fitSoon() {
+  clearTimeout(fitTimer);
+  fitTimer = window.setTimeout(() => active?.fit(), 110);
 }
 
 function setFontSize(size: number, persist: boolean) {
@@ -884,6 +893,14 @@ function bindChrome() {
     bridge.copyText('agy --remote-control');
     toast('Command copied');
   };
+  // Any text field in the page (compose box, settings) takes the keyboard back from the terminal.
+  document.addEventListener('focusin', (e) => {
+    const t = e.target as HTMLElement;
+    if ((t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && t.id !== 'kbd') {
+      active?.setFocused(false);
+      bridge.setTerminalKeyboard(false);
+    }
+  });
   // Keyboard closed by the system (back button / swipe) → forget it was open.
   let lastH = window.innerHeight;
   window.addEventListener('resize', () => {
@@ -948,8 +965,8 @@ async function boot() {
     if (list.length) activate([...sessions.values()].pop()!);
   } catch { /* nothing to restore */ }
 
-  new ResizeObserver(() => active?.fit()).observe($('#sessions'));
-  window.addEventListener('resize', () => active?.fit());
+  new ResizeObserver(fitSoon).observe($('#sessions'));
+  window.addEventListener('resize', fitSoon);
 }
 
 boot();

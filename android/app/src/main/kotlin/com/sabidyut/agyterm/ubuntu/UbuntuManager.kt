@@ -227,6 +227,7 @@ class UbuntuManager(private val context: Context) {
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
         write("usr/local/bin/agy-setup", asset("agy-setup"), exec)
         write("usr/local/bin/agy-start", asset("agy-start"), exec)
+        write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)
         write("etc/profile.d/zz-agy-terminal.sh", asset("profile.sh"), 0x1a4)
         write("etc/agy-terminal.bashrc", asset("bashrc"), 0x1a4)
         // Hook the prompt/aliases into root's .bashrc (after Ubuntu's own PS1).

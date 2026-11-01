@@ -6,6 +6,14 @@
 // text node, so the browser's shaper (HarfBuzz) can form conjuncts with the
 // Kalpurush font. The run is then fitted to exactly `cells × cellWidth` pixels,
 // so everything after it (box borders, columns, the cursor) stays on the grid.
+//
+// Smoothness: rows are absolutely positioned by their buffer line number inside one
+// "viewport" layer, and scrolling only moves that layer (a GPU transform) — rows that
+// stay visible are reused, so scrolling one line costs one new row, not a full redraw.
+//
+// Box drawing (─│╭╮…), block elements (▀▄█…) and powerline separators () are
+// drawn with CSS/SVG instead of font glyphs, so they fill the cell exactly and join
+// seamlessly at any zoom level.
 
 import type { Terminal, IBufferCell, IBufferLine } from '@xterm/headless';
 
@@ -76,8 +84,54 @@ function cpClass(chars: string): 'space' | 'bn' | 'mono' | 'box' {
   ) {
     return chars.length > 2 ? 'box' : 'mono';
   }
-  return 'box'; // emoji, CJK, braille spinners, … → fixed-size box so the grid never drifts
+  // emoji, CJK, Nerd Font icons (private use area), braille spinners, … → a fixed-size
+  // box so the grid never drifts
+  return 'box';
 }
+
+// ------------------------------------------------------------------ drawn glyphs
+// Arms of box-drawing characters: [up, right, down, left], 0 none, 1 light, 2 heavy.
+const BOX_ARMS: Record<number, [number, number, number, number]> = {
+  0x2500: [0, 1, 0, 1], 0x2501: [0, 2, 0, 2], 0x2502: [1, 0, 1, 0], 0x2503: [2, 0, 2, 0],
+  0x250c: [0, 1, 1, 0], 0x250f: [0, 2, 2, 0], 0x2510: [0, 0, 1, 1], 0x2513: [0, 0, 2, 2],
+  0x2514: [1, 1, 0, 0], 0x2517: [2, 2, 0, 0], 0x2518: [1, 0, 0, 1], 0x251b: [2, 0, 0, 2],
+  0x251c: [1, 1, 1, 0], 0x2523: [2, 2, 2, 0], 0x2524: [1, 0, 1, 1], 0x252b: [2, 0, 2, 2],
+  0x252c: [0, 1, 1, 1], 0x2533: [0, 2, 2, 2], 0x2534: [1, 1, 0, 1], 0x253b: [2, 2, 0, 2],
+  0x253c: [1, 1, 1, 1], 0x254b: [2, 2, 2, 2],
+  0x2574: [0, 0, 0, 1], 0x2575: [1, 0, 0, 0], 0x2576: [0, 1, 0, 0], 0x2577: [0, 0, 1, 0],
+};
+// Rounded corners ╭ ╮ ╯ ╰ → CSS class
+const ROUND: Record<number, string> = { 0x256d: 'r-dr', 0x256e: 'r-dl', 0x256f: 'r-ul', 0x2570: 'r-ur' };
+
+// Block elements: fill rectangles [x, y, w, h] in eighths of the cell.
+const BLOCKS: Record<number, [number, number, number, number][]> = {
+  0x2580: [[0, 0, 8, 4]],
+  0x2581: [[0, 7, 8, 1]], 0x2582: [[0, 6, 8, 2]], 0x2583: [[0, 5, 8, 3]], 0x2584: [[0, 4, 8, 4]],
+  0x2585: [[0, 3, 8, 5]], 0x2586: [[0, 2, 8, 6]], 0x2587: [[0, 1, 8, 7]], 0x2588: [[0, 0, 8, 8]],
+  0x2589: [[0, 0, 7, 8]], 0x258a: [[0, 0, 6, 8]], 0x258b: [[0, 0, 5, 8]], 0x258c: [[0, 0, 4, 8]],
+  0x258d: [[0, 0, 3, 8]], 0x258e: [[0, 0, 2, 8]], 0x258f: [[0, 0, 1, 8]], 0x2590: [[4, 0, 4, 8]],
+  0x2594: [[0, 0, 8, 1]], 0x2595: [[7, 0, 1, 8]],
+  0x2596: [[0, 4, 4, 4]], 0x2597: [[4, 4, 4, 4]], 0x2598: [[0, 0, 4, 4]],
+  0x2599: [[0, 0, 4, 8], [4, 4, 4, 4]], 0x259a: [[0, 0, 4, 4], [4, 4, 4, 4]],
+  0x259b: [[0, 0, 8, 4], [0, 4, 4, 4]], 0x259c: [[0, 0, 8, 4], [4, 4, 4, 4]],
+  0x259d: [[4, 0, 4, 4]], 0x259e: [[4, 0, 4, 4], [0, 4, 4, 4]], 0x259f: [[4, 0, 4, 8], [0, 4, 4, 4]],
+};
+
+// Powerline separators as SVG paths in a 10×20 box (stretched to the cell).
+const POWERLINE: Record<number, { d: string; fill: boolean }> = {
+  0xe0b0: { d: 'M0 0L10 10L0 20Z', fill: true },
+  0xe0b1: { d: 'M0 0L10 10L0 20', fill: false },
+  0xe0b2: { d: 'M10 0L0 10L10 20Z', fill: true },
+  0xe0b3: { d: 'M10 0L0 10L10 20', fill: false },
+  0xe0b4: { d: 'M0 0A10 10 0 0 1 0 20Z', fill: true },
+  0xe0b5: { d: 'M0 0A10 10 0 0 1 0 20', fill: false },
+  0xe0b6: { d: 'M10 0A10 10 0 0 0 10 20Z', fill: true },
+  0xe0b7: { d: 'M10 0A10 10 0 0 0 10 20', fill: false },
+  0xe0b8: { d: 'M0 0L10 20L0 20Z', fill: true },
+  0xe0ba: { d: 'M10 0L10 20L0 20Z', fill: true },
+  0xe0bc: { d: 'M0 0L10 0L0 20Z', fill: true },
+  0xe0be: { d: 'M0 0L10 0L10 20Z', fill: true },
+};
 
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
@@ -107,22 +161,35 @@ export interface RendererOptions {
   bnScale: number;
 }
 
+interface Row {
+  el: HTMLDivElement;
+  html: string;
+}
+
+const OVERSCAN = 3;
+
 export class BanglaRenderer {
   readonly el: HTMLDivElement;
-  private rowsEl: HTMLDivElement;
+  /** Moves as a whole when scrolling; rows sit at `line × lineHeight` inside it. */
+  private viewport: HTMLDivElement;
+  /** Scaled while pinch-zooming. */
+  private zoomLayer: HTMLDivElement;
   private cursorEl: HTMLDivElement;
-  private rowEls: HTMLDivElement[] = [];
-  private rowHtml: string[] = [];
+  private rows = new Map<number, Row>();
+  private spare: HTMLDivElement[] = [];
   private palette: string[];
   private measureCtx = document.createElement('canvas').getContext('2d')!;
   private widthCache = new Map<string, number>();
   private cell!: IBufferCell;
   private frame = 0;
+  private bufferKey = '';
+  private lastBaseY = 0;
+  private zoom = 1;
 
   cellWidth = 8;
   lineHeight = 18;
-  /** Lines scrolled up from the bottom (0 = following output). */
-  scrollOffset = 0;
+  /** Pixels scrolled up from the bottom (0 = following output). */
+  scrollPx = 0;
   cursorVisible = true;
   focused = false;
   /** Called when the view leaves / returns to the bottom of the output. */
@@ -132,39 +199,77 @@ export class BanglaRenderer {
   constructor(private term: Terminal, private opts: RendererOptions) {
     this.el = document.createElement('div');
     this.el.className = 'term-screen';
-    this.rowsEl = document.createElement('div');
-    this.rowsEl.className = 'term-rows';
+    this.viewport = document.createElement('div');
+    this.viewport.className = 'term-viewport';
     this.cursorEl = document.createElement('div');
     this.cursorEl.className = 'term-cursor';
     this.el.dataset.cursor = 'block';
-    this.el.append(this.rowsEl, this.cursorEl);
+    this.zoomLayer = document.createElement('div');
+    this.zoomLayer.className = 'term-zoom';
+    this.viewport.append(this.cursorEl);
+    this.zoomLayer.append(this.viewport);
+    this.el.append(this.zoomLayer);
     this.palette = build256(opts.theme);
     this.applyMetrics();
   }
 
+  /** Whole lines scrolled up from the bottom. */
+  get scrollOffset(): number {
+    return Math.floor(this.scrollPx / this.lineHeight + 1e-6);
+  }
+  set scrollOffset(lines: number) {
+    this.scrollPx = Math.max(0, lines) * this.lineHeight;
+  }
+
+  /** Scroll by pixels (positive = back in history). Returns false at an edge. */
+  scrollByPixels(px: number): boolean {
+    const max = this.term.buffer.active.baseY * this.lineHeight;
+    const next = Math.max(0, Math.min(max, this.scrollPx + px));
+    const moved = next !== this.scrollPx;
+    this.scrollPx = next;
+    if (moved) this.schedule();
+    return moved;
+  }
+
   setOptions(opts: Partial<RendererOptions>) {
+    const lines = this.scrollOffset;
     Object.assign(this.opts, opts);
     this.palette = build256(this.opts.theme);
     this.widthCache.clear();
     this.applyMetrics();
-    this.rowHtml = [];
-    this.schedule();
+    this.scrollOffset = lines;
+    this.invalidate();
   }
 
   get options(): Readonly<RendererOptions> {
     return this.opts;
   }
 
+  /** Forget every rendered row (font/theme/size changed). */
+  invalidate() {
+    for (const r of this.rows.values()) this.recycle(r.el);
+    this.rows.clear();
+    this.schedule();
+  }
+
+  /** Visual-only zoom while pinching (cheap); the real font size is set when it ends. */
+  previewZoom(scale: number | null) {
+    this.zoom = scale ?? 1;
+    this.el.style.setProperty('--zoom', String(this.zoom));
+    this.el.classList.toggle('zooming', scale !== null);
+  }
+
   private applyMetrics() {
     const { fontSize, theme } = this.opts;
     this.measureCtx.font = `${fontSize}px "JetBrains Mono", monospace`;
     this.cellWidth = this.measureCtx.measureText('MMMMMMMMMM').width / 10;
-    this.lineHeight = Math.round(fontSize * 1.5);
+    this.lineHeight = Math.round(fontSize * 1.45);
     const s = this.el.style;
     s.setProperty('--cw', `${this.cellWidth}px`);
     s.setProperty('--lh', `${this.lineHeight}px`);
     s.setProperty('--fs', `${fontSize}px`);
     s.setProperty('--bn-fs', `${fontSize * this.opts.bnScale}px`);
+    s.setProperty('--bw', `${Math.max(1, Math.round(fontSize / 13))}px`);
     s.background = theme.background;
     s.color = theme.foreground;
     this.cursorEl.style.setProperty('--cursor', theme.cursor);
@@ -222,7 +327,8 @@ export class BanglaRenderer {
     }
     let css = '';
     if (fg) css += `color:${fg};`;
-    if (bg) css += `background:${bg};`;
+    // background-color (not the shorthand) so drawn glyphs keep their background-image
+    if (bg) css += `background-color:${bg};`;
     if (bold) css += 'font-weight:700;';
     if (c.isItalic()) css += 'font-style:italic;';
     if (c.isDim()) css += 'opacity:.6;';
@@ -230,6 +336,38 @@ export class BanglaRenderer {
     const deco = (c.isUnderline() ? ' underline' : '') + (c.isStrikethrough() ? ' line-through' : '') + (c.isOverline() ? ' overline' : '');
     if (deco) css += `text-decoration:${deco};`;
     return { css, bold };
+  }
+
+  /** HTML for a character drawn with CSS/SVG, or null if it's an ordinary glyph. */
+  private drawn(cp: number, w: number, style: string): string | null {
+    const width = `width:${(w * this.cellWidth).toFixed(2)}px;`;
+    const arms = BOX_ARMS[cp];
+    if (arms) {
+      const t = ['', 'var(--bw)', 'calc(var(--bw) * 2)'];
+      const img: string[] = [];
+      const [u, r, d, l] = arms;
+      const g = 'linear-gradient(currentColor,currentColor)';
+      if (u) img.push(`${g} 50% 0/${t[u]} calc(50% + ${t[u]} / 2) no-repeat`);
+      if (d) img.push(`${g} 50% 100%/${t[d]} calc(50% + ${t[d]} / 2) no-repeat`);
+      if (l) img.push(`${g} 0 50%/calc(50% + ${t[l]} / 2) ${t[l]} no-repeat`);
+      if (r) img.push(`${g} 100% 50%/calc(50% + ${t[r]} / 2) ${t[r]} no-repeat`);
+      return `<span class="dg" style="${width}${style}background:${img.join(',')};${bgOf(style)}"></span>`;
+    }
+    const round = ROUND[cp];
+    if (round) return `<span class="dg" style="${width}${style}"><i class="${round}"></i></span>`;
+    const blocks = BLOCKS[cp];
+    if (blocks) {
+      const g = 'linear-gradient(currentColor,currentColor)';
+      const img = blocks.map(([x, y, bw, bh]) =>
+        `${g} ${x === 0 ? '0' : `${(x / (8 - bw)) * 100}%`} ${y === 0 ? '0' : `${(y / (8 - bh)) * 100}%`}/${(bw / 8) * 100}% ${(bh / 8) * 100}% no-repeat`);
+      return `<span class="dg" style="${width}${style}background:${img.join(',')};${bgOf(style)}"></span>`;
+    }
+    const pl = POWERLINE[cp];
+    if (pl) {
+      const paint = pl.fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"';
+      return `<span class="dg" style="${width}${style}"><svg viewBox="0 0 10 20" preserveAspectRatio="none"><path d="${pl.d}" ${paint}/></svg></span>`;
+    }
+    return null;
   }
 
   /** Build the HTML for one buffer line. */
@@ -284,12 +422,23 @@ export class BanglaRenderer {
       const w = c.getWidth();
       if (w === 0) continue; // second half of a wide character
       const chars = c.getChars();
-      const cls = cpClass(chars);
       const st = this.styleOf(c);
-
+      const cp = chars.length ? chars.codePointAt(0)! : 32;
+      if ((cp >= 0x2500 && cp <= 0x259f) || (cp >= 0xe0b0 && cp <= 0xe0bf)) {
+        const d = this.drawn(cp, w, st.css);
+        if (d) {
+          flush();
+          html += d;
+          continue;
+        }
+      }
+      const cls = cpClass(chars);
       if (cls === 'box' || (cls === 'mono' && w > 1)) {
         flush();
-        html += `<span class="bx" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
+        // Nerd Font icons (private use area) are wider than a cell: let them spill into the
+        // next cell (usually a space) instead of being clipped, like other terminals do.
+        const pua = cp >= 0xe000 && cp <= 0xf8ff;
+        html += `<span class="bx${pua ? ' pua' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
         continue;
       }
       if (cls === 'space') {
@@ -324,61 +473,96 @@ export class BanglaRenderer {
     return html;
   }
 
+  private recycle(el: HTMLDivElement) {
+    el.remove();
+    if (this.spare.length < 64) this.spare.push(el);
+  }
+
   render() {
     const term = this.term;
     const buf = term.buffer.active;
     const rows = term.rows;
     const cols = term.cols;
+    const lh = this.lineHeight;
 
-    // Make sure we have exactly `rows` row elements.
-    while (this.rowEls.length < rows) {
-      const r = document.createElement('div');
-      r.className = 'term-row';
-      this.rowsEl.appendChild(r);
-      this.rowEls.push(r);
-      this.rowHtml.push('\u0000');
-    }
-    while (this.rowEls.length > rows) {
-      this.rowEls.pop()!.remove();
-      this.rowHtml.pop();
+    // A different buffer (alt screen), a resize, or old lines dropped off the top of
+    // the scrollback all invalidate the line-number → row mapping.
+    const key = `${buf.type}|${cols}|${buf.getLine(0)?.translateToString(true).slice(0, 80) ?? ''}`;
+    if (key !== this.bufferKey) {
+      this.bufferKey = key;
+      for (const r of this.rows.values()) this.recycle(r.el);
+      this.rows.clear();
     }
 
-    this.scrollOffset = Math.min(this.scrollOffset, buf.baseY);
-    const top = buf.baseY - this.scrollOffset;
-    for (let y = 0; y < rows; y++) {
-      const html = this.rowToHtml(buf.getLine(top + y), cols);
-      if (html !== this.rowHtml[y]) {
-        this.rowHtml[y] = html;
-        this.rowEls[y].innerHTML = html;
+    // While scrolled back, keep looking at the same lines when new output arrives.
+    if (buf.baseY !== this.lastBaseY) {
+      if (this.scrollPx > 0 && buf.baseY > this.lastBaseY) this.scrollPx += (buf.baseY - this.lastBaseY) * lh;
+      this.lastBaseY = buf.baseY;
+    }
+    this.scrollPx = Math.max(0, Math.min(buf.baseY * lh, this.scrollPx));
+
+    const topPx = buf.baseY * lh - this.scrollPx; // y of the first visible pixel row
+    const first = Math.max(0, Math.floor(topPx / lh) - OVERSCAN);
+    const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + rows + OVERSCAN);
+
+    for (const [i, r] of this.rows) {
+      if (i < first || i > last) {
+        this.recycle(r.el);
+        this.rows.delete(i);
+      }
+    }
+    for (let i = first; i <= last; i++) {
+      let r = this.rows.get(i);
+      const live = i >= buf.baseY; // the live screen can still change; scrollback can't
+      if (r && !live) continue;
+      const html = this.rowToHtml(buf.getLine(i), cols);
+      if (!r) {
+        const el = this.spare.pop() ?? document.createElement('div');
+        el.className = 'term-row';
+        el.style.transform = `translateY(${i * lh}px)`;
+        el.innerHTML = html;
+        this.viewport.append(el);
+        this.rows.set(i, { el, html });
+      } else if (r.html !== html) {
+        r.html = html;
+        r.el.innerHTML = html;
       }
     }
 
-    const cursorRow = buf.cursorY + buf.baseY - top;
-    const showCursor = this.cursorVisible && cursorRow >= 0 && cursorRow < rows;
+    this.viewport.style.transform = `translateY(${(-topPx).toFixed(2)}px)`;
+    // Anchored to the bottom: while the keyboard slides in (before the terminal is
+    // resized) the prompt stays visible and the top lines are the ones clipped.
+    const h = `${rows * lh}px`;
+    if (this.zoomLayer.style.height !== h) this.zoomLayer.style.height = h;
+
+    const cursorLine = buf.baseY + buf.cursorY;
+    const showCursor = this.cursorVisible && this.scrollPx < lh;
     this.cursorEl.style.display = showCursor ? 'block' : 'none';
     if (showCursor) {
-      this.cursorEl.style.transform = `translate(${(buf.cursorX * this.cellWidth).toFixed(2)}px, ${cursorRow * this.lineHeight}px)`;
+      this.cursorEl.style.transform = `translate(${(buf.cursorX * this.cellWidth).toFixed(2)}px, ${cursorLine * lh}px)`;
       this.cursorEl.classList.toggle('focused', this.focused);
     }
-    const scrolled = this.scrollOffset > 0;
+    const scrolled = this.scrollPx >= lh;
     if (scrolled !== this.wasScrolled) {
       this.wasScrolled = scrolled;
       this.onScrolled?.(scrolled);
     }
   }
 
-  /** Map a client point to a terminal cell (in viewport coordinates). */
-  cellAt(clientX: number, clientY: number): { x: number; y: number } {
-    const rect = this.rowsEl.getBoundingClientRect();
-    return {
-      x: Math.max(0, Math.min(this.term.cols - 1, Math.floor((clientX - rect.left) / this.cellWidth))),
-      y: Math.max(0, Math.min(this.term.rows - 1, Math.floor((clientY - rect.top) / this.lineHeight))),
-    };
-  }
-
-  /** Buffer line index shown at viewport row y. */
-  bufferLineAt(y: number): number {
+  /** The cell under a client point: x/y relative to the visible screen, plus the buffer line. */
+  cellAt(clientX: number, clientY: number): { x: number; y: number; line: number } {
+    const rect = this.viewport.getBoundingClientRect(); // includes the scroll transform
     const buf = this.term.buffer.active;
-    return buf.baseY - Math.min(this.scrollOffset, buf.baseY) + y;
+    const z = this.zoom;
+    const line = Math.max(0, Math.min(buf.length - 1, Math.floor((clientY - rect.top) / (this.lineHeight * z))));
+    const x = Math.max(0, Math.min(this.term.cols - 1, Math.floor((clientX - rect.left) / (this.cellWidth * z))));
+    const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY + this.scrollOffset));
+    return { x, y, line };
   }
+}
+
+/** The background-color part of a style string (kept when a drawn glyph sets `background`). */
+function bgOf(style: string): string {
+  const m = /background-color:([^;]+);/.exec(style);
+  return m ? `background-color:${m[1]};` : '';
 }
