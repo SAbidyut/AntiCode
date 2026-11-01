@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
@@ -28,6 +30,7 @@ class SessionService : Service() {
     }
 
     private val binder = LocalBinder()
+    private val mainHandler = Handler(Looper.getMainLooper())
     val sessions = ConcurrentHashMap<String, TermSession>()
     lateinit var ubuntu: UbuntuManager
         private set
@@ -69,7 +72,11 @@ class SessionService : Service() {
         }
         val session = TermSession(
             id, kind, title, launch.command, launch.args, launch.env, launch.cwd, rows, cols,
-        ) { s -> onSessionExit?.invoke(s) }
+        ) { s ->
+            // also when no UI is attached: drop the wake lock once nothing runs
+            mainHandler.post { updateForeground() }
+            onSessionExit?.invoke(s)
+        }
         sessions[id] = session
         updateForeground()
         return session
@@ -131,6 +138,13 @@ class SessionService : Service() {
             releaseWakeLock()
             stopForegroundCompat()
             stopSelf()
+            return
+        }
+        if (running == 0) {
+            // only finished sessions left (their tabs are still open): no need to keep the
+            // phone awake or show "running"
+            releaseWakeLock()
+            stopForegroundCompat()
             return
         }
         startService(Intent(this, SessionService::class.java))

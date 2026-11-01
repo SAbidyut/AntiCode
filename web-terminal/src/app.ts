@@ -241,7 +241,8 @@ function closeSession(s: TerminalSession) {
   bridge.close(s.id);
   sessions.delete(s.id);
   s.dispose();
-  const next = [...sessions.values()].pop() ?? null;
+  // closing a background tab keeps the current one
+  const next = active && active !== s && sessions.has(active.id) ? active : [...sessions.values()].pop() ?? null;
   activate(next);
   if (!next) showHome();
 }
@@ -741,8 +742,12 @@ function bindCompose() {
 function sheetOpen() {
   return !$('#sheet').hidden;
 }
+let sheetHideTimer = 0;
 function openSheet(title: string, ...content: Kid[]) {
   const sheet = $('#sheet');
+  // an action that opens another sheet (⋮ → Settings) must not be hidden by the
+  // previous sheet's closing animation
+  clearTimeout(sheetHideTimer);
   sheet.classList.remove('closing');
   sheet.querySelector('.sheet-body')!.replaceChildren(...([title ? h('h3', {}, title) : null, ...content].filter(Boolean) as Node[]));
   $('#sheet-backdrop').hidden = false;
@@ -754,7 +759,8 @@ function closeSheet() {
   if (sheet.hidden) return;
   sheet.classList.add('closing');
   $('#sheet-backdrop').hidden = true;
-  setTimeout(() => {
+  clearTimeout(sheetHideTimer);
+  sheetHideTimer = window.setTimeout(() => {
     sheet.hidden = true;
     sheet.classList.remove('closing');
   }, 190);
@@ -796,7 +802,10 @@ function openMoreSheet() {
     action('claude', 'Claude Code dashboard', 'claude.ai/code — Remote Control sessions', () => bridge.openRemote(prefs.claudeUrl)),
     action('zoomIn', 'Bigger text', '', () => setFontSize(Math.min(28, prefs.fontSize + 1), true)),
     action('zoomOut', 'Smaller text', '', () => setFontSize(Math.max(9, prefs.fontSize - 1), true)),
-    s && action('eraser', 'Clear screen', '', () => s.term.clear()),
+    s && action('eraser', 'Clear screen', '', () => {
+      s.term.clear();
+      s.scrollToBottom();
+    }),
     action('settings', 'Settings', '', openSettingsSheet),
     s && action('bug', 'Copy debug log', 'Paste it into a chat if something misbehaves', () => {
       bridge.copyText(
@@ -983,6 +992,8 @@ async function boot() {
       open: (kind: SessionKind) => newSession(kind),
       focusKeys: () => focusTerminalKeyboard(),
       send: (line: string) => active?.sendLine(line),
+      /** the active session, for tests */
+      session: () => active,
       /** raw keys, e.g. '\x03' */
       keys: (seq: string) => active?.input(seq),
       screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
@@ -1023,10 +1034,18 @@ async function boot() {
   // Re-attach to sessions that kept running while the UI was gone.
   try {
     const list = await bridge.listSessions();
+    // forget saved terminal modes of sessions that no longer exist
+    try {
+      const ids = new Set(list.map((i) => i.id));
+      for (const k of Object.keys(localStorage)) if (k.startsWith('modes:') && !ids.has(k.slice(6))) localStorage.removeItem(k);
+    } catch { /* storage unavailable */ }
     for (const info of list) {
       const s = addSession(info.id, info.kind);
       s.title = info.title || s.title;
       if (!info.alive) s.alive = false;
+      // replay the saved output at the size it was written for (background tabs too)
+      if (info.cols && info.rows) s.notePtySize(info.cols, info.rows);
+      s.restoreModes();
       bridge.attach(info.id);
     }
     if (list.length) activate([...sessions.values()].pop()!);

@@ -42,7 +42,7 @@ export class TerminalSession {
     readonly kind: SessionKind,
     opts: RendererOptions,
   ) {
-    this.title = kind === 'agy' ? 'Antigravity' : kind === 'ubuntu' ? 'Ubuntu' : 'Android shell';
+    this.title = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
     this.term.loadAddon(new UnicodeGraphemesAddon() as never);
     this.renderer = new BanglaRenderer(this.term, opts);
@@ -65,6 +65,7 @@ export class TerminalSession {
     this.term.onData((d) => this.bridge.write(this.id, d));
     this.term.onBinary((d) => this.bridge.write(this.id, d));
     this.term.onWriteParsed(() => {
+      this.saveModes();
       this.renderer.lastOutput = performance.now();
       this.renderer.schedule();
       if (this.readerOpen) this.scheduleReader();
@@ -86,6 +87,14 @@ export class TerminalSession {
     };
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, track(true));
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, track(false));
+    // `reset` (RIS, ESC c) and soft reset (DECSTR, CSI ! p) show the cursor again
+    const showAgain = () => {
+      this.renderer.cursorVisible = true;
+      this.renderer.schedule();
+      return false;
+    };
+    this.term.parser.registerEscHandler({ final: 'c' }, showAgain);
+    this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain);
     // OSC 7770 ; open ; <url>  — emitted by our xdg-open shim inside Ubuntu.
     this.term.parser.registerOscHandler(7770, (data) => {
       const [cmd, ...rest] = data.split(';');
@@ -205,8 +214,9 @@ export class TerminalSession {
     }
     // Compare with what the PTY has, not with xterm: they can differ (restored sessions,
     // a session created before layout was final).
-    if (cols === this.ptyCols && rows === this.ptyRows) return;
+    // (cancel a pending resize first: 14→15→14 px quickly must leave the PTY at 14)
     clearTimeout(this.resizeTimer);
+    if (cols === this.ptyCols && rows === this.ptyRows) return;
     this.resizeTimer = window.setTimeout(() => {
       this.ptyCols = cols;
       this.ptyRows = rows;
@@ -348,7 +358,51 @@ export class TerminalSession {
     this.term.write(`\r\n\x1b[2m[process exited with code ${code} — close the tab with ×]\x1b[0m\r\n`);
   }
 
+  // ---- terminal modes survive a reload of the UI ----
+  // The service keeps only the last 512 KB of output; the escape sequences that turned on
+  // bracketed paste, application cursor keys, the alternate screen … may be older than
+  // that. Remember the current modes and replay them before the saved output.
+  private modesSaved = '';
+  private modesKey() {
+    const m = this.term.modes;
+    return [
+      m.bracketedPasteMode ? 1 : 0,
+      m.applicationCursorKeysMode ? 1 : 0,
+      this.term.buffer.active.type === 'alternate' ? 1 : 0,
+      this.renderer.cursorVisible ? 1 : 0,
+      m.mouseTrackingMode,
+    ].join(',');
+  }
+  private saveModes() {
+    const k = this.modesKey();
+    if (k === this.modesSaved) return;
+    this.modesSaved = k;
+    try {
+      localStorage.setItem(`modes:${this.id}`, k);
+    } catch { /* storage unavailable */ }
+  }
+  /** Before replaying a restored session's output. */
+  restoreModes() {
+    let k: string | null = null;
+    try {
+      k = localStorage.getItem(`modes:${this.id}`);
+    } catch { /* storage unavailable */ }
+    if (!k) return;
+    const [bp, ac, alt, cur, mouse] = k.split(',');
+    const mouseMode: Record<string, number> = { x10: 9, vt200: 1000, drag: 1002, any: 1003 };
+    let seq = '';
+    if (alt === '1') seq += '\x1b[?1049h';
+    if (bp === '1') seq += '\x1b[?2004h';
+    if (ac === '1') seq += '\x1b[?1h';
+    if (cur === '0') seq += '\x1b[?25l';
+    if (mouseMode[mouse]) seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
+    if (seq) this.term.write(seq);
+  }
+
   dispose() {
+    try {
+      localStorage.removeItem(`modes:${this.id}`);
+    } catch { /* storage unavailable */ }
     this.term.dispose();
     this.el.remove();
   }

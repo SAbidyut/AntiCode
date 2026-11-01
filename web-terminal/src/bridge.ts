@@ -10,6 +10,9 @@ export interface SessionInfo {
   kind: SessionKind;
   title: string;
   alive: boolean;
+  /** The PTY's current size (Android host). */
+  cols?: number;
+  rows?: number;
 }
 
 export interface HostState {

@@ -389,6 +389,9 @@ class UbuntuManager(private val context: Context) {
                 "/bin/bash", "-lc",
                 "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && " +
                     "claude-setup --auto && claude --version && echo SELFTEST_OK; " +
+                    // diagnostics: ble.sh (autosuggestions) unpacked and loading in an interactive shell
+                    "ls -la /usr/share/blesh/ble.sh /usr/share/blesh/.agy-version 2>&1 | sed 's/^/BLESH| /'; " +
+                    "printf 'echo BLEI=\$BLE_VERSION:\$-\nexit\n' | script -qec 'bash -i' /dev/null 2>&1 | grep -a 'BLEI=[^\$]' | sed 's/^/BLESH| /'; " +
                     // diagnostics: terminal settings, and agy's raw output on a PTY made inside Ubuntu
                     "echo STTY: $(stty -a | tr '\\n' ' '); " +
                     "(sleep 30) | timeout -s KILL 25 script -qfc agy /tmp/agy.ts >/dev/null 2>&1; " +

@@ -1,7 +1,6 @@
 package com.sabidyut.agyterm
 
 import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Bitmap
@@ -60,6 +59,11 @@ class InAppBrowser(private val activity: Activity) {
 
     fun open(url: String) {
         val uri = Uri.parse(url)
+        if (uri.scheme == null || uri.scheme == "file") {
+            // Android forbids handing file:// paths to other apps (it would crash the app)
+            Toast.makeText(activity, "Can't open local files in a browser: $url", Toast.LENGTH_LONG).show()
+            return
+        }
         if (uri.scheme != "https" && uri.scheme != "http") {
             openExternal(uri)
             return
@@ -87,7 +91,7 @@ class InAppBrowser(private val activity: Activity) {
         tab.intent.setPackage(pkg)
         try {
             tab.launchUrl(activity, uri)
-        } catch (_: ActivityNotFoundException) {
+        } catch (_: Exception) {
             openExternal(uri)
         }
     }
@@ -95,8 +99,8 @@ class InAppBrowser(private val activity: Activity) {
     private fun openExternal(uri: Uri) {
         try {
             activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(activity, "No browser found to open the link", Toast.LENGTH_LONG).show()
+        } catch (_: Exception) {
+            Toast.makeText(activity, "No app found to open the link", Toast.LENGTH_LONG).show()
         }
     }
 

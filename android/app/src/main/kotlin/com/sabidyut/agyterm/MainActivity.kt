@@ -30,6 +30,7 @@ import android.util.Log
 import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
             service = svc
             svc.onSessionExit = { s ->
                 main.post {
+                    flush() // the session's last output first, then "exited"
                     js("__native.onExit('${s.id}', ${s.exitCode})")
                     svc.updateForeground()
                 }
@@ -169,6 +171,15 @@ class MainActivity : ComponentActivity() {
                 // the page missed the insets sent while it was loading
                 lastInsets = ""
                 ViewCompat.requestApplyInsets(view)
+            }
+
+            // The page's renderer died (out of memory, killed): rebuild the UI instead of
+            // letting Android take the whole app down — sessions keep running in the
+            // service and are re-attached by the new page.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                Log.e("AgyWeb", "WebView renderer gone (crash=${detail.didCrash()}), recreating")
+                recreate()
+                return true
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -515,7 +526,8 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun createSession(kind: String, cols: Int, rows: Int): String = try {
             val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300))
-            s.attach(outputListener)
+            // anything printed before we got here (a quick prompt) is in the ring: send it too
+            s.attach(outputListener) { snap -> if (snap.isNotEmpty()) queue(s.id, snap, snap.size) }
             s.id
         } catch (e: Exception) {
             main.post { Toast.makeText(this@MainActivity, "Could not start the session: ${e.message}", Toast.LENGTH_LONG).show() }
@@ -541,14 +553,20 @@ class MainActivity : ComponentActivity() {
         fun attach(id: String) {
             val s = svc().sessions[id] ?: return
             s.attach(outputListener) { snap -> if (snap.isNotEmpty()) queue(id, snap, snap.size) }
-            if (!s.alive) main.post { js("__native.onExit('$id', ${s.exitCode})") }
+            if (!s.alive) main.post {
+                flush() // history first, then the exit banner
+                js("__native.onExit('$id', ${s.exitCode})")
+            }
         }
 
         @JavascriptInterface
         fun listSessions(): String {
             val arr = JSONArray()
             for (s in svc().sessions.values) {
-                arr.put(JSONObject().put("id", s.id).put("kind", s.kind).put("title", s.title).put("alive", s.alive))
+                arr.put(
+                    JSONObject().put("id", s.id).put("kind", s.kind).put("title", s.title).put("alive", s.alive)
+                        .put("cols", s.cols).put("rows", s.rows),
+                )
             }
             return arr.toString()
         }

@@ -54,7 +54,8 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
 
     // Hardware keyboards (and IMEs that send key events) end up here.
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK) return super.onKeyDown(keyCode, event)
+        // Back, volume, media, camera … keep their usual meaning
+        if (keyCode == KeyEvent.KEYCODE_BACK || event.isSystem) return super.onKeyDown(keyCode, event)
         handleKey(event)
         return true
     }

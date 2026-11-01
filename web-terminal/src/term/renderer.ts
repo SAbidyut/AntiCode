@@ -15,7 +15,7 @@
 // drawn with CSS/SVG instead of font glyphs, so they fill the cell exactly and join
 // seamlessly at any zoom level.
 
-import type { Terminal, IBufferCell, IBufferLine } from '@xterm/headless';
+import type { Terminal, IBufferCell, IBufferLine, IMarker } from '@xterm/headless';
 
 export interface TermTheme {
   background: string;
@@ -167,6 +167,8 @@ export interface RendererOptions {
 interface Row {
   el: HTMLDivElement;
   html: string;
+  /** Rendered while still on the live screen: refresh once after it scrolls into history. */
+  live: boolean;
 }
 
 const OVERSCAN = 3;
@@ -196,6 +198,10 @@ export class BanglaRenderer {
   private lastCursorLine = -1;
   private typingTimer = 0;
   private animBaseY = 0;
+  // ---- scrollback trimming (a full scrollback drops its oldest lines) ----
+  private trimMarker: IMarker | null = null;
+  private trimLine = 0;
+  private trimGen = 0;
 
   cellWidth = 8;
   lineHeight = 18;
@@ -442,12 +448,16 @@ export class BanglaRenderer {
     };
     const flushBn = () => {
       if (bnFont === null) return;
-      // Keep trailing spaces out of the Bangla run (they belong to the grid).
+      // Keep trailing spaces out of the Bangla run (they belong to the grid), with their
+      // colours (a highlighted bar must not get a gap).
       let trailing = 0;
+      let trailHtml = '';
       while (bnPieces.length) {
         const last = bnPieces[bnPieces.length - 1];
         const trimmed = last.text.replace(/ +$/, '');
-        trailing += last.text.length - trimmed.length;
+        const n = last.text.length - trimmed.length;
+        trailing += n;
+        if (n) trailHtml = (last.css ? `<span style="${last.css}">${' '.repeat(n)}</span>` : ' '.repeat(n)) + trailHtml;
         if (trimmed) {
           last.text = trimmed;
           break;
@@ -474,7 +484,7 @@ export class BanglaRenderer {
       const font = (bnBold ? 'font-weight:700;' : '') + (bnFont.includes('i') ? 'font-style:italic;' : '');
       const body = bnPieces.map((p) => (p.css ? `<span style="${p.css}">${esc(p.text)}</span>` : esc(p.text))).join('');
       html += `<span class="bn" style="width:${target.toFixed(2)}px;${font}"><span class="bi"${inner}>${body}</span></span>`;
-      if (trailing) html += ' '.repeat(trailing);
+      html += trailHtml;
       bnFont = null;
       bnPieces = [];
       bnCells = 0;
@@ -557,6 +567,50 @@ export class BanglaRenderer {
     if (this.spare.length < 64) this.spare.push(el);
   }
 
+  /**
+   * How many lines were trimmed off the top of the buffer since the last call: 0 if none,
+   * or -1 when unknown (the row cache is then rebuilt). Uses a marker on the cursor line,
+   * which xterm moves up as lines are trimmed and disposes when its line goes.
+   */
+  private checkTrim(normal: boolean): number {
+    const m = this.trimMarker;
+    if (!normal) {
+      // alternate screen: no scrollback (switching buffers rebuilds the rows anyway)
+      m?.dispose();
+      this.trimMarker = null;
+      return 0;
+    }
+    let trimmed = 0;
+    if (m) {
+      trimmed = m.isDisposed || m.line < 0 ? -1 : this.trimLine - m.line;
+      m.dispose();
+    }
+    if (trimmed < 0) {
+      this.trimGen++; // lost track: rebuild
+      trimmed = 0;
+    }
+    // re-anchor on the cursor line, which stays in the buffer the longest
+    this.trimMarker = this.term.registerMarker(0) ?? null;
+    this.trimLine = this.trimMarker?.line ?? 0;
+    return trimmed;
+  }
+
+  private shiftRows(n: number) {
+    const lh = this.lineHeight;
+    const moved = new Map<number, Row>();
+    for (const [i, r] of this.rows) {
+      if (i - n < 0) this.recycle(r.el);
+      else {
+        r.el.style.transform = `translateY(${(i - n) * lh}px)`;
+        moved.set(i - n, r);
+      }
+    }
+    this.rows = moved;
+    this.revealedUpTo -= n;
+    // reading history: keep the same lines in view
+    if (this.scrollPx > 0) this.scrollPx += n * lh;
+  }
+
   render() {
     if (this.shouldWait()) {
       if (!this.frame) this.frame = window.setTimeout(() => { this.frame = 0; this.render(); }, 20) as unknown as number;
@@ -568,12 +622,14 @@ export class BanglaRenderer {
     const cols = term.cols;
     const lh = this.lineHeight;
 
-    // A different buffer (alt screen), a resize, clearing the scrollback, or old lines
-    // dropped off the top of a full scrollback all invalidate the line → row mapping.
-    // (Line 0 is only compared once it is history: while the screen hasn't scrolled, the
-    // top line is the one being edited and the mapping can't shift.)
-    const top = buf.baseY > 0 ? buf.getLine(0)?.translateToString(true).slice(0, 80) ?? '' : '';
-    const key = `${buf.type}|${cols}|${buf.baseY > 0 ? 's' : 't'}|${top}`;
+    // Lines dropped off the top of a full scrollback (or cleared with it) shift every
+    // line number down: move the rendered rows along instead of rebuilding them.
+    const trimmed = this.checkTrim(buf.type === 'normal');
+    if (trimmed > 0) this.shiftRows(trimmed);
+
+    // A different buffer (alt screen), a resize (reflow), or a trim we couldn't measure
+    // invalidate the line → row mapping.
+    const key = `${buf.type}|${cols}|${this.trimGen}`;
     if (key !== this.bufferKey) {
       this.bufferKey = key;
       for (const r of this.rows.values()) this.recycle(r.el);
@@ -610,7 +666,8 @@ export class BanglaRenderer {
     for (let i = first; i <= last; i++) {
       let r = this.rows.get(i);
       const live = i >= buf.baseY; // the live screen can still change; scrollback can't
-      if (r && !live) continue;
+      if (r && !live && !r.live) continue;
+      if (r) r.live = live;
       const line = buf.getLine(i);
       const html = this.rowToHtml(line, cols);
       let el: HTMLDivElement | null = null;
@@ -620,7 +677,7 @@ export class BanglaRenderer {
         el.style.transform = `translateY(${i * lh}px)`;
         el.innerHTML = html;
         this.viewport.append(el);
-        this.rows.set(i, { el, html });
+        this.rows.set(i, { el, html, live });
       } else if (r.html !== html) {
         r.html = html;
         r.el.innerHTML = html;
@@ -671,7 +728,8 @@ export class BanglaRenderer {
     const wasShown = this.cursorEl.style.display !== 'none';
     this.cursorEl.style.display = showCursor ? 'block' : 'none';
     if (showCursor) {
-      const t = `translate(${(buf.cursorX * this.cellWidth).toFixed(2)}px, ${cursorLine * lh}px)`;
+      // cursorX == cols while a line wrap is pending: keep it on the grid
+      const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${cursorLine * lh}px)`;
       if (t !== this.lastCursorT) {
         // glide to the next cell / line; jump when it reappears or moves far (TUIs)
         const far = !wasShown || Math.abs(cursorLine - this.lastCursorLine) > 2;

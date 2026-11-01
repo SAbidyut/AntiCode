@@ -41,6 +41,12 @@ class TermSession(
     private var ringLen = 0
     private var listener: OutputListener? = null
 
+    /** Current window size (for re-attaching UIs). */
+    @Volatile var cols = cols
+        private set
+    @Volatile var rows = rows
+        private set
+
     private val out: FileOutputStream
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "pty-writer-$id") }
 
@@ -52,7 +58,7 @@ class TermSession(
         val input = FileInputStream(pfd.fileDescriptor)
         out = FileOutputStream(pfd.fileDescriptor)
 
-        Thread({
+        val reader = Thread({
             val buf = ByteArray(16 * 1024)
             try {
                 while (true) {
@@ -70,10 +76,17 @@ class TermSession(
                 pfd.close()
             } catch (_: IOException) {
             }
-        }, "pty-reader-$id").start()
+        }, "pty-reader-$id")
+        reader.start()
 
         Thread({
             exitCode = Pty.waitFor(pid)
+            // let the reader drain the last output first, so "exited" comes after it
+            // (bounded: a background child may keep the terminal open)
+            try {
+                reader.join(500)
+            } catch (_: InterruptedException) {
+            }
             alive = false
             onExit(this)
         }, "pty-waiter-$id").start()
@@ -117,6 +130,8 @@ class TermSession(
     }
 
     fun resize(rows: Int, cols: Int) {
+        this.rows = rows
+        this.cols = cols
         if (alive) Pty.setWindowSize(fd, rows, cols)
     }
 

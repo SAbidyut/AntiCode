@@ -23,6 +23,8 @@ __agy_style_file="$HOME/.config/agy-terminal/prompt"
 
 # ---------------------------------------------------------------- command timer
 __agy_timer_start() {
+  # (the DEBUG trap also fires for PROMPT_COMMAND itself: that's not a command)
+  [[ $BASH_COMMAND == __agy_prompt* ]] && return
   [ -z "$__agy_in_prompt" ] && [ -z "$__agy_t0" ] && __agy_t0=${EPOCHREALTIME/[.,]/}
 }
 if [[ ${BLE_VERSION-} ]]; then
