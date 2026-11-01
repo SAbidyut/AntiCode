@@ -24,6 +24,8 @@
 | ফন্ট ছোট/বড় | দুই আঙুলে পিঞ্চ, বা ⋮ মেনু |
 | নতুন ট্যাব | ＋ → Antigravity / Ubuntu / Android শেল |
 | আবার সেটআপ | Ubuntu তে `agy-setup` |
+| Mac এর রিমোট ড্যাশবোর্ড | টার্মিনালের উপরে **⇄** বাটন (অ্যাপের ভিতরেই Chrome ট্যাবে খোলে) |
+| কিছু ঠিকমতো না চললে | ⋮ → **ডিবাগ লগ কপি** → চ্যাটে পেস্ট করুন |
 
 অ্যাপ বন্ধ করলেও সেশন চলতে থাকে (নোটিফিকেশনে দেখা যায়); নোটিফিকেশনের "সব বন্ধ করুন" দিয়ে থামানো যায়।
 
@@ -31,7 +33,9 @@
 
 Mac এর টার্মিনালে `agy --remote-control` (বা চলমান agy তে `/remote-control`) দিন।
 তারপর অ্যাপের হোমে **রিমোট ড্যাশবোর্ড খুলুন** — একই Google অ্যাকাউন্টে লগইন করলে Mac এ চলা সব কাজ দেখা ও কন্ট্রোল করা যায়।
-ড্যাশবোর্ডটা Google এর, তাই এটা অ্যাপের ভিতরে Chrome (Custom Tab) এ খোলে; ঠিকানা হোম স্ক্রিনে বদলানো যায়।
+ড্যাশবোর্ডটা Google এর। Google নিরাপত্তার কারণে অ্যাপের ভিতরের WebView থেকে Google লগইন করতে দেয় না, তাই এটা
+অ্যাপের ভিতরেই Chrome এর Custom Tab এ খোলে (আলাদা ব্রাউজার অ্যাপে যায় না, ← চাপলে টার্মিনালে ফেরে, লগইন মনে রাখে)।
+ঠিকানা হোম স্ক্রিনে বদলানো যায়।
 
 ## কীভাবে কাজ করে
 
@@ -59,7 +63,8 @@ cd android && ./gradlew assembleRelease
 প্রতিবার push এ GitHub Actions নিজেই APK বানিয়ে `latest` রিলিজে দেয় (`.github/workflows/android.yml`)।
 সব বিল্ড একই key (`android/app/agyterm-sideload.jks`) দিয়ে sign হয়, তাই নতুন APK পুরোনোটার উপরেই ইনস্টল হয় — Ubuntu/সেশন মুছে যায় না।
 
-CI তে একটা Android emulator এ অ্যাপের **self test** চলে: Ubuntu নামানো → proot দিয়ে চালু → `agy-setup` (apt + অফিসিয়াল ইনস্টলার) → `agy --version`।
+CI তে একটা Android emulator এ অ্যাপের **self test** চলে: Ubuntu নামানো → proot দিয়ে চালু → `agy-setup` (apt + অফিসিয়াল ইনস্টলার) → `agy --version`
+→ তারপর আসল UI দিয়ে `agy` খুলে তার লগইন স্ক্রিন আঁকা হচ্ছে কিনা যাচাই। Web UI এর e2e টেস্টও (Chromium, আসল bash) CI তে চলে।
 নিজে চালাতে: debug APK ইনস্টল করে `adb shell am start -n com.sabidyut.agyterm/.MainActivity --ez selftest true`, লগ: `adb logcat -s AgySelfTest`।
 
 ব্রাউজারে UI ডেভেলপমেন্ট (আসল bash সহ, শুধু localhost এ):
