@@ -710,7 +710,11 @@ class MainActivity : ComponentActivity() {
                     keys.clearFocus()
                     js("__native.onKeyboardReleased()")
                 }
-                if (!panel.open(url, title.ifBlank { Uri.parse(url).host ?: url })) browser.open(url)
+                val host = Uri.parse(url).host ?: ""
+                // Google sites only work signed in, and Google blocks its sign-in inside apps:
+                // straight to the Chrome tab (with the agent's account) for those.
+                val googleOnly = host == "google.com" || host.endsWith(".google.com")
+                if (googleOnly || !panel.open(url, title.ifBlank { host.ifEmpty { url } })) browser.open(url)
             }
         }
 
@@ -722,6 +726,8 @@ class MainActivity : ComponentActivity() {
                     val b = Color.parseColor(bg)
                     panel.setColors(b, Color.parseColor(text), Color.parseColor(muted), Color.parseColor(accent))
                     val light = (Color.red(b) * 299 + Color.green(b) * 587 + Color.blue(b) * 114) / 1000 > 150
+                    browser.toolbarColor = b
+                    browser.darkTheme = !light
                     androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
                         isAppearanceLightStatusBars = light
                         isAppearanceLightNavigationBars = light
@@ -782,6 +788,22 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun setSessionLabel(id: String, label: String) {
             svc().sessions[id]?.label = label.take(120)
+        }
+
+        /** The Antigravity account (seen in the CLI's header, or typed in Settings). */
+        @JavascriptInterface
+        fun setAntigravityAccount(email: String) = Accounts.setAntigravity(this@MainActivity, email)
+
+        @JavascriptInterface
+        fun getAccounts(): String = JSONObject()
+            .put("agy", Accounts.antigravity(this@MainActivity) ?: "")
+            .put("claude", Accounts.claude(this@MainActivity) ?: "")
+            .toString()
+
+        /** Forget "this dashboard opens in Chrome" (after a Google sign-in). */
+        @JavascriptInterface
+        fun resetDashboardChoices() {
+            getSharedPreferences(RemotePanel.PREFS, Context.MODE_PRIVATE).edit().clear().apply()
         }
 
         @JavascriptInterface

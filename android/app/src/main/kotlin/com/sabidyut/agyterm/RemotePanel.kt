@@ -119,13 +119,12 @@ class RemotePanel(
                     return true
                 }
                 if (url.host == GOOGLE_SIGN_IN) {
-                    // Google blocks its sign-in inside apps: continue this dashboard in Chrome.
-                    // A site that sends you there by itself (Google-only sign-in) goes straight
-                    // to Chrome for a week; a "Continue with Google" tap is just this once.
-                    if (!request.hasGesture()) {
-                        prefs().edit().putLong(hostOf(startUrl), System.currentTimeMillis()).apply()
-                    }
-                    Toast.makeText(context, "Google sign-in opens in Chrome", Toast.LENGTH_SHORT).show()
+                    // Google blocks its sign-in inside apps: this dashboard continues in Chrome,
+                    // where the session will live — so it opens there directly from now on
+                    // (Settings → "Open dashboards in the app again" undoes it). The browser
+                    // adds the agent's account (authuser) so the right Google account is used.
+                    prefs().edit().putLong(hostOf(startUrl), System.currentTimeMillis()).apply()
+                    Toast.makeText(context, "Google sign-in continues in Chrome", Toast.LENGTH_SHORT).show()
                     openInBrowser(startUrl)
                     close()
                     return true
@@ -183,7 +182,7 @@ class RemotePanel(
         layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
     }
 
-    private fun prefs() = context.getSharedPreferences("remote", Context.MODE_PRIVATE)
+    private fun prefs() = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun hostOf(url: String) = Uri.parse(url).host ?: url
 
     /** The app's theme colours (the page's own colours stay as they are). */
@@ -277,6 +276,7 @@ class RemotePanel(
 
     companion object {
         private const val GOOGLE_SIGN_IN = "accounts.google.com"
+        const val PREFS = "remote"
         private const val CHROME_FOR_MS = 7L * 24 * 3600 * 1000
         private const val UNLOAD_AFTER_MS = 60_000L
     }

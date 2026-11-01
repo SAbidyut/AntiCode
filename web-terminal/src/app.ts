@@ -6,7 +6,7 @@ import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type Named
 import { hydrateIcons, icon } from './icons';
 
 // ================================================================ prefs
-type ThemeName = 'midnight' | 'dracula' | 'solarized' | 'paper';
+type ThemeName = 'midnight' | 'black' | 'dracula' | 'solarized' | 'paper';
 type CursorStyle = 'block' | 'bar' | 'underline';
 interface Prefs {
   fontSize: number;
@@ -33,6 +33,7 @@ const DEFAULT_PREFS: Prefs = {
 };
 const THEME_LABELS: Record<ThemeName, string> = {
   midnight: 'Midnight',
+  black: 'Black',
   dracula: 'Dracula',
   solarized: 'Solarized',
   paper: 'Paper',
@@ -93,6 +94,7 @@ window.addEventListener('unhandledrejection', (e) => reportError(`unhandled reje
 
 // ================================================================ state
 const sessions = new Map<string, TerminalSession>();
+let accounts = { agy: '', claude: '' };
 let notifyWhenDone = true;
 let restored = false;
 let pendingOpen = '';
@@ -204,6 +206,11 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
   s.renderer.el.dataset.cursor = prefs.cursor;
   s.onTitle = renderTabs;
   s.onMeta = renderTabs;
+  s.onAccount = (email) => {
+    if (email === accounts.agy) return;
+    accounts.agy = email;
+    bridge.setAntigravityAccount(email);
+  };
   sessions.set(id, s);
   for (const d of early.get(id) ?? []) s.write(d);
   early.delete(id);
@@ -873,6 +880,17 @@ function openSettingsSheet() {
         h('label', { class: 'switch' }, input, h('span', {}))));
   };
 
+  const accountField = h('input', { class: 'text-input', type: 'email', spellcheck: 'false', placeholder: 'you@gmail.com' }) as HTMLInputElement;
+  accountField.value = accounts.agy;
+  accountField.onchange = () => {
+    accounts.agy = accountField.value.trim();
+    bridge.setAntigravityAccount(accounts.agy);
+  };
+  const resetBtn = h('button', { class: 'btn btn-secondary' }, 'Open them in the app again');
+  resetBtn.onclick = () => {
+    bridge.resetDashboardChoices();
+    toast('Dashboards will open in the app again');
+  };
   const urlField = (key: 'remoteUrl' | 'claudeUrl') => {
     const input = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
     input.value = prefs[key];
@@ -911,6 +929,10 @@ function openSettingsSheet() {
       bridge.setKeyboardCompat(v);
     }),
     h('div', { class: 'setting' },
+      h('div', { class: 's-title' }, 'Antigravity Google account'),
+      h('div', { class: 's-sub' }, 'Dashboards open with this account (found automatically when agy starts).'),
+      accountField),
+    h('div', { class: 'setting' },
       h('div', { class: 's-title' }, 'Antigravity dashboard address'),
       h('div', { class: 's-sub' }, 'Paste the link agy shows if it differs.'),
       urlField('remoteUrl')),
@@ -918,6 +940,10 @@ function openSettingsSheet() {
       h('div', { class: 's-title' }, 'Claude Code dashboard address'),
       h('div', { class: 's-sub' }, 'Where Remote Control sessions show up.'),
       urlField('claudeUrl')),
+    h('div', { class: 'setting' },
+      h('div', { class: 's-title' }, 'Dashboards after a Google sign-in'),
+      h('div', { class: 's-sub' }, 'A dashboard you signed in to with Google opens in Chrome from then on.'),
+      resetBtn),
     h('p', { class: 'about-line' }, 'AntiCode · fonts: Kalpurush, JetBrains Mono, Noto Sans Symbols (SIL Open Font License)'),
   );
 }
@@ -1012,6 +1038,7 @@ async function boot() {
   console.info(`boot: fonts ready=${document.fonts.check(`${prefs.fontSize}px Kalpurush`, 'বাংলা')}`);
 
   notifyWhenDone = await bridge.getNotifyWhenDone();
+  accounts = await bridge.getAccounts();
   try {
     hostState = await bridge.getState();
   } catch {

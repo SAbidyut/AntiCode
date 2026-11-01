@@ -57,8 +57,13 @@ class InAppBrowser(private val activity: Activity) {
         connection = null
     }
 
+    /** The app's theme (from the page): the tab's toolbar matches it. */
+    var toolbarColor = Color.parseColor("#0B0D12")
+    var darkTheme = true
+
     fun open(url: String) {
-        val uri = Uri.parse(url)
+        // open the dashboard with the account the agent uses, not the browser's first one
+        val uri = Accounts.withAccount(Uri.parse(url), Accounts.forUrl(activity, Uri.parse(url)))
         if (uri.scheme == null || uri.scheme == "file") {
             // Android forbids handing file:// paths to other apps (it would crash the app)
             Toast.makeText(activity, "Can't open local files in a browser: $url", Toast.LENGTH_LONG).show()
@@ -73,16 +78,21 @@ class InAppBrowser(private val activity: Activity) {
             openExternal(uri) // no Custom Tabs browser installed
             return
         }
+        // As close to a screen of the app as Chrome allows: our colours, no share /
+        // bookmark / download buttons, the bar slides away while scrolling.
         val colors = CustomTabColorSchemeParams.Builder()
-            .setToolbarColor(Color.parseColor("#181b25"))
-            .setNavigationBarColor(Color.parseColor("#181b25"))
+            .setToolbarColor(toolbarColor)
+            .setNavigationBarColor(toolbarColor)
+            .setSecondaryToolbarColor(toolbarColor)
             .build()
         val tab = CustomTabsIntent.Builder()
             .setDefaultColorSchemeParams(colors)
-            .setColorScheme(CustomTabsIntent.COLOR_SCHEME_DARK)
+            .setColorScheme(if (darkTheme) CustomTabsIntent.COLOR_SCHEME_DARK else CustomTabsIntent.COLOR_SCHEME_LIGHT)
             .setShowTitle(true)
             .setUrlBarHidingEnabled(true)
             .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+            .setBookmarksButtonEnabled(false)
+            .setDownloadButtonEnabled(false)
             .setCloseButtonIcon(backArrow())
             .setStartAnimations(activity, android.R.anim.slide_in_left, android.R.anim.fade_out)
             .setExitAnimations(activity, android.R.anim.fade_in, android.R.anim.slide_out_right)

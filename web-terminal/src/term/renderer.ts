@@ -36,6 +36,16 @@ export const THEMES: Record<string, TermTheme> = {
       '#45495e', '#f6a0b8', '#b8ebb4', '#fbe9bf', '#a0c3fb', '#d6baf9', '#a3e4f0', '#ffffff',
     ],
   },
+  // Pure black (OLED): true #000 background, the same soft accents
+  black: {
+    background: '#000000',
+    foreground: '#e4e6ee',
+    cursor: '#f5c2a0',
+    ansi: [
+      '#16181f', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#cba6f7', '#89dceb', '#bac2de',
+      '#3d4152', '#f6a0b8', '#b8ebb4', '#fbe9bf', '#a0c3fb', '#d6baf9', '#a3e4f0', '#ffffff',
+    ],
+  },
   dracula: {
     background: '#1e1f29',
     foreground: '#f8f8f2',
@@ -242,6 +252,9 @@ export class BanglaRenderer {
    * it sits at the bottom (the prompt box right above the keys), like Claude Code.
    */
   anchorBottom = false;
+  /** Chat layout: rows from this line down are moved down by splitGap px (-1 = off). */
+  private splitLine = -1;
+  private splitGap = 0;
   /** True while the keyboard slides: follow it exactly, no easing. */
   insetsMoving = false;
   /** Called when the view leaves / returns to the bottom of the output. */
@@ -697,6 +710,40 @@ export class BanglaRenderer {
     }
     const cursorLine = buf.baseY + buf.cursorY;
     const motion = !!this.opts.animate && buf.type === 'normal';
+
+    // The last line drawn: the cursor's (plus one), or anything below it (a completion
+    // menu, a TUI's footer).
+    const visible = this.el.clientHeight - 12;
+    let lastY = buf.cursorY + 1;
+    for (let y = rows - 1; y > lastY; y--) {
+      if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
+        lastY = y;
+        break;
+      }
+    }
+    // Chat layout for agent sessions (Antigravity, Claude Code): while the conversation is
+    // shorter than the screen, its header stays at the top and the input box — from the
+    // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
+    let splitLine = -1;
+    let splitGap = 0;
+    if (this.anchorBottom && buf.type === 'normal' && buf.baseY === 0 && this.scrollPx === 0 && visible > 0) {
+      const free = visible - (lastY + 1) * lh;
+      if (free >= lh) {
+        for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
+          if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
+            splitLine = y;
+            break;
+          }
+        }
+        if (splitLine >= 0) splitGap = free;
+      }
+    }
+    const rowY = (i: number) => i * lh + (splitLine >= 0 && i >= splitLine ? splitGap : 0);
+    if (splitLine !== this.splitLine || splitGap !== this.splitGap) {
+      this.splitLine = splitLine;
+      this.splitGap = splitGap;
+      for (const [i, r] of this.rows) r.el.style.transform = `translateY(${rowY(i)}px)`;
+    }
     const canReveal = motion && !this.suppressReveal && this.scrollPx === 0;
     const revealed: HTMLDivElement[] = [];
     const labels = this.labelsByLine();
@@ -712,7 +759,7 @@ export class BanglaRenderer {
       if (!r) {
         el = this.spare.pop() ?? document.createElement('div');
         el.className = 'term-row';
-        el.style.transform = `translateY(${i * lh}px)`;
+        el.style.transform = `translateY(${rowY(i)}px)`;
         el.innerHTML = html;
         this.viewport.append(el);
         this.rows.set(i, { el, html, live });
@@ -751,21 +798,11 @@ export class BanglaRenderer {
     // programs redraw and flicker); instead the screen slides up just enough to keep the
     // cursor — and a line of context under it — visible. A prompt at the top never moves.
     if (this.scrollPx === 0) {
-      const visible = this.el.clientHeight - 12;
       const overflow = rows * lh - visible;
-      // the last line drawn: the cursor's (plus one), or anything below it (a completion
-      // menu, a TUI's footer)
-      let lastY = buf.cursorY + 1;
-      for (let y = rows - 1; y > lastY; y--) {
-        if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
-          lastY = y;
-          break;
-        }
-      }
       const below = (lastY + 1) * lh - visible;
       let pan = 0;
-      if (this.anchorBottom && buf.type === 'normal' && buf.baseY === 0 && below < 0) {
-        pan = below; // short screen in an agent session: sit at the bottom
+      if (splitLine >= 0) {
+        pan = 0; // the chat layout already fits the screen
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
         pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
@@ -784,7 +821,7 @@ export class BanglaRenderer {
     this.cursorEl.style.display = showCursor ? 'block' : 'none';
     if (showCursor) {
       // cursorX == cols while a line wrap is pending: keep it on the grid
-      const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${cursorLine * lh}px)`;
+      const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;
       if (t !== this.lastCursorT) {
         // glide to the next cell / line; jump when it reappears or moves far (TUIs)
         const far = !wasShown || Math.abs(cursorLine - this.lastCursorLine) > 2;
@@ -811,11 +848,26 @@ export class BanglaRenderer {
     const rect = this.viewport.getBoundingClientRect(); // includes the scroll transform
     const buf = this.term.buffer.active;
     const z = this.zoom;
-    const line = Math.max(0, Math.min(buf.length - 1, Math.floor((clientY - rect.top) / (this.lineHeight * z))));
+    const lh = this.lineHeight;
+    let py = (clientY - rect.top) / z;
+    if (this.splitLine >= 0 && py >= this.splitLine * lh) {
+      // below the chat layout's gap: undo the shift (inside the gap: the line above it)
+      py = py >= this.splitLine * lh + this.splitGap ? py - this.splitGap : this.splitLine * lh - 1;
+    }
+    const line = Math.max(0, Math.min(buf.length - 1, Math.floor(py / lh)));
     const x = Math.max(0, Math.min(this.term.cols - 1, Math.floor((clientX - rect.left) / (this.cellWidth * z))));
     const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY + this.scrollOffset));
     return { x, y, line };
   }
+}
+
+/** A horizontal rule drawn with box characters (the border of a TUI's input box). */
+function isRule(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 8) return false;
+  let n = 0;
+  for (const ch of t) if ('─━╌╍┄┅═-'.includes(ch)) n++;
+  return n / t.length >= 0.8;
 }
 
 /** Bengali vowel signs, virama, candrabindu/anusvara/visarga, nukta, au length mark. */

@@ -64,6 +64,11 @@ export interface Bridge {
   setSessionLabel(id: string, label: string): void;
   setNotifyWhenDone(on: boolean): void;
   getNotifyWhenDone(): Promise<boolean>;
+  /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
+  setAntigravityAccount(email: string): void;
+  getAccounts(): Promise<{ agy: string; claude: string }>;
+  /** Dashboards that went to Chrome for a Google sign-in open in the app again. */
+  resetDashboardChoices(): void;
   /** The app's colours, for native parts (remote panel, status bar icons). */
   setThemeColors(bg: string, text: string, muted: string, accent: string): void;
   /** true: soft keyboard sends raw keys to the terminal (no suggestions). false: normal IME (for the compose box). */
@@ -102,6 +107,9 @@ interface AndroidBridgeApi {
   setNotifyWhenDone?(on: boolean): void;
   getNotifyWhenDone?(): boolean;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
+  setAntigravityAccount?(email: string): void;
+  getAccounts?(): string;
+  resetDashboardChoices?(): void;
   setTerminalKeyboard(on: boolean): void;
   showKeyboard(): void;
   hideKeyboard(): void;
@@ -139,6 +147,15 @@ class AndroidHostBridge implements Bridge {
   setNotifyWhenDone(on: boolean) { this.api.setNotifyWhenDone?.(on); }
   async getNotifyWhenDone() { return this.api.getNotifyWhenDone?.() ?? true; }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
+  setAntigravityAccount(email: string) { this.api.setAntigravityAccount?.(email); }
+  async getAccounts() {
+    try {
+      return JSON.parse(this.api.getAccounts?.() ?? '{}') as { agy: string; claude: string };
+    } catch {
+      return { agy: '', claude: '' };
+    }
+  }
+  resetDashboardChoices() { this.api.resetDashboardChoices?.(); }
   setTerminalKeyboard(on: boolean) { this.api.setTerminalKeyboard(on); }
   showKeyboard() { this.api.showKeyboard(); }
   hideKeyboard() { this.api.hideKeyboard(); }
@@ -203,6 +220,9 @@ class DevBridge implements Bridge {
   setNotifyWhenDone() {}
   async getNotifyWhenDone() { return true; }
   setThemeColors() {}
+  setAntigravityAccount() {}
+  async getAccounts() { return { agy: '', claude: '' }; }
+  resetDashboardChoices() {}
   setTerminalKeyboard() {}
   showKeyboard() {}
   hideKeyboard() {}

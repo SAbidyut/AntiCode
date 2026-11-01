@@ -66,6 +66,11 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+body[data-theme='black'] {
+  --bg: #000000; --surface: #0b0c0f; --surface-2: #121318; --surface-3: #1b1d24;
+  --line: rgba(255, 255, 255, 0.08); --line-strong: rgba(255, 255, 255, 0.13);
+  --shadow: none;
+}
 body[data-theme='dracula'] {
   --bg: #1e1f29; --surface: #252733; --surface-2: #2d303e; --surface-3: #393c4d;
   --accent: #ff79c6; --accent-2: #bd93f9; --accent-ink: #1e1f29;
@@ -497,10 +502,10 @@ body[data-screen='home']::before {
 .setting .s-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .setting .val { font: 600 13px var(--mono); color: var(--muted); }
 input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2px; }
-.swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+.swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 10px; }
 .swatch {
-  border-radius: 14px; padding: 10px 8px 8px; border: 2px solid transparent; text-align: center;
-  font-size: 12px; font-weight: 600;
+  border-radius: 14px; padding: 8px 4px 7px; border: 2px solid transparent; text-align: center;
+  font-size: 11px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .swatch .sw-colors { display: flex; height: 26px; border-radius: 8px; overflow: hidden; margin-bottom: 6px; }
 .swatch .sw-colors span { flex: 1; }

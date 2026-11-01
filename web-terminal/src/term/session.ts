@@ -118,6 +118,15 @@ export class TerminalSession {
         return true;
       });
     }
+    // DECRQM for mode 2027 (grapheme clustering): this terminal always joins a letter and
+    // its vowel signs into one cell (Unicode graphemes). Say so — "permanently set" — so
+    // TUIs like the Antigravity CLI measure Bangla the same way; otherwise they count every
+    // vowel sign as a cell of its own and the text falls apart (◌া ◌ি, broken lines).
+    this.term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, (params) => {
+      if (params[0] !== 2027) return false; // other modes: xterm answers
+      this.bridge.write(this.id, '\x1b[?2027;3$y');
+      return true;
+    });
     // XTVERSION (CSI > q): name the terminal.
     this.term.parser.registerCsiHandler({ prefix: '>', final: 'q' }, () => {
       this.bridge.write(this.id, '\x1bP>|AgyTerminal 0.2\x1b\\');
@@ -136,7 +145,23 @@ export class TerminalSession {
     });
   }
 
+  /** The Antigravity CLI shows its account in the header: "you@gmail.com (Google AI Pro)". */
+  onAccount?: (email: string) => void;
+  private accountSeen = false;
+  private accountDecoder = new TextDecoder();
+  private accountTail = '';
+  private spotAccount(data: Uint8Array) {
+    const text = this.accountTail + this.accountDecoder.decode(data, { stream: true }).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+    const m = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*\(Google/.exec(text);
+    if (m) {
+      this.accountSeen = true;
+      this.onAccount?.(m[1]);
+    }
+    this.accountTail = text.slice(-120);
+  }
+
   write(data: Uint8Array) {
+    if (this.kind === 'agy' && !this.accountSeen) this.spotAccount(data);
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;

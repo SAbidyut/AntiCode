@@ -56,11 +56,12 @@ check('runs a Bangla command', await waitFor(async () => (await screenText()).in
 // 2b. the queries the Antigravity CLI sends at startup must not break the terminal
 //     (regression: a minifier bug made DECRQM throw and froze the screen) and get answers.
 await send("printf '\\e[>q\\e[c\\e[?2026$p\\e[?2027$p\\e]11;?\\a\\e]7501;?\\a\\e[?u'; read -rs -t 1 -N 300 r; " +
-    "printf '%q\\n' \"$r\" | tr -d '\\\\' | head -c 200; echo; echo AFTER-$((2+2))",
+    "printf '%q\\n' \"$r\" | tr -d '\\\\' | head -c 600; echo; echo AFTER-$((2+2))",
 );
 check('agy startup queries keep the screen alive', await waitFor(async () => (await screenText()).includes('AFTER-4')));
 const replies = await screenText();
 check('DA1 + DECRQM + XTVERSION answered', replies.includes('?1;2c') && replies.includes('2026;2$y') && replies.includes('AgyTerminal'));
+check('grapheme clustering (mode 2027) reported as on', replies.replace(/\s*\n/g, '').includes('2027;3$y'));
 check('background colour (OSC 11) answered', replies.includes('11;rgb:'));
 
 // 2c. Bangla with a different colour on every letter (how streaming CLIs fade text in)
