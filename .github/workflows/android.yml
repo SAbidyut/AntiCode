@@ -62,6 +62,9 @@ jobs:
       - name: Fetch proot (Termux builds)
         run: scripts/fetch-proot.sh
 
+      - name: Fetch ble.sh (bash autosuggestions)
+        run: scripts/fetch-blesh.sh
+
       - name: Build APK
         working-directory: android
         run: ./gradlew --no-daemon assembleRelease assembleDebug
@@ -125,3 +128,10 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -partition-size 4096
           script: bash scripts/emulator-selftest.sh AgyTerminal-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-screenshots
+          path: selftest-shots/
+          if-no-files-found: ignore

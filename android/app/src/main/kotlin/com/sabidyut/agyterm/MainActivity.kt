@@ -393,10 +393,34 @@ class MainActivity : ComponentActivity() {
             Log.i(SELFTEST, "SELFTEST_SWIPE_READY")
             pollLine("55", 20, {
                 Log.i(SELFTEST, "SELFTEST_TYPE_AFTER_SWIPE_OK keyViewFocused=${keys.hasFocus()}")
-                web.evaluateJavascript("__selftest.send('ls /sdcard/ >/dev/null && ls -d ~/storage/downloads/ && echo SD\$((1+1))OK')", null)
-                main.postDelayed({ pollStorage(0) }, 2000)
+                selftestBlesh()
             }, "SELFTEST_TYPE_FAIL typing stopped working after scrolling")
         }, "SELFTEST_TYPE_FAIL typed text never reached the shell")
+    }
+
+    /**
+     * The shell's autosuggestions (ble.sh) are attached. The CI script then types the
+     * start of an earlier command (SELFTEST_SUGGEST_READY) and screenshots the suggestion.
+     */
+    private fun selftestBlesh() {
+        val expected = try {
+            assets.open("blesh.version").bufferedReader().use { it.readText().trim() }
+        } catch (_: Exception) {
+            "none"
+        }
+        web.evaluateJavascript("__selftest.send('v=\${BLE_VERSION:-none}; echo BLE=\${v%%+*}.')", null)
+        pollLine("BLE=$expected.", 10, {
+            Log.i(SELFTEST, "SELFTEST_BLE_OK")
+            Log.i(SELFTEST, "SELFTEST_SUGGEST_READY")
+            main.postDelayed({
+                // drop whatever the CI script left on the command line
+                web.evaluateJavascript("__selftest.keys('\\u0003')", null)
+            }, 11_000)
+            main.postDelayed({
+                web.evaluateJavascript("__selftest.send('ls /sdcard/ >/dev/null && ls -d ~/storage/downloads/ && echo SD\$((1+1))OK')", null)
+                main.postDelayed({ pollStorage(0) }, 2000)
+            }, 13_000)
+        }, "SELFTEST_BLE_FAIL ble.sh is not attached in the Ubuntu shell")
     }
 
     private fun pollStorage(n: Int) {

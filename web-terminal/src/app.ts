@@ -20,6 +20,8 @@ interface Prefs {
   compose: boolean;
   /** Keyboard compatibility mode (keyboards that misbehave with raw keys). */
   kbCompat: boolean;
+  /** Fade-in output, gliding cursor, sliding scroll. */
+  animations: boolean;
 }
 const DEFAULT_PREFS: Prefs = {
   fontSize: 14,
@@ -30,6 +32,7 @@ const DEFAULT_PREFS: Prefs = {
   cursor: 'block',
   compose: false,
   kbCompat: false,
+  animations: true,
 };
 const THEME_LABELS: Record<ThemeName, string> = {
   midnight: 'Midnight',
@@ -174,7 +177,7 @@ function consumeLatch(): Mods {
 }
 
 function rendererOpts() {
-  return { fontSize: prefs.fontSize, theme: THEMES[prefs.theme], bnScale: prefs.bnScale };
+  return { fontSize: prefs.fontSize, theme: THEMES[prefs.theme], bnScale: prefs.bnScale, animate: prefs.animations };
 }
 
 // ================================================================ sessions
@@ -366,12 +369,14 @@ function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
 function renderStorage() {
   const status = $('#storage-status');
   const button = $('#storage-btn');
+  $('#storage-card').hidden = false;
   if (hostState.host === 'dev') {
     status.textContent = 'Available in the Android app.';
     button.hidden = true;
   } else if (hostState.storage) {
-    status.replaceChildren(h('span', { class: 'ok-text' }, 'Access granted'), ' — your files are in /sdcard and ~/storage.');
-    button.hidden = true;
+    // Nothing left to do here once access is granted.
+    $('#storage-card').hidden = true;
+    return;
   } else {
     status.textContent = 'Not allowed yet.';
     button.hidden = false;
@@ -904,6 +909,11 @@ function openSettingsSheet() {
       sample?.renderer.setOptions({ bnScale: v });
     }, savePrefs),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
+    toggle('Animations', 'New output fades in, the cursor glides and the screen slides smoothly.', prefs.animations, (v) => {
+      prefs.animations = v;
+      savePrefs();
+      for (const s of sessions.values()) s.renderer.setOptions({ animate: v });
+    }),
     toggle('Compose bar', 'A text box under the terminal — handy for Bangla keyboards and long prompts.', prefs.compose, setCompose),
     toggle('Keyboard compatibility mode', 'Turn on if your keyboard types nothing or wrong characters in the terminal.', prefs.kbCompat, (v) => {
       prefs.kbCompat = v;
@@ -973,6 +983,8 @@ async function boot() {
       open: (kind: SessionKind) => newSession(kind),
       focusKeys: () => focusTerminalKeyboard(),
       send: (line: string) => active?.sendLine(line),
+      /** raw keys, e.g. '\x03' */
+      keys: (seq: string) => active?.input(seq),
       screen: () => (active ? active.logicalLines().slice(-40).join('\n') : ''),
       errors: () => jsErrors.join('\n'),
       dump: () => (active ? active.debugDump() : ''),

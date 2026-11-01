@@ -2,6 +2,18 @@
 # Prompt styles:  agy-prompt powerline   (default, Oh-My-Posh-like segments)
 #                 agy-prompt simple      (one short line)
 
+# ---------------------------------------------------------------- ble.sh (autosuggestions)
+# Fish-like grey suggestions from history (→ or End accepts), Tab completion menu and
+# syntax colours. Off with:  agy-autocomplete off
+if [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && [ -z "$CLAUDECODE" ] && [ "$TERM" != dumb ] \
+   && [ -f /usr/share/blesh/ble.sh ] && [ ! -f "$HOME/.config/agy-terminal/no-autocomplete" ]; then
+  source /usr/share/blesh/ble.sh --noattach
+fi
+# bash's own completions for apt, git, systemctl … (package: bash-completion)
+if [ -z "$BASH_COMPLETION_VERSINFO" ] && [ -f /usr/share/bash-completion/bash_completion ] && [[ $- == *i* ]]; then
+  . /usr/share/bash-completion/bash_completion
+fi
+
 alias ls='ls --color=auto'
 alias ll='ls -alh --color=auto'
 alias la='ls -A --color=auto'
@@ -13,7 +25,11 @@ __agy_style_file="$HOME/.config/agy-terminal/prompt"
 __agy_timer_start() {
   [ -z "$__agy_in_prompt" ] && [ -z "$__agy_t0" ] && __agy_t0=${EPOCHREALTIME/[.,]/}
 }
-trap '__agy_timer_start' DEBUG
+if [[ ${BLE_VERSION-} ]]; then
+  blehook PREEXEC+=__agy_timer_start
+else
+  trap '__agy_timer_start' DEBUG
+fi
 
 # ---------------------------------------------------------------- git branch (no subprocess)
 __agy_git_branch() {
@@ -133,3 +149,20 @@ command_not_found_handle() {
   printf '%s: command not found\n' "$1" >&2
   return 127
 }
+
+# ---------------------------------------------------------------- ble.sh look & attach
+if [[ ${BLE_VERSION-} ]]; then
+  bleopt char_width_mode=west          # same widths as the app's renderer, no terminal probing
+  bleopt complete_auto_delay=60
+  bleopt complete_menu_style=align-nowrap
+  bleopt edit_abell= edit_vbell=       # no beeps or flashes
+  bleopt exec_errexit_mark=            # the prompt already shows a failed command's status
+  bleopt exec_elapsed_mark=            # …and how long it took
+  bleopt prompt_eol_mark=$'\e[38;2;108;112;134m⏎\e[m'
+  ble-face auto_complete='fg=#6c7086'
+  ble-face command_builtin='fg=#f38ba8' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'
+  ble-face command_alias='fg=#89dceb' command_keyword='fg=#89b4fa'
+  ble-face syntax_quoted='fg=#a6e3a1' syntax_comment='fg=#6c7086' syntax_error='fg=#1e1e2e,bg=#f38ba8'
+  ble-face filename_directory='underline,fg=#89b4fa' region='bg=#45475a'
+  ble-attach
+fi

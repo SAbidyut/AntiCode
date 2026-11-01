@@ -160,6 +160,8 @@ export interface RendererOptions {
   theme: TermTheme;
   /** Scale applied to Bangla runs relative to the Latin font size. */
   bnScale: number;
+  /** Gentle motion: new output lines fade in, the cursor glides, the view slides. */
+  animate?: boolean;
 }
 
 interface Row {
@@ -186,6 +188,14 @@ export class BanglaRenderer {
   private bufferKey = '';
   private lastBaseY = 0;
   private zoom = 1;
+  // ---- motion ----
+  /** Highest buffer line that has been shown with content (new lines past it fade in). */
+  private revealedUpTo = -1;
+  private suppressReveal = true;
+  private lastCursorT = '';
+  private lastCursorLine = -1;
+  private typingTimer = 0;
+  private animBaseY = 0;
 
   cellWidth = 8;
   lineHeight = 18;
@@ -212,6 +222,7 @@ export class BanglaRenderer {
     this.el.append(this.zoomLayer);
     this.palette = build256(opts.theme);
     this.applyMetrics();
+    this.el.classList.toggle('anim', !!opts.animate);
   }
 
   /** Whole lines scrolled up from the bottom. */
@@ -238,6 +249,7 @@ export class BanglaRenderer {
     this.palette = build256(this.opts.theme);
     this.widthCache.clear();
     this.applyMetrics();
+    this.el.classList.toggle('anim', !!this.opts.animate);
     this.scrollOffset = lines;
     this.invalidate();
   }
@@ -520,7 +532,8 @@ export class BanglaRenderer {
         // Nerd Font icons (private use area) are wider than a cell: let them spill into the
         // next cell (usually a space) instead of being clipped, like other terminals do.
         const pua = cp >= 0xe000 && cp <= 0xf8ff;
-        html += `<span class="bx${pua ? ' pua' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
+        const sym = !pua && cp >= 0x2100 && cp <= 0x2bff;
+        html += `<span class="bx${pua ? ' pua' : sym ? ' sym' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
         continue;
       }
       const text = cls === 'space' ? ' ' : chars;
@@ -539,6 +552,8 @@ export class BanglaRenderer {
 
   private recycle(el: HTMLDivElement) {
     el.remove();
+    el.classList.remove('row-in');
+    el.style.animationDelay = '';
     if (this.spare.length < 64) this.spare.push(el);
   }
 
@@ -553,13 +568,22 @@ export class BanglaRenderer {
     const cols = term.cols;
     const lh = this.lineHeight;
 
-    // A different buffer (alt screen), a resize, or old lines dropped off the top of
-    // the scrollback all invalidate the line-number → row mapping.
-    const key = `${buf.type}|${cols}|${buf.getLine(0)?.translateToString(true).slice(0, 80) ?? ''}`;
+    // A different buffer (alt screen), a resize, clearing the scrollback, or old lines
+    // dropped off the top of a full scrollback all invalidate the line → row mapping.
+    // (Line 0 is only compared once it is history: while the screen hasn't scrolled, the
+    // top line is the one being edited and the mapping can't shift.)
+    const top = buf.baseY > 0 ? buf.getLine(0)?.translateToString(true).slice(0, 80) ?? '' : '';
+    const key = `${buf.type}|${cols}|${buf.baseY > 0 ? 's' : 't'}|${top}`;
     if (key !== this.bufferKey) {
       this.bufferKey = key;
       for (const r of this.rows.values()) this.recycle(r.el);
       this.rows.clear();
+      // whatever is on screen now is not "new output"
+      this.suppressReveal = true;
+      this.revealedUpTo = -1;
+      for (let i = buf.length - 1; i >= buf.baseY; i--) {
+        if (buf.getLine(i)?.translateToString(true)) { this.revealedUpTo = i; break; }
+      }
     }
 
     // While scrolled back, keep looking at the same lines when new output arrives.
@@ -579,13 +603,19 @@ export class BanglaRenderer {
         this.rows.delete(i);
       }
     }
+    const cursorLine = buf.baseY + buf.cursorY;
+    const motion = !!this.opts.animate && buf.type === 'normal';
+    const canReveal = motion && !this.suppressReveal && this.scrollPx === 0;
+    const revealed: HTMLDivElement[] = [];
     for (let i = first; i <= last; i++) {
       let r = this.rows.get(i);
       const live = i >= buf.baseY; // the live screen can still change; scrollback can't
       if (r && !live) continue;
-      const html = this.rowToHtml(buf.getLine(i), cols);
+      const line = buf.getLine(i);
+      const html = this.rowToHtml(line, cols);
+      let el: HTMLDivElement | null = null;
       if (!r) {
-        const el = this.spare.pop() ?? document.createElement('div');
+        el = this.spare.pop() ?? document.createElement('div');
         el.className = 'term-row';
         el.style.transform = `translateY(${i * lh}px)`;
         el.innerHTML = html;
@@ -594,9 +624,31 @@ export class BanglaRenderer {
       } else if (r.html !== html) {
         r.html = html;
         r.el.innerHTML = html;
+        el = r.el;
+      }
+      // A line getting content for the first time is new output: let it fade in. Not the
+      // line being typed on (that would make typing feel slow).
+      if (el && i > this.revealedUpTo && live && line?.translateToString(true)) {
+        this.revealedUpTo = i;
+        if (canReveal && i !== cursorLine) revealed.push(el);
       }
     }
+    this.suppressReveal = false;
+    // Too much at once (cat of a big file) — just show it.
+    if (revealed.length && revealed.length <= rows) {
+      revealed.forEach((el, k) => {
+        el.style.animationDelay = k ? `${Math.min(k, 8) * 18}ms` : '';
+        el.classList.add('row-in');
+      });
+    }
 
+    // New output scrolling the screen: slide instead of jumping (only while following
+    // the output, and only for a few lines — a flood just jumps).
+    const grew = buf.baseY - this.animBaseY;
+    this.animBaseY = buf.baseY;
+    const slide = motion && this.scrollPx === 0 && grew > 0 && grew <= 4;
+    const dur = slide ? '140ms' : '0s';
+    if (this.viewport.style.transitionDuration !== dur) this.viewport.style.transitionDuration = dur;
     this.viewport.style.transform = `translateY(${(-topPx).toFixed(2)}px)`;
     const h = `${rows * lh}px`;
     if (this.zoomLayer.style.height !== h) this.zoomLayer.style.height = h;
@@ -615,11 +667,23 @@ export class BanglaRenderer {
     }
     this.applyLayerTransform();
 
-    const cursorLine = buf.baseY + buf.cursorY;
     const showCursor = this.cursorVisible && this.scrollPx < lh;
+    const wasShown = this.cursorEl.style.display !== 'none';
     this.cursorEl.style.display = showCursor ? 'block' : 'none';
     if (showCursor) {
-      this.cursorEl.style.transform = `translate(${(buf.cursorX * this.cellWidth).toFixed(2)}px, ${cursorLine * lh}px)`;
+      const t = `translate(${(buf.cursorX * this.cellWidth).toFixed(2)}px, ${cursorLine * lh}px)`;
+      if (t !== this.lastCursorT) {
+        // glide to the next cell / line; jump when it reappears or moves far (TUIs)
+        const far = !wasShown || Math.abs(cursorLine - this.lastCursorLine) > 2;
+        this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
+        this.cursorEl.style.transform = t;
+        this.lastCursorT = t;
+        this.lastCursorLine = cursorLine;
+        // keep it solid while it moves (typing); blink again when it rests
+        this.cursorEl.classList.add('moving');
+        clearTimeout(this.typingTimer);
+        this.typingTimer = window.setTimeout(() => this.cursorEl.classList.remove('moving'), 600);
+      }
       this.cursorEl.classList.toggle('focused', this.focused);
     }
     const scrolled = this.scrollPx >= lh;

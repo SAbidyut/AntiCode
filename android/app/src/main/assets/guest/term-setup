@@ -14,7 +14,7 @@ step() { echo -e "\n${G}▸ $*${N}"; }
 step "Updating package lists"
 apt-get update || { echo -e "${R}apt update failed — check your connection and try again.${N}"; exit 1; }
 step "Installing basic tools (curl, git, nano …)"
-apt-get install -y --no-install-recommends ca-certificates curl git nano less procps unzip xz-utils zstd openssh-client \
+apt-get install -y --no-install-recommends ca-certificates curl git nano less procps unzip xz-utils zstd openssh-client bash-completion \
   || { echo -e "${R}Install failed — run 'term-setup' to try again.${N}"; exit 1; }
 grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 touch "$done_marker"

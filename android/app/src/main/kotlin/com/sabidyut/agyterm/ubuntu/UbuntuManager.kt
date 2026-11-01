@@ -135,7 +135,7 @@ class UbuntuManager(private val context: Context) {
         counting.use { extractTarGz(it) }
     }
 
-    private fun extractTarGz(input: InputStream) {
+    private fun extractTarGz(input: InputStream, root: File = rootfs) {
         val hardLinks = mutableListOf<Pair<File, File>>()
         val dirModes = mutableListOf<Pair<File, Int>>()
         TarArchiveInputStream(GZIPInputStream(input)).use { tar ->
@@ -143,8 +143,8 @@ class UbuntuManager(private val context: Context) {
                 val entry: TarArchiveEntry = tar.nextEntry ?: break
                 val name = entry.name.removePrefix("./").trimEnd('/')
                 if (name.isEmpty()) continue
-                val dest = File(rootfs, name)
-                if (!dest.canonicalPath.startsWith(rootfs.canonicalPath)) continue // path traversal guard
+                val dest = File(root, name)
+                if (!dest.canonicalPath.startsWith(root.canonicalPath)) continue // path traversal guard
                 when {
                     entry.isDirectory -> {
                         dest.mkdirs()
@@ -156,7 +156,7 @@ class UbuntuManager(private val context: Context) {
                         Os.symlink(entry.linkName, dest.absolutePath)
                     }
                     entry.isLink -> {
-                        hardLinks += dest to File(rootfs, entry.linkName.removePrefix("./"))
+                        hardLinks += dest to File(root, entry.linkName.removePrefix("./"))
                     }
                     entry.isFile -> {
                         dest.parentFile?.mkdirs()
@@ -208,6 +208,27 @@ class UbuntuManager(private val context: Context) {
 
     @Volatile private var guestFilesSynced = false
 
+    /** ble.sh (bash autosuggestions) ships in the APK; unpack it when its version changes. */
+    private fun syncBlesh() {
+        val version = try {
+            context.assets.open("blesh.version").bufferedReader().use { it.readText().trim() }
+        } catch (_: Exception) {
+            return // not bundled in this build
+        }
+        val dir = File(rootfs, "usr/share/blesh")
+        val stamp = File(dir, ".agy-version")
+        if (stamp.exists() && stamp.readText().trim() == version) return
+        try {
+            dir.deleteRecursively()
+            dir.mkdirs()
+            context.assets.open("blesh.tar.gz").use { extractTarGz(it, dir) }
+            stamp.writeText(version)
+        } catch (e: Exception) {
+            Log.w(TAG, "ble.sh unpack failed", e)
+            dir.deleteRecursively()
+        }
+    }
+
     /**
      * Files this app owns inside Ubuntu (helper scripts, group names). Rewritten once per
      * app start so fixes reach Ubuntu installs made by older versions of the app.
@@ -225,12 +246,13 @@ class UbuntuManager(private val context: Context) {
         fun asset(name: String) = context.assets.open("guest/$name").bufferedReader().use { it.readText() }
         write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
-        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start")) {
+        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "agy-autocomplete")) {
             write("usr/local/bin/$script", asset(script), exec)
         }
         write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)
         write("etc/profile.d/zz-agy-terminal.sh", asset("profile.sh"), 0x1a4)
         write("etc/agy-terminal.bashrc", asset("bashrc"), 0x1a4)
+        syncBlesh()
         // Hook the prompt/aliases into root's .bashrc (after Ubuntu's own PS1).
         val bashrc = File(rootfs, "root/.bashrc")
         val hook = "[ -f /etc/agy-terminal.bashrc ] && . /etc/agy-terminal.bashrc"
