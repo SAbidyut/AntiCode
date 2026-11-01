@@ -52,11 +52,15 @@ scripts/        fetch-proot.sh — Termux এর proot বিল্ড jniLibs �
 
 ```bash
 cd web-terminal && npm ci && npm run build && cd ..
-scripts/fetch-proot.sh            # লাগবে: curl, ar, tar, patchelf
+scripts/fetch-proot.sh            # লাগবে: curl, ar, tar
 cd android && ./gradlew assembleRelease
 ```
 
 প্রতিবার push এ GitHub Actions নিজেই APK বানিয়ে `latest` রিলিজে দেয় (`.github/workflows/android.yml`)।
+সব বিল্ড একই key (`android/app/agyterm-sideload.jks`) দিয়ে sign হয়, তাই নতুন APK পুরোনোটার উপরেই ইনস্টল হয় — Ubuntu/সেশন মুছে যায় না।
+
+CI তে একটা Android emulator এ অ্যাপের **self test** চলে: Ubuntu নামানো → proot দিয়ে চালু → `agy-setup` (apt + অফিসিয়াল ইনস্টলার) → `agy --version`।
+নিজে চালাতে: debug APK ইনস্টল করে `adb shell am start -n com.sabidyut.agyterm/.MainActivity --ez selftest true`, লগ: `adb logcat -s AgySelfTest`।
 
 ব্রাউজারে UI ডেভেলপমেন্ট (আসল bash সহ, শুধু localhost এ):
 
