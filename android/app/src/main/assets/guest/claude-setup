@@ -1,0 +1,17 @@
+#!/bin/bash
+# Agy Terminal — install Claude Code (run again any time with: claude-setup)
+#   claude-setup --auto   skip the apt step when the basic tools are already there
+set -o pipefail
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+/usr/local/bin/term-setup "$1" || exit 1
+export PATH="$HOME/.local/bin:$PATH"
+if ! claude --version >/dev/null 2>&1; then
+  echo -e "\n${G}▸ Installing Claude Code (Anthropic's official installer)${N}"
+  echo -e "${Y}  About 120 MB to download, ~330 MB on the phone.${N}"
+  curl -fsSL https://claude.ai/install.sh | bash \
+    || { echo -e "${R}Installing Claude Code failed — run 'claude-setup' to try again.${N}"; exit 1; }
+fi
+claude --version >/dev/null 2>&1 \
+  || { echo -e "${R}Claude Code was installed but does not start on this phone.${N}"; exit 1; }
+echo -e "\n${G}✓ All set! Type 'claude' to start Claude Code.${N}"
+echo -e "  Sign in with your Claude account when it asks; the sign-in page opens inside the app.\n"

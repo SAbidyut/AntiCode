@@ -25,7 +25,7 @@ function create(kind, cols, rows) {
     env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'C.UTF-8' },
     encoding: null,
   });
-  const s = { p, kind, title: kind === 'agy' ? 'Antigravity' : 'Ubuntu', alive: true, buf: [], size: 0 };
+  const s = { p, kind, title: { agy: 'Antigravity', claude: 'Claude Code' }[kind] ?? 'Ubuntu', alive: true, buf: [], size: 0 };
   sessions.set(id, s);
   p.onData((d) => {
     const b = Buffer.from(d);

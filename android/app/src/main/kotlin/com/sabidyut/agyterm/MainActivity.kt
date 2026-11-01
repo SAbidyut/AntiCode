@@ -403,6 +403,7 @@ class MainActivity : ComponentActivity() {
         selftestScreen { screen ->
             if (screen.contains("SD2OK")) {
                 Log.i(SELFTEST, "SELFTEST_STORAGE_OK")
+                selftestClaudeInUi()
             } else if (n < 10) {
                 main.postDelayed({ pollStorage(n + 1) }, 2000)
             } else {
@@ -410,6 +411,38 @@ class MainActivity : ComponentActivity() {
                 Log.e(SELFTEST, "SELFTEST_STORAGE_FAIL /sdcard not readable inside Ubuntu")
             }
         }
+    }
+
+    /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */
+    private fun selftestClaudeInUi() {
+        Log.i(SELFTEST, "phase 4: starting Claude Code in the real UI")
+        web.evaluateJavascript("__selftest.open('claude')", null)
+        pollClaude(0)
+    }
+
+    private fun pollClaude(n: Int) {
+        main.postDelayed({
+            web.evaluateJavascript("JSON.stringify({s: __selftest.screen(), e: __selftest.errors()})") { raw ->
+                val obj = try {
+                    JSONObject(JSONObject("{\"v\":$raw}").getString("v"))
+                } catch (_: Exception) {
+                    JSONObject().put("s", "").put("e", "unreadable: $raw")
+                }
+                val screen = obj.optString("s")
+                val errors = obj.optString("e")
+                val ok = errors.isBlank() && Regex("Welcome to Claude|Claude Code v|text style|Select login").containsMatchIn(screen)
+                if (ok) {
+                    for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "claude| $line")
+                    Log.i(SELFTEST, "SELFTEST_CLAUDE_OK")
+                } else if (n < 12) {
+                    pollClaude(n + 1)
+                } else {
+                    for (line in screen.lines()) if (line.isNotBlank()) Log.i(SELFTEST, "claude| $line")
+                    if (errors.isNotBlank()) Log.e(SELFTEST, "ui js errors: $errors")
+                    Log.e(SELFTEST, "SELFTEST_CLAUDE_FAIL Claude Code screen never appeared")
+                }
+            }
+        }, 5000)
     }
 
     private fun scheduleScreenChecks() {

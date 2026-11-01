@@ -1,7 +1,7 @@
 # Agy টার্মিনাল
 
-ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
-সাথে Mac/PC তে চলা Antigravity কে ফোন থেকে **রিমোট কন্ট্রোল** করার শর্টকাট।
+ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)** + **Claude Code (`claude`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
+সাথে Mac/PC তে চলা Antigravity আর Claude Code কে ফোন থেকে **রিমোট কন্ট্রোল** করার শর্টকাট।
 
 ## ফোনে ইনস্টল
 
@@ -12,6 +12,8 @@
 4. **✦ Antigravity চালান** চাপুন। প্রথমবার নিজে থেকেই `curl`, `git` ইত্যাদি আর Google এর অফিসিয়াল ইনস্টলার
    (`curl -fsSL https://antigravity.google/cli/install.sh | bash`) দিয়ে `agy` ইনস্টল হবে, তারপর Google লগইন চাইবে —
    লগইন লিংক ফোনের ব্রাউজারে খুলে যাবে।
+5. **Claude Code** টাইলে চাপুন। প্রথমবার Anthropic এর অফিসিয়াল ইনস্টলার (`curl -fsSL https://claude.ai/install.sh | bash`,
+   ~১২০MB ডাউনলোড) দিয়ে `claude` ইনস্টল হবে, তারপর Claude অ্যাকাউন্টে লগইন চাইবে।
 
 ## ব্যবহার
 
@@ -23,23 +25,31 @@
 | বাংলায় / লম্বা লেখা | কী-বারের ✎ বাটন → নিচে টাইপ বক্স (Gboard/Ridmik/Avro) → ➤ |
 | Esc, Tab, Ctrl, Alt, তীর, ^C, Home/End | দুই সারির কী-বার; ⌨ বাটনে কীবোর্ড খোলা/বন্ধ |
 | ফোনের ফাইল | হোমে **Phone storage → Allow access**, বা Ubuntu তে `setup-storage`; তারপর `/sdcard` আর `~/storage/downloads`, `dcim`, `pictures` … |
-| Mac এর রিমোট ড্যাশবোর্ড | টপবারের রিমোট আইকন (অ্যাপের ভিতরেই Chrome ট্যাবে খোলে) |
+| Mac এর রিমোট ড্যাশবোর্ড | টপবারের রিমোট আইকন: Claude Code ট্যাবে থাকলে claude.ai/code, নইলে Antigravity এর ড্যাশবোর্ড (অ্যাপের ভিতরেই Chrome ট্যাবে খোলে) |
 | পড়া/কপি, পেস্ট, টেক্সট ছোট-বড়, থিম | টপবারের ⋮ মেনু; সেটিংস (Midnight / Dracula / Solarized / Paper, কার্সর স্টাইল) |
 | স্ক্রল / ফন্ট | আঙুলে স্ক্রল (মোমেন্টাম সহ), দুই আঙুলে পিঞ্চ; লম্বা চাপ = Reader view |
 | কীবোর্ড ঠিকমতো টাইপ না করলে | Settings → **Keyboard compatibility mode** |
 | prompt এর ডিজাইন | ডিফল্ট Oh-My-Posh ধাঁচের powerline prompt; `agy-prompt simple` বা `agy-prompt powerline` দিয়ে বদলান |
-| আবার সেটআপ | Ubuntu তে `agy-setup` |
+| আবার সেটআপ | Ubuntu তে `agy-setup` / `claude-setup` (শুধু apt টুল: `term-setup`) |
 | কিছু ঠিকমতো না চললে | ⋮ → **Copy debug log** → চ্যাটে পেস্ট করুন |
 
 অ্যাপ বন্ধ করলেও সেশন চলতে থাকে (নোটিফিকেশনে দেখা যায়); নোটিফিকেশনের "Stop all" দিয়ে থামানো যায়।
 
-## Mac/PC এর Antigravity রিমোট কন্ট্রোল
+## Mac/PC এর রিমোট কন্ট্রোল
+
+### Antigravity
 
 Mac এর টার্মিনালে `agy --remote-control` (বা চলমান agy তে `/remote-control`) দিন।
 তারপর অ্যাপের হোমে **রিমোট ড্যাশবোর্ড খুলুন** — একই Google অ্যাকাউন্টে লগইন করলে Mac এ চলা সব কাজ দেখা ও কন্ট্রোল করা যায়।
 ড্যাশবোর্ডটা Google এর। Google নিরাপত্তার কারণে অ্যাপের ভিতরের WebView থেকে Google লগইন করতে দেয় না, তাই এটা
 অ্যাপের ভিতরেই Chrome এর Custom Tab এ খোলে (আলাদা ব্রাউজার অ্যাপে যায় না, ← চাপলে টার্মিনালে ফেরে, লগইন মনে রাখে)।
 ঠিকানা হোম স্ক্রিনে বদলানো যায়।
+
+### Claude Code
+
+Mac এর টার্মিনালে `claude --remote-control` দিন (বা চলমান Claude Code এ `/remote-control`)। সবসময় চালু রাখতে Claude Code এ
+`/config` → **Enable Remote Control for all sessions**। তারপর অ্যাপের হোমে **Open claude.ai/code** — একই Claude অ্যাকাউন্টে
+(Pro/Max প্ল্যান) লগইন করলে সেশনগুলো দেখা ও কন্ট্রোল করা যায়।
 
 ## কীভাবে কাজ করে
 
@@ -68,7 +78,8 @@ cd android && ./gradlew assembleRelease
 সব বিল্ড একই key (`android/app/agyterm-sideload.jks`) দিয়ে sign হয়, তাই নতুন APK পুরোনোটার উপরেই ইনস্টল হয় — Ubuntu/সেশন মুছে যায় না।
 
 CI তে একটা Android emulator এ অ্যাপের **self test** চলে: Ubuntu নামানো → proot দিয়ে চালু → `agy-setup` (apt + অফিসিয়াল ইনস্টলার) → `agy --version`
-→ তারপর আসল UI দিয়ে `agy` খুলে তার লগইন স্ক্রিন আঁকা হচ্ছে কিনা, কীবোর্ডে টাইপ করা লেখা শেলে পৌঁছায় কিনা, আর `/sdcard` এ ফোনের ফাইল দেখা যায় কিনা যাচাই। Web UI এর e2e টেস্টও (Chromium, আসল bash) CI তে চলে।
++ `claude-setup` → `claude --version`
+→ তারপর আসল UI দিয়ে `agy` আর Claude Code খুলে তাদের স্ক্রিন আঁকা হচ্ছে কিনা, কীবোর্ডে টাইপ করা লেখা শেলে পৌঁছায় কিনা, আর `/sdcard` এ ফোনের ফাইল দেখা যায় কিনা যাচাই। Web UI এর e2e টেস্টও (Chromium, আসল bash) CI তে চলে।
 নিজে চালাতে: debug APK ইনস্টল করে `adb shell am start -n com.sabidyut.agyterm/.MainActivity --ez selftest true`, লগ: `adb logcat -s AgySelfTest`।
 
 ব্রাউজারে UI ডেভেলপমেন্ট (আসল bash সহ, শুধু localhost এ):
@@ -84,4 +95,4 @@ node dev/e2e.mjs             # end-to-end চেক (playwright লাগবে)
 
 - Kalpurush ফন্ট — Avro Font Development Project, OmicronLab (SIL OFL 1.0); JetBrains Mono (SIL OFL 1.1)
 - proot — Termux প্যাকেজ (GPL-2.0), xterm.js (MIT), Apache Commons Compress (Apache-2.0)
-- Antigravity CLI Google এর; এই অ্যাপ শুধু Google এর অফিসিয়াল ইনস্টলার চালায়।
+- Antigravity CLI Google এর, Claude Code Anthropic এর; এই অ্যাপ শুধু তাদের অফিসিয়াল ইনস্টলার চালায়।

@@ -121,3 +121,15 @@ __agy_prompt() {
   __agy_in_prompt=
 }
 PROMPT_COMMAND=__agy_prompt
+
+# ---------------------------------------------------------------- agents on demand
+# Typing 'agy' or 'claude' before they are installed installs them first.
+command_not_found_handle() {
+  case "$1" in
+    agy) /usr/local/bin/agy-setup --auto && hash -r && command agy "${@:2}"; return ;;
+    claude) /usr/local/bin/claude-setup --auto && hash -r && command claude "${@:2}"; return ;;
+  esac
+  if [ -x /usr/lib/command-not-found ]; then /usr/lib/command-not-found -- "$1"; return $?; fi
+  printf '%s: command not found\n' "$1" >&2
+  return 127
+}

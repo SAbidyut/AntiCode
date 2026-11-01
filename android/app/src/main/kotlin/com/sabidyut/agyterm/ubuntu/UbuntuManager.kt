@@ -225,8 +225,9 @@ class UbuntuManager(private val context: Context) {
         fun asset(name: String) = context.assets.open("guest/$name").bufferedReader().use { it.readText() }
         write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
-        write("usr/local/bin/agy-setup", asset("agy-setup"), exec)
-        write("usr/local/bin/agy-start", asset("agy-start"), exec)
+        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start")) {
+            write("usr/local/bin/$script", asset(script), exec)
+        }
         write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)
         write("etc/profile.d/zz-agy-terminal.sh", asset("profile.sh"), 0x1a4)
         write("etc/agy-terminal.bashrc", asset("bashrc"), 0x1a4)
@@ -310,7 +311,10 @@ class UbuntuManager(private val context: Context) {
         Os.symlink("$nativeDir/libtalloc.so", link.absolutePath)
     }
 
-    /** kind = "ubuntu" (login shell) or "agy" (Antigravity CLI, then a shell). */
+    /**
+     * kind = "ubuntu" (login shell), "agy" (Antigravity CLI, then a shell) or
+     * "claude" (Claude Code, then a shell).
+     */
     fun launch(kind: String): Launch {
         tmpDir.mkdirs()
         prepareLibs()
@@ -357,10 +361,12 @@ class UbuntuManager(private val context: Context) {
         )
         when (kind) {
             "agy" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
+            "claude" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/claude-start")
             // used by the debug-only self test (see SessionService.runSelfTest)
             "selftest" -> args += listOf(
                 "/bin/bash", "-lc",
-                "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && echo SELFTEST_OK; " +
+                "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && " +
+                    "claude-setup --auto && claude --version && echo SELFTEST_OK; " +
                     // diagnostics: terminal settings, and agy's raw output on a PTY made inside Ubuntu
                     "echo STTY: $(stty -a | tr '\\n' ' '); " +
                     "(sleep 30) | timeout -s KILL 25 script -qfc agy /tmp/agy.ts >/dev/null 2>&1; " +

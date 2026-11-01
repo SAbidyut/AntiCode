@@ -19,11 +19,12 @@ echo "--- proot --version"
 adb shell "mkdir -p /data/local/tmp/agylib && ln -sf $LIB/libtalloc.so /data/local/tmp/agylib/libtalloc.so.2 && LD_LIBRARY_PATH=/data/local/tmp/agylib:$LIB $LIB/libproot.so --version" | head -3
 
 echo "--- self test (up to 30 min)"
-# Phase 1: Ubuntu install + agy-setup + `agy --version`          (SELFTEST_OK)
+# Phase 1: Ubuntu install + agy/claude setup + `--version`s     (SELFTEST_OK)
 # Phase 2: `agy` opened through the real web UI draws its screen  (SELFTEST_AGY_OK)
 # Phase 3: keys typed on the keyboard reach the shell             (SELFTEST_TYPE_OK)
 #          …and still do after scrolling the terminal             (SELFTEST_TYPE_AFTER_SWIPE_OK)
 #          and the phone's storage is visible in /sdcard           (SELFTEST_STORAGE_OK)
+# Phase 4: Claude Code opened through the real web UI draws        (SELFTEST_CLAUDE_OK)
 deadline=$((SECONDS + 1800))
 result=1
 typed=0
@@ -43,8 +44,8 @@ while [ $SECONDS -lt $deadline ]; do
     adb shell input keyevent 66
     typed=2
   fi
-  if grep -q "SELFTEST_STORAGE_OK" <<<"$log"; then result=0; break; fi
-  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_STORAGE_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
+  if grep -q "SELFTEST_CLAUDE_OK" <<<"$log"; then result=0; break; fi
+  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
   if grep -q "session exited with code [^0]" <<<"$log"; then break; fi
   sleep 5
 done

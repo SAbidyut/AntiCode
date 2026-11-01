@@ -391,6 +391,10 @@ export class BanglaRenderer {
         `${g} ${x === 0 ? '0' : `${(x / (8 - bw)) * 100}%`} ${y === 0 ? '0' : `${(y / (8 - bh)) * 100}%`}/${(bw / 8) * 100}% ${(bh / 8) * 100}% no-repeat`);
       return `<span class="dg" style="${width}${style}background:${img.join(',')};${bgOf(style)}"></span>`;
     }
+    // Shades ░ ▒ ▓ as a flat translucent fill: a dithered pattern looks like a screen
+    // door on a phone (Claude Code's welcome art is made of them).
+    const shade = cp === 0x2591 ? 0.25 : cp === 0x2592 ? 0.5 : cp === 0x2593 ? 0.75 : 0;
+    if (shade) return `<span class="dg" style="${width}${style}"><i class="sh" style="opacity:${shade}"></i></span>`;
     const pl = POWERLINE[cp];
     if (pl) {
       const paint = pl.fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"';

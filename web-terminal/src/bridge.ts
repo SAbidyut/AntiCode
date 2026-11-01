@@ -3,7 +3,7 @@
 //    and calls back into `window.__native.*`.
 //  - In a desktop browser (development / tests): a WebSocket to dev/bridge-server.mjs.
 
-export type SessionKind = 'ubuntu' | 'agy' | 'android';
+export type SessionKind = 'ubuntu' | 'agy' | 'claude' | 'android';
 
 export interface SessionInfo {
   id: string;

@@ -15,7 +15,7 @@
           <div class="logo"><i data-icon="sparkle"></i></div>
           <div>
             <h1>Agy Terminal</h1>
-            <p>Ubuntu + Antigravity CLI on your phone</p>
+            <p>Ubuntu + Antigravity &amp; Claude Code</p>
           </div>
         </div>
         <button class="icon-btn" id="settings-btn" aria-label="Settings"><i data-icon="settings"></i></button>
@@ -28,11 +28,12 @@
         <div class="list"></div>
       </section>
 
+      <h2 class="group-title">Remote control</h2>
       <section class="card">
         <div class="card-head">
-          <div class="card-icon tint-blue"><i data-icon="remote"></i></div>
+          <div class="card-icon tint-blue"><i data-icon="sparkle"></i></div>
           <div>
-            <h3>Remote control</h3>
+            <h3>Antigravity</h3>
             <p>Watch and control Antigravity running on your Mac or PC.</p>
           </div>
         </div>
@@ -44,7 +45,27 @@
           </li>
           <li>Open the dashboard and sign in with the same Google account. It opens inside this app.</li>
         </ol>
-        <button class="btn btn-secondary" id="remote-btn"><i data-icon="external"></i><span>Open remote dashboard</span></button>
+        <button class="btn btn-secondary" id="remote-btn"><i data-icon="external"></i><span>Open Antigravity dashboard</span></button>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div class="card-icon tint-clay"><i data-icon="claude"></i></div>
+          <div>
+            <h3>Claude Code</h3>
+            <p>Watch and control Claude Code running on your Mac or PC.</p>
+          </div>
+        </div>
+        <ol class="steps">
+          <li>
+            On your computer run
+            <span class="cmd"><code>claude --remote-control</code><button class="chip" id="copy-claude-cmd">Copy</button></span>
+            or type <code>/remote-control</code> inside Claude Code.
+          </li>
+          <li>To keep it always on: inside Claude Code run <code>/config</code> → <em>Enable Remote Control for all sessions</em>.</li>
+          <li>Open claude.ai/code and sign in with the same Claude account (Pro or Max plan). It opens inside this app.</li>
+        </ol>
+        <button class="btn btn-secondary" id="claude-remote-btn"><i data-icon="external"></i><span>Open claude.ai/code</span></button>
       </section>
 
       <section class="card">

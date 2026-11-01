@@ -13,6 +13,8 @@ interface Prefs {
   theme: ThemeName;
   bnScale: number;
   remoteUrl: string;
+  /** Claude Code's remote dashboard (Remote Control sessions). */
+  claudeUrl: string;
   cursor: CursorStyle;
   /** Show the compose bar (for Bangla keyboards / long text). */
   compose: boolean;
@@ -24,6 +26,7 @@ const DEFAULT_PREFS: Prefs = {
   theme: 'midnight',
   bnScale: 1,
   remoteUrl: 'https://antigravity.google.com',
+  claudeUrl: 'https://claude.ai/code',
   cursor: 'block',
   compose: false,
   kbCompat: false,
@@ -175,7 +178,12 @@ function rendererOpts() {
 }
 
 // ================================================================ sessions
-const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', ubuntu: 'terminal', android: 'android' };
+const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', ubuntu: 'terminal', android: 'android' };
+
+/** The remote dashboard that belongs to a session: claude.ai/code for Claude Code, else Antigravity's. */
+function dashboardFor(kind?: SessionKind) {
+  return kind === 'claude' ? prefs.claudeUrl : prefs.remoteUrl;
+}
 
 function addSession(id: string, kind: SessionKind): TerminalSession {
   const s = new TerminalSession(bridge, id, kind, rendererOpts());
@@ -190,7 +198,7 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
 }
 
 async function newSession(kind: SessionKind) {
-  if ((kind === 'ubuntu' || kind === 'agy') && hostState.ubuntu !== 'ready') {
+  if (kind !== 'android' && hostState.ubuntu !== 'ready') {
     toast('Install Ubuntu first');
     showHome();
     return;
@@ -303,10 +311,13 @@ function renderHome() {
   if (st.ubuntu === 'ready') {
     body = [
       pill('ok', 'Ubuntu 24.04 · ready'),
-      h('h2', {}, 'Antigravity, in your pocket'),
-      h('p', {}, 'Run the Antigravity CLI in a real Ubuntu terminal. The first launch installs it and asks you to sign in with Google.'),
+      h('h2', {}, 'Pick your agent'),
+      h('p', {}, 'Each one runs in a real Ubuntu terminal. The first launch installs it and asks you to sign in.'),
+      h('div', { class: 'agents' },
+        agentTile('agy', 'sparkle', 'Antigravity', 'Google'),
+        agentTile('claude', 'claude', 'Claude Code', 'Anthropic'),
+      ),
       h('div', { class: 'actions' },
-        btn('btn-primary', 'sparkle', 'Launch Antigravity', () => newSession('agy')),
         btn('btn-secondary', 'terminal', 'Ubuntu shell', () => newSession('ubuntu')),
       ),
     ];
@@ -337,6 +348,19 @@ function renderHome() {
   hero.replaceChildren(...(body.filter(Boolean) as Node[]));
   renderStorage();
   renderHomeSessions();
+}
+
+function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
+  const b = h('button', { class: `agent-tile agent-${kind}` },
+    h('span', { class: 'agent-icon' }, svg(ic)),
+    h('span', { class: 'agent-name' }, name),
+    h('span', { class: 'agent-sub' }, maker),
+    h('span', { class: 'agent-go' }, 'Launch', svg('chevron')));
+  b.onclick = () => {
+    haptic();
+    newSession(kind);
+  };
+  return b;
 }
 
 function renderStorage() {
@@ -745,6 +769,7 @@ function action(ic: string, title: string, sub: string, run: () => void, danger 
 function openNewSessionSheet() {
   openSheet('New session', h('div', { class: 'action-list' },
     action('sparkle', 'Antigravity', 'Launch the Antigravity CLI', () => newSession('agy')),
+    action('claude', 'Claude Code', 'Launch Anthropic’s Claude Code', () => newSession('claude')),
     action('terminal', 'Ubuntu shell', 'Bash in Ubuntu 24.04', () => newSession('ubuntu')),
     action('android', 'Android shell', 'The phone’s own /system/bin/sh', () => newSession('android')),
   ));
@@ -762,7 +787,8 @@ function openMoreSheet() {
       const t = await bridge.readClipboard();
       if (t) s.paste(t);
     }),
-    action('remote', 'Remote dashboard', 'Antigravity running on your computer', () => bridge.openRemote(prefs.remoteUrl)),
+    action('remote', 'Antigravity dashboard', 'Antigravity running on your computer', () => bridge.openRemote(prefs.remoteUrl)),
+    action('claude', 'Claude Code dashboard', 'claude.ai/code — Remote Control sessions', () => bridge.openRemote(prefs.claudeUrl)),
     action('zoomIn', 'Bigger text', '', () => setFontSize(Math.min(28, prefs.fontSize + 1), true)),
     action('zoomOut', 'Smaller text', '', () => setFontSize(Math.max(9, prefs.fontSize - 1), true)),
     s && action('eraser', 'Clear screen', '', () => s.term.clear()),
@@ -855,11 +881,14 @@ function openSettingsSheet() {
         h('label', { class: 'switch' }, input, h('span', {}))));
   };
 
-  const url = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
-  url.value = prefs.remoteUrl;
-  url.onchange = () => {
-    prefs.remoteUrl = url.value.trim() || DEFAULT_PREFS.remoteUrl;
-    savePrefs();
+  const urlField = (key: 'remoteUrl' | 'claudeUrl') => {
+    const input = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
+    input.value = prefs[key];
+    input.onchange = () => {
+      prefs[key] = input.value.trim() || DEFAULT_PREFS[key];
+      savePrefs();
+    };
+    return input;
   };
 
   openSheet('Settings',
@@ -882,9 +911,13 @@ function openSettingsSheet() {
       bridge.setKeyboardCompat(v);
     }),
     h('div', { class: 'setting' },
-      h('div', { class: 's-title' }, 'Remote dashboard address'),
+      h('div', { class: 's-title' }, 'Antigravity dashboard address'),
       h('div', { class: 's-sub' }, 'Paste the link agy shows if it differs.'),
-      url),
+      urlField('remoteUrl')),
+    h('div', { class: 'setting' },
+      h('div', { class: 's-title' }, 'Claude Code dashboard address'),
+      h('div', { class: 's-sub' }, 'Where Remote Control sessions show up.'),
+      urlField('claudeUrl')),
   );
 }
 
@@ -901,13 +934,18 @@ function bindChrome() {
   $('#home-btn').onclick = () => showHome();
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
-  $('#remote-top-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
+  $('#remote-top-btn').onclick = () => bridge.openRemote(dashboardFor(active?.kind));
   $('#settings-btn').onclick = () => openSettingsSheet();
   $('#sheet-backdrop').onclick = () => closeSheet();
   $('#remote-btn').onclick = () => bridge.openRemote(prefs.remoteUrl);
   $('#storage-btn').onclick = () => bridge.requestStorage();
+  $('#claude-remote-btn').onclick = () => bridge.openRemote(prefs.claudeUrl);
   $('#copy-remote-cmd').onclick = () => {
     bridge.copyText('agy --remote-control');
+    toast('Command copied');
+  };
+  $('#copy-claude-cmd').onclick = () => {
+    bridge.copyText('claude --remote-control');
     toast('Command copied');
   };
   // Any text field in the page (compose box, settings) takes the keyboard back from the terminal.

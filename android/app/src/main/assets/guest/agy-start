@@ -1,7 +1,7 @@
 #!/bin/bash
 # Started by the app's "Antigravity" button: set up if needed, run agy, then stay in a shell.
-[ -f "$HOME/.agy-terminal-setup-done" ] || /usr/local/bin/agy-setup
 export PATH="$HOME/.local/bin:$PATH"
+[ -f "$HOME/.agy-terminal-setup-done" ] && command -v agy >/dev/null 2>&1 || /usr/local/bin/agy-setup --auto
 if command -v agy >/dev/null 2>&1; then
   agy
 else

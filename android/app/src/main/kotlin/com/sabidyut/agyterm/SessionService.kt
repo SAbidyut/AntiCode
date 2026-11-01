@@ -57,12 +57,13 @@ class SessionService : Service() {
 
     fun createSession(kind: String, cols: Int, rows: Int): TermSession {
         val launch = when (kind) {
-            "ubuntu", "agy", "selftest" -> ubuntu.launch(kind)
+            "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind)
             else -> ubuntu.launchAndroidShell()
         }
         val id = UUID.randomUUID().toString().substring(0, 8)
         val title = when (kind) {
             "agy" -> "Antigravity"
+            "claude" -> "Claude Code"
             "ubuntu" -> "Ubuntu"
             else -> "Android"
         }
@@ -80,7 +81,7 @@ class SessionService : Service() {
     }
 
     /**
-     * Debug builds only: installs Ubuntu, then runs first-time setup and `agy --version`
+     * Debug builds only: installs Ubuntu, then runs first-time setup, `agy --version` and `claude --version`
      * inside it, logging everything to logcat (tag AgySelfTest). Used by CI on an emulator:
      *   adb shell am start -n com.sabidyut.agyterm/.MainActivity --ez selftest true
      */
