@@ -494,14 +494,15 @@ class MainActivity : ComponentActivity() {
         pollLine("BLE=$expected.", 10, {
             Log.i(SELFTEST, "SELFTEST_BLE_OK")
             Log.i(SELFTEST, "SELFTEST_SUGGEST_READY")
-            main.postDelayed({
-                // drop whatever the CI script left on the command line
-                web.evaluateJavascript("__selftest.keys('\\u0003')", null)
-            }, 11_000)
+            // drop whatever the CI script left on the command line: close a completion
+            // menu (Esc), then end-of-line + kill-to-start (^E ^U), then ^C for good measure
+            main.postDelayed({ web.evaluateJavascript("__selftest.keys('\\u001b')", null) }, 18_000)
+            main.postDelayed({ web.evaluateJavascript("__selftest.keys('\\u0005\\u0015')", null) }, 18_800)
+            main.postDelayed({ web.evaluateJavascript("__selftest.keys('\\u0003')", null) }, 19_600)
             main.postDelayed({
                 web.evaluateJavascript("__selftest.send('ls /sdcard/ >/dev/null && ls -d ~/storage/downloads/ && echo SD\$((1+1))OK')", null)
                 main.postDelayed({ pollStorage(0) }, 2000)
-            }, 13_000)
+            }, 21_000) // after the CI script's typing (it polls every 5 s and takes ~10 s)
         }, "SELFTEST_BLE_FAIL ble.sh is not attached in the Ubuntu shell")
     }
 
