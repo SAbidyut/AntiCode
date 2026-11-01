@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- four-pointed star (✦) with a terminal prompt underline -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#14161F"
+        android:pathData="M54,28 C56,44 60,48 76,50 C60,52 56,56 54,72 C52,56 48,52 32,50 C48,48 52,44 54,28 Z" />
+    <path
+        android:fillColor="#14161F"
+        android:pathData="M42,78 h24 v4 h-24 Z" />
+</vector>

@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.cxx/
+# fetched by scripts/fetch-proot.sh (Termux builds of proot, GPL-2.0)
+app/src/main/jniLibs/

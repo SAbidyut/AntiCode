@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="bn">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#14161f" />
+    <title>Agy টার্মিনাল</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body data-screen="home" data-theme="night">
+    <!-- ============ HOME ============ -->
+    <main id="home">
+      <header class="hero">
+        <div class="logo">✦</div>
+        <div>
+          <h1>Agy টার্মিনাল</h1>
+          <p class="muted">ফোনে Ubuntu + Antigravity CLI, সুন্দর বাংলায়</p>
+        </div>
+      </header>
+
+      <section class="card" id="home-sessions" hidden>
+        <h2>চলমান সেশন</h2>
+        <div class="list"></div>
+      </section>
+
+      <section class="card" id="ubuntu-card">
+        <h2>◉ এই ফোনে Ubuntu</h2>
+        <div class="card-body"></div>
+      </section>
+
+      <section class="card">
+        <h2>⇄ রিমোট কন্ট্রোল (Mac / PC)</h2>
+        <ol class="steps">
+          <li>Mac এর টার্মিনালে চালান:
+            <div class="cmd"><code>agy --remote-control</code><button id="copy-remote-cmd" class="chip">কপি</button></div>
+            অথবা চলমান agy এর ভিতরে লিখুন <code>/remote-control</code>
+          </li>
+          <li>নিচের বাটনে চাপ দিয়ে একই Google অ্যাকাউন্টে লগইন করুন — সেখানে Mac এ চলা সব কাজ দেখা যাবে, চাপ দিলে কন্ট্রোল করা যাবে, agy কিছু চাইলে নোটিফিকেশন আসবে।</li>
+        </ol>
+        <button id="remote-btn" class="btn primary big">রিমোট ড্যাশবোর্ড খুলুন</button>
+        <details>
+          <summary>ড্যাশবোর্ডের ঠিকানা</summary>
+          <input id="remote-url" type="url" spellcheck="false" />
+          <p class="muted small">agy যে লিংক দেখায়, সেটা এখানে বসাতে পারেন।</p>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>Aa দেখতে কেমন</h2>
+        <div id="sample"></div>
+        <label class="field">ফন্ট সাইজ <input id="font-size" type="range" min="9" max="28" step="1" /></label>
+        <label class="field">বাংলা অক্ষরের আকার <input id="bn-scale" type="range" min="0.8" max="1.3" step="0.05" /></label>
+        <label class="field">থিম
+          <select id="theme">
+            <option value="night">রাত (ডার্ক)</option>
+            <option value="light">দিন (লাইট)</option>
+          </select>
+        </label>
+      </section>
+      <p class="muted small center">ফন্ট: Kalpurush (OmicronLab) ও JetBrains Mono — SIL Open Font License</p>
+    </main>
+
+    <!-- ============ TERMINAL ============ -->
+    <section id="term">
+      <nav class="topbar">
+        <button id="home-btn" class="icon" aria-label="হোম">⌂</button>
+        <div id="tabs"></div>
+        <button id="plus-btn" class="icon" aria-label="নতুন">＋</button>
+        <button id="reader-btn" class="icon text" aria-label="পাঠ মোড">পাঠ</button>
+        <button id="more-btn" class="icon" aria-label="আরও">⋮</button>
+        <div id="new-menu" class="menu" hidden>
+          <button data-kind="agy">✦ Antigravity</button>
+          <button data-kind="ubuntu">◉ Ubuntu টার্মিনাল</button>
+          <button data-kind="android">▣ Android শেল</button>
+        </div>
+        <div id="more-menu" class="menu right" hidden>
+          <button data-act="copy">সব লেখা কপি</button>
+          <button data-act="paste">পেস্ট</button>
+          <button data-act="bigger">ফন্ট বড়</button>
+          <button data-act="smaller">ফন্ট ছোট</button>
+          <button data-act="bottom">একদম নিচে যান</button>
+          <button data-act="clear">স্ক্রিন পরিষ্কার</button>
+        </div>
+      </nav>
+      <div id="sessions"></div>
+      <div id="keybar"></div>
+      <div class="compose">
+        <button id="kbd-btn" class="icon" aria-label="টার্মিনাল কীবোর্ড">⌨</button>
+        <textarea id="compose" rows="1" placeholder="এখানে বাংলা / English লিখে পাঠান…" autocomplete="off" spellcheck="false"></textarea>
+        <button id="send" class="send" aria-label="পাঠান">➤</button>
+      </div>
+      <textarea id="kbd" aria-hidden="true" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+    </section>
+
+    <div id="toast"></div>
+    <script type="module" src="./src/app.ts"></script>
+  </body>
+</html>
