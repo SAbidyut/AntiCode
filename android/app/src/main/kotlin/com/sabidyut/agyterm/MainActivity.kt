@@ -1,6 +1,11 @@
 package com.sabidyut.agyterm
 
 import android.annotation.SuppressLint
+import android.view.View
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsAnimationCompat
+import androidx.core.view.WindowInsetsCompat
 import android.Manifest
 import android.net.Uri
 import android.os.Build
@@ -122,8 +127,9 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.parseColor(BG)
-        window.navigationBarColor = Color.parseColor(BG)
+        // edge-to-edge: the page paints behind the bars and pads itself (see followInsets)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         browser = InAppBrowser(this).apply { warmup() }
 
@@ -136,10 +142,12 @@ class MainActivity : ComponentActivity() {
                 js("__native.onImeKey($keyCode, $ctrl, $alt, $shift)")
         })
         keys.compatMode = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_COMPAT, false)
-        setContentView(FrameLayout(this).apply {
+        val root = FrameLayout(this).apply {
             addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(keys, FrameLayout.LayoutParams(1, 1))
-        })
+        }
+        setContentView(root)
+        followInsets(root)
 
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
         with(web.settings) {
@@ -156,6 +164,12 @@ class MainActivity : ComponentActivity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 assets.shouldInterceptRequest(request.url)
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                // the page missed the insets sent while it was loading
+                lastInsets = ""
+                ViewCompat.requestApplyInsets(view)
+            }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (request.url.host == ASSET_HOST) return false
@@ -200,6 +214,58 @@ class MainActivity : ComponentActivity() {
         browser.release()
         web.destroy()
         super.onDestroy()
+    }
+
+    // ---------------------------------------------------------------- insets / keyboard animation
+    private var imeAnimating = false
+    private var lastInsets = ""
+
+    /**
+     * Draw edge-to-edge and hand the status bar / navigation bar / keyboard heights to the
+     * page as they change — on every frame while the keyboard slides — so the terminal
+     * moves with the keyboard instead of jumping when the window is resized.
+     */
+    private fun followInsets(root: View) {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            if (!imeAnimating) sendInsets(insets, settled = true)
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.setWindowInsetsAnimationCallback(
+            root,
+            object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_STOP) {
+                override fun onPrepare(animation: WindowInsetsAnimationCompat) {
+                    if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) imeAnimating = true
+                }
+
+                override fun onProgress(
+                    insets: WindowInsetsCompat,
+                    running: MutableList<WindowInsetsAnimationCompat>,
+                ): WindowInsetsCompat {
+                    sendInsets(insets, settled = false)
+                    return insets
+                }
+
+                override fun onEnd(animation: WindowInsetsAnimationCompat) {
+                    if (animation.typeMask and WindowInsetsCompat.Type.ime() == 0) return
+                    imeAnimating = false
+                    ViewCompat.getRootWindowInsets(root)?.let { sendInsets(it, settled = true) }
+                }
+            },
+        )
+    }
+
+    private fun sendInsets(insets: WindowInsetsCompat, settled: Boolean) {
+        val d = resources.displayMetrics.density
+        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+        val top = bars.top / d
+        val bottom = maxOf(bars.bottom, ime.bottom) / d
+        val keyboard = ime.bottom > bars.bottom
+        val key = "%.1f,%.1f,%b,%b".format(top, bottom, keyboard, settled)
+        if (key == lastInsets) return
+        lastInsets = key
+        js("__native.onInsets($top, $bottom, $keyboard, $settled)")
     }
 
     // ---------------------------------------------------------------- keyboard focus

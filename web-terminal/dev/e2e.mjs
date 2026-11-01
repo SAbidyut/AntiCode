@@ -64,6 +64,21 @@ const replies = await screenText();
 check('DA1 + DECRQM + XTVERSION answered', replies.includes('?1;2c') && replies.includes('2026;2$y') && replies.includes('AgyTerminal'));
 check('background colour (OSC 11) answered', replies.includes('11;rgb:'));
 
+// 2c. Bangla with a different colour on every letter (how streaming CLIs fade text in)
+//     must still be shaped: no text piece may start with a vowel sign / virama.
+await page.fill(
+  '#compose',
+  "python3 -c \"import sys;w='ফাইলটি সফলভাবে আপনার ফোল্ডারে';sys.stdout.write(''.join('\\x1b[38;2;%d;200;220m'%(150+i)+c for i,c in enumerate(w))+'\\x1b[0m\\n')\"",
+);
+await page.dispatchEvent('#send', 'pointerdown');
+await waitFor(async () => (await screenText()).includes('ফোল্ডারে'));
+const brokenPieces = await page.evaluate(() =>
+  [...document.querySelectorAll('.session:not([hidden]) .bi')].flatMap((bi) =>
+    [...bi.childNodes].map((n) => n.textContent ?? '').filter((t) => /^[\u0981-\u0983\u09bc\u09be-\u09cd\u09d7]/.test(t)),
+  ),
+);
+check(`per-letter coloured Bangla stays shaped (${brokenPieces.length} broken pieces)`, brokenPieces.length === 0);
+
 // 3. direct typing (hardware keyboard path)
 await page.focus('#kbd');
 await page.keyboard.type('echo typed-$((6*7))');

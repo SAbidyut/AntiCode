@@ -119,13 +119,14 @@ const BLOCKS: Record<number, [number, number, number, number][]> = {
 
 // Powerline separators as SVG paths in a 10×20 box (stretched to the cell).
 const POWERLINE: Record<number, { d: string; fill: boolean }> = {
-  0xe0b0: { d: 'M0 0L10 10L0 20Z', fill: true },
+  // filled shapes reach 0.6 units into the neighbouring cell to hide sub-pixel seams
+  0xe0b0: { d: 'M-0.6 0L0 0L10 10L0 20L-0.6 20Z', fill: true },
   0xe0b1: { d: 'M0 0L10 10L0 20', fill: false },
-  0xe0b2: { d: 'M10 0L0 10L10 20Z', fill: true },
+  0xe0b2: { d: 'M10.6 0L10 0L0 10L10 20L10.6 20Z', fill: true },
   0xe0b3: { d: 'M10 0L0 10L10 20', fill: false },
-  0xe0b4: { d: 'M0 0A10 10 0 0 1 0 20Z', fill: true },
+  0xe0b4: { d: 'M-0.6 0L0 0A10 10 0 0 1 0 20L-0.6 20Z', fill: true },
   0xe0b5: { d: 'M0 0A10 10 0 0 1 0 20', fill: false },
-  0xe0b6: { d: 'M10 0A10 10 0 0 0 10 20Z', fill: true },
+  0xe0b6: { d: 'M10.6 0L10 0A10 10 0 0 0 10 20L10.6 20Z', fill: true },
   0xe0b7: { d: 'M10 0A10 10 0 0 0 10 20', fill: false },
   0xe0b8: { d: 'M0 0L10 20L0 20Z', fill: true },
   0xe0ba: { d: 'M10 0L10 20L0 20Z', fill: true },
@@ -312,8 +313,8 @@ export class BanglaRenderer {
   }
 
   /** CSS for a cell's attributes ('' for default attributes). */
-  private styleOf(c: IBufferCell): { css: string; bold: boolean } {
-    if (c.isAttributeDefault()) return { css: '', bold: false };
+  private styleOf(c: IBufferCell): { css: string; bold: boolean; italic: boolean } {
+    if (c.isAttributeDefault()) return { css: '', bold: false, italic: false };
     const { theme } = this.opts;
     let fg = this.colorOf(c.isFgDefault(), c.isFgPalette(), c.isFgRGB(), c.getFgColor(), '');
     let bg = this.colorOf(c.isBgDefault(), c.isBgPalette(), c.isBgRGB(), c.getBgColor(), '');
@@ -328,14 +329,16 @@ export class BanglaRenderer {
     let css = '';
     if (fg) css += `color:${fg};`;
     // background-color (not the shorthand) so drawn glyphs keep their background-image
-    if (bg) css += `background-color:${bg};`;
+    // the 1px shadow covers sub-pixel seams between neighbouring cells of the same colour
+    if (bg) css += `background-color:${bg};box-shadow:1px 0 0 ${bg};`;
     if (bold) css += 'font-weight:700;';
-    if (c.isItalic()) css += 'font-style:italic;';
+    const italic = !!c.isItalic();
+    if (italic) css += 'font-style:italic;';
     if (c.isDim()) css += 'opacity:.6;';
     if (c.isInvisible()) css += 'visibility:hidden;';
     const deco = (c.isUnderline() ? ' underline' : '') + (c.isStrikethrough() ? ' line-through' : '') + (c.isOverline() ? ' overline' : '');
     if (deco) css += `text-decoration:${deco};`;
-    return { css, bold };
+    return { css, bold, italic };
   }
 
   /** HTML for a character drawn with CSS/SVG, or null if it's an ordinary glyph. */
@@ -376,44 +379,72 @@ export class BanglaRenderer {
     const cw = this.cellWidth;
     const cell = (this.cell = line.getCell(0, this.cell) ?? this.cell);
     let html = '';
-    // current run
-    let kind: 'mono' | 'bn' | '' = '';
-    let style = '';
-    let bold = false;
-    let text = '';
-    let cells = 0;
 
-    const flush = () => {
-      if (!kind) return;
-      if (kind === 'mono') {
-        html += style ? `<span style="${style}">${esc(text)}</span>` : esc(text);
-      } else {
-        // Keep trailing spaces out of the Bangla run (they belong to the grid).
-        const trimmed = text.replace(/ +$/, '');
-        const trailing = text.length - trimmed.length;
-        const runCells = cells - trailing;
-        const target = runCells * cw;
-        const natural = this.bnWidth(trimmed, bold);
-        // Programs count Bangla width differently from how wide it really looks, so fit
-        // the shaped run to its cells: squeeze it if too wide, or spread the extra space
-        // between words (never inside a word — that would break conjuncts).
-        let inner = '';
-        if (natural > target + 0.5) {
-          const r = Math.max(0.5, target / natural);
-          inner = ` style="transform:scaleX(${r.toFixed(4)})"`;
-        } else if (natural < target - 1) {
-          const spaces = (trimmed.match(/ /g) ?? []).length;
-          if (spaces) {
-            const ws = Math.min((target - natural) / spaces, cw * 1.5);
-            inner = ` style="word-spacing:${ws.toFixed(2)}px"`;
-          }
+    // Latin/symbol run: one style.
+    let monoStyle: string | null = null;
+    let monoText = '';
+    // Bangla run: one *font* (bold/italic) but colours may change from letter to letter —
+    // streaming TUIs (like the Antigravity CLI) fade text in with per-letter colours. Each
+    // word stays one text node so conjuncts and vowel signs never come apart; pieces carry
+    // the colours.
+    let bnFont: string | null = null;
+    let bnBold = false;
+    let bnPieces: { css: string; text: string }[] = [];
+    let bnCells = 0;
+
+    const flushMono = () => {
+      if (monoStyle === null) return;
+      html += monoStyle ? `<span style="${monoStyle}">${esc(monoText)}</span>` : esc(monoText);
+      monoStyle = null;
+      monoText = '';
+    };
+    const flushBn = () => {
+      if (bnFont === null) return;
+      // Keep trailing spaces out of the Bangla run (they belong to the grid).
+      let trailing = 0;
+      while (bnPieces.length) {
+        const last = bnPieces[bnPieces.length - 1];
+        const trimmed = last.text.replace(/ +$/, '');
+        trailing += last.text.length - trimmed.length;
+        if (trimmed) {
+          last.text = trimmed;
+          break;
         }
-        html += `<span class="bn" style="width:${target.toFixed(2)}px;${style}"><span class="bi"${inner}>${esc(trimmed)}</span></span>`;
-        if (trailing) html += style ? `<span style="${style}">${' '.repeat(trailing)}</span>` : ' '.repeat(trailing);
+        bnPieces.pop();
       }
-      kind = '';
-      text = '';
-      cells = 0;
+      const text = bnPieces.map((p) => p.text).join('');
+      const target = (bnCells - trailing) * cw;
+      const natural = this.bnWidth(text, bnBold);
+      // Programs count Bangla width differently from how wide it really looks, so fit
+      // the shaped run to its cells: squeeze it if too wide, or spread the extra space
+      // between words (never inside a word — that would break conjuncts).
+      let inner = '';
+      if (natural > target + 0.5) {
+        const r = Math.max(0.5, target / natural);
+        inner = ` style="transform:scaleX(${r.toFixed(4)})"`;
+      } else if (natural < target - 1) {
+        const spaces = (text.match(/ /g) ?? []).length;
+        if (spaces) {
+          const ws = Math.min((target - natural) / spaces, cw * 1.5);
+          inner = ` style="word-spacing:${ws.toFixed(2)}px"`;
+        }
+      }
+      const font = (bnBold ? 'font-weight:700;' : '') + (bnFont.includes('i') ? 'font-style:italic;' : '');
+      const body = bnPieces.map((p) => (p.css ? `<span style="${p.css}">${esc(p.text)}</span>` : esc(p.text))).join('');
+      html += `<span class="bn" style="width:${target.toFixed(2)}px;${font}"><span class="bi"${inner}>${body}</span></span>`;
+      if (trailing) html += ' '.repeat(trailing);
+      bnFont = null;
+      bnPieces = [];
+      bnCells = 0;
+    };
+    const addBn = (css: string, chars: string, w: number) => {
+      const last = bnPieces[bnPieces.length - 1];
+      // Chrome won't shape a Bangla word across differently coloured spans, so a word
+      // keeps the colour of its first letter; colours may change between words.
+      const midWord = last && chars !== ' ' && !last.text.endsWith(' ');
+      if (last && (last.css === css || midWord)) last.text += chars;
+      else bnPieces.push({ css, text: chars });
+      bnCells += w;
     };
 
     for (let x = 0; x < cols; x++) {
@@ -427,49 +458,52 @@ export class BanglaRenderer {
       if ((cp >= 0x2500 && cp <= 0x259f) || (cp >= 0xe0b0 && cp <= 0xe0bf)) {
         const d = this.drawn(cp, w, st.css);
         if (d) {
-          flush();
+          flushMono();
+          flushBn();
           html += d;
           continue;
         }
       }
       const cls = cpClass(chars);
+      if (cls === 'bn') {
+        const font = (st.bold ? 'b' : '') + (st.italic ? 'i' : '');
+        // a vowel sign / virama always stays with the letter before it
+        if (bnFont !== null && (bnFont === font || isBnMark(cp))) {
+          addBn(st.css, chars, w);
+          continue;
+        }
+        flushMono();
+        flushBn();
+        bnFont = font;
+        bnBold = st.bold;
+        addBn(st.css, chars, w);
+        continue;
+      }
+      if (cls === 'space' && bnFont !== null) {
+        // spaces inside a Bangla sentence stay in the shaped run
+        addBn(st.css, ' ', 1);
+        continue;
+      }
+      flushBn();
       if (cls === 'box' || (cls === 'mono' && w > 1)) {
-        flush();
+        flushMono();
         // Nerd Font icons (private use area) are wider than a cell: let them spill into the
         // next cell (usually a space) instead of being clipped, like other terminals do.
         const pua = cp >= 0xe000 && cp <= 0xf8ff;
         html += `<span class="bx${pua ? ' pua' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
         continue;
       }
-      if (cls === 'space') {
-        // spaces extend whatever run is open (Bangla words stay one shaped run)
-        if (kind && style === st.css) {
-          text += ' ';
-          cells += 1;
-          continue;
-        }
-        flush();
-        kind = 'mono';
-        style = st.css;
-        bold = st.bold;
-        text = ' ';
-        cells = 1;
+      const text = cls === 'space' ? ' ' : chars;
+      if (monoStyle === st.css) {
+        monoText += text;
         continue;
       }
-      const k = cls === 'bn' ? 'bn' : 'mono';
-      if (kind === k && style === st.css) {
-        text += chars;
-        cells += w;
-        continue;
-      }
-      flush();
-      kind = k;
-      style = st.css;
-      bold = st.bold;
-      text = chars;
-      cells = w;
+      flushMono();
+      monoStyle = st.css;
+      monoText = text;
     }
-    flush();
+    flushMono();
+    flushBn();
     return html;
   }
 
@@ -559,6 +593,11 @@ export class BanglaRenderer {
     const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY + this.scrollOffset));
     return { x, y, line };
   }
+}
+
+/** Bengali vowel signs, virama, candrabindu/anusvara/visarga, nukta, au length mark. */
+function isBnMark(cp: number): boolean {
+  return (cp >= 0x0981 && cp <= 0x0983) || cp === 0x09bc || (cp >= 0x09be && cp <= 0x09cd) || cp === 0x09d7;
 }
 
 /** The background-color part of a style string (kept when a drawn glyph sets `background`). */

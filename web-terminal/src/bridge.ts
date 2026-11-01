@@ -31,6 +31,8 @@ export interface BridgeEvents {
   /** Raw key from the native terminal keyboard: Android KeyEvent keyCode + modifiers. */
   onImeKey(keyCode: number, ctrl: boolean, alt: boolean, shift: boolean): void;
   onBack(): boolean;
+  /** System bar / keyboard insets in CSS px; called every frame while the keyboard slides. */
+  onInsets(top: number, bottom: number, keyboard: boolean, settled: boolean): void;
 }
 
 export interface Bridge {
@@ -187,6 +189,7 @@ export function createBridge(events: BridgeEvents): Bridge {
     onImeText: (text: string) => events.onImeText(text),
     onImeKey: (k: number, c: boolean, a: boolean, s: boolean) => events.onImeKey(k, c, a, s),
     onBack: () => events.onBack(),
+    onInsets: (t: number, b: number, k: boolean, s: boolean) => events.onInsets(t, b, k, s),
   };
   if (window.AndroidBridge) return new AndroidHostBridge(window.AndroidBridge);
   const port = new URLSearchParams(location.search).get('bridge') ?? '7681';

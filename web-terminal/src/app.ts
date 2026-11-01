@@ -96,6 +96,7 @@ let hostState: HostState = { host: 'dev', ubuntu: 'none' };
 const latch: Mods = {};
 let screen: 'home' | 'term' = 'home';
 let keyboardShown = false;
+let fitTimer = 0;
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -125,6 +126,18 @@ const bridge: Bridge = createBridge({
     const l = consumeLatch();
     const seq = androidKeySeq(keyCode, { ctrl: ctrl || l.ctrl, alt: alt || l.alt, shift }, active.appCursor);
     if (seq) active.input(seq);
+  },
+  onInsets(top, bottom, keyboard, settled) {
+    // The page draws edge-to-edge; padding follows the bars and the keyboard frame by frame,
+    // and the bottom-anchored terminal glides with it. Resize the terminal once it settles.
+    const root = document.documentElement.style;
+    root.setProperty('--safe-top', `${top}px`);
+    root.setProperty('--safe-bottom', `${bottom}px`);
+    if (settled) {
+      keyboardShown = keyboard;
+      clearTimeout(fitTimer);
+      active?.fit();
+    }
   },
   onBack() {
     if (sheetOpen()) {
@@ -531,7 +544,6 @@ function bindTerminalGestures(s: TerminalSession) {
 }
 
 /** Resize after the layout has settled (keyboard animations fire many resizes). */
-let fitTimer = 0;
 function fitSoon() {
   clearTimeout(fitTimer);
   fitTimer = window.setTimeout(() => active?.fit(), 110);
