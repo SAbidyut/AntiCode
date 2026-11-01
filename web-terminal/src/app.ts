@@ -145,6 +145,7 @@ async function newSession(kind: SessionKind) {
   const probe = new TerminalSession(bridge, '_probe', kind, rendererOpts());
   const { cols, rows } = probe.renderer.fit(box.width, box.height);
   probe.dispose();
+  console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px → ${cols}x${rows}`);
   const id = await bridge.createSession(kind, cols, rows);
   if (!id) {
     toast('সেশন শুরু করা যায়নি');
@@ -152,6 +153,7 @@ async function newSession(kind: SessionKind) {
     return;
   }
   const s = addSession(id, kind);
+  s.notePtySize(cols, rows);
   activate(s);
 }
 
@@ -163,6 +165,7 @@ function activate(s: TerminalSession | null) {
   active = s;
   if (s) {
     showTerm();
+    s.fit(); // layout is already known; don't wait for a frame (rAF is paused when the screen is off)
     requestAnimationFrame(() => s.fit());
   }
   renderTabs();

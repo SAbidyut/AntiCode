@@ -61,7 +61,7 @@ code { font-family: 'JetBrains Mono', 'Kalpurush', monospace; font-size: .9em; }
 .err { color: var(--danger); }
 
 /* ------------------------------------------------ screens */
-#home, #term { position: fixed; inset: 0; }
+#home, #term { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }
 body[data-screen='home'] #term { visibility: hidden; pointer-events: none; }
 body[data-screen='term'] #home { display: none; }
 
@@ -174,12 +174,12 @@ input[type='url'] {
 .menu button:active { background: var(--panel-2); }
 
 #sessions { position: relative; flex: 1; min-height: 0; overflow: hidden; }
-.session { position: absolute; inset: 0; }
+.session { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
 .session[hidden] { display: none; }
 
 /* ------------------------------------------------ terminal grid */
 .term-screen {
-  position: absolute; inset: 0;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0;
   padding: 2px;
   font-family: 'JetBrains Mono', 'Kalpurush', monospace;
   font-size: var(--fs);
@@ -236,7 +236,7 @@ input[type='url'] {
 
 /* ------------------------------------------------ reader view */
 .reader {
-  position: absolute; inset: 0; overflow-y: auto;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow-y: auto;
   padding: 12px 14px 24px;
   background: var(--bg);
   color: var(--text);

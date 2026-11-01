@@ -26,6 +26,8 @@ export class TerminalSession {
   private readerOpen = false;
   private readerFrame = 0;
   private resizeTimer = 0;
+  private ptyCols = 0;
+  private ptyRows = 0;
   private raw: Uint8Array[] = [];
   private rawSize = 0;
   onTitle?: () => void;
@@ -171,16 +173,31 @@ export class TerminalSession {
     return this.term.modes.mouseTrackingMode !== 'none';
   }
 
-  /** Fit the terminal into the element's current size and tell the PTY. */
+  /** The PTY was created with this size (0 = unknown, e.g. a session restored after a reload). */
+  notePtySize(cols: number, rows: number) {
+    this.ptyCols = cols;
+    this.ptyRows = rows;
+    if (cols !== this.term.cols || rows !== this.term.rows) this.term.resize(cols, rows);
+  }
+
+  /** Fit the terminal into the element's current size and tell the PTY if it changed. */
   fit() {
     const box = this.el.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;
     const { cols, rows } = this.renderer.fit(box.width, box.height);
-    if (cols === this.term.cols && rows === this.term.rows) return;
-    this.term.resize(cols, rows);
-    this.renderer.schedule();
+    if (cols !== this.term.cols || rows !== this.term.rows) {
+      this.term.resize(cols, rows);
+      this.renderer.schedule();
+    }
+    // Compare with what the PTY has, not with xterm: they can differ (restored sessions,
+    // a session created before layout was final).
+    if (cols === this.ptyCols && rows === this.ptyRows) return;
     clearTimeout(this.resizeTimer);
-    this.resizeTimer = window.setTimeout(() => this.bridge.resize(this.id, cols, rows), 60);
+    this.resizeTimer = window.setTimeout(() => {
+      this.ptyCols = cols;
+      this.ptyRows = rows;
+      this.bridge.resize(this.id, cols, rows);
+    }, 60);
   }
 
   setFocused(f: boolean) {
