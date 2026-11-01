@@ -1,0 +1,74 @@
+# Agy টার্মিনাল
+
+ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
+সাথে Mac/PC তে চলা Antigravity কে ফোন থেকে **রিমোট কন্ট্রোল** করার শর্টকাট।
+
+## ফোনে ইনস্টল
+
+1. এই রিপোর **Releases → `latest`** পেজ ফোনে খুলুন, **`AgyTerminal.apk`** নামান।
+2. ইনস্টল করুন (প্রথমবার "অজানা উৎস থেকে ইনস্টল" অনুমতি চাইবে)।
+   Android সতর্ক করতে পারে যে অ্যাপটা পুরোনো Android এর জন্য বানানো — এটা ইচ্ছাকৃত (নিচে দেখুন), "Install anyway" চাপুন।
+3. অ্যাপ খুলে **Ubuntu সেটআপ করুন** চাপুন (একবারই, ~৩০MB ডাউনলোড)।
+4. **✦ Antigravity চালান** চাপুন। প্রথমবার নিজে থেকেই `curl`, `git` ইত্যাদি আর Google এর অফিসিয়াল ইনস্টলার
+   (`curl -fsSL https://antigravity.google/cli/install.sh | bash`) দিয়ে `agy` ইনস্টল হবে, তারপর Google লগইন চাইবে —
+   লগইন লিংক ফোনের ব্রাউজারে খুলে যাবে।
+
+## ব্যবহার
+
+| কাজ | কীভাবে |
+|---|---|
+| বাংলায় লেখা | নিচের টাইপ বক্সে Gboard/Ridmik/Avro দিয়ে লিখে ➤ চাপুন |
+| সরাসরি টার্মিনালে টাইপ | টার্মিনালে একবার ট্যাপ করুন (বা ⌨ বাটন) |
+| Esc, Tab, Ctrl, তীর, ^C | কীবোর্ডের উপরের কী-বার |
+| নিখুঁত বাংলায় পড়া / কপি | উপরের **পাঠ** বাটন (বা টার্মিনালে লম্বা চাপ) |
+| ফন্ট ছোট/বড় | দুই আঙুলে পিঞ্চ, বা ⋮ মেনু |
+| নতুন ট্যাব | ＋ → Antigravity / Ubuntu / Android শেল |
+| আবার সেটআপ | Ubuntu তে `agy-setup` |
+
+অ্যাপ বন্ধ করলেও সেশন চলতে থাকে (নোটিফিকেশনে দেখা যায়); নোটিফিকেশনের "সব বন্ধ করুন" দিয়ে থামানো যায়।
+
+## Mac/PC এর Antigravity রিমোট কন্ট্রোল
+
+Mac এর টার্মিনালে `agy --remote-control` (বা চলমান agy তে `/remote-control`) দিন।
+তারপর অ্যাপের হোমে **রিমোট ড্যাশবোর্ড খুলুন** — একই Google অ্যাকাউন্টে লগইন করলে Mac এ চলা সব কাজ দেখা ও কন্ট্রোল করা যায়।
+ড্যাশবোর্ডটা Google এর, তাই এটা অ্যাপের ভিতরে Chrome (Custom Tab) এ খোলে; ঠিকানা হোম স্ক্রিনে বদলানো যায়।
+
+## কীভাবে কাজ করে
+
+```
+web-terminal/   টার্মিনাল UI (TypeScript): headless xterm.js + নিজস্ব DOM renderer
+android/        Kotlin অ্যাপ: WebView, JNI PTY, foreground service, Ubuntu ইনস্টলার/লঞ্চার
+scripts/        fetch-proot.sh — Termux এর proot বিল্ড jniLibs হিসেবে প্যাক করে
+```
+
+- **বাংলা কেন ঠিক দেখায়:** সাধারণ টার্মিনাল প্রতিটা অক্ষর আলাদা ঘরে আঁকে, তাই যুক্তাক্ষর (ক্ষ, স্ত্র) আর কার ভেঙে যায়।
+  এখানে প্রতিটা বাংলা অংশ একসাথে ব্রাউজারের text shaper দিয়ে Kalpurush এ আঁকা হয়, তারপর ঠিক যতগুলো ঘর তার জন্য
+  বরাদ্দ সেই মাপে বসানো হয় — ফলে বাংলা নিখুঁত, আর বক্স/কলাম/কার্সর গ্রিডেই থাকে (`web-terminal/src/term/renderer.ts`)।
+- **Ubuntu:** অফিসিয়াল Ubuntu Base 24.04 অ্যাপের নিজস্ব স্টোরেজে নামিয়ে `proot` দিয়ে চালানো হয় — root লাগে না।
+- **targetSdk 28:** Android 10+ এ নতুন target এর অ্যাপ নিজের নামানো ফাইল চালাতে পারে না; Ubuntu চালাতে এটা লাগে
+  (Termux ও একই কাজ করে)। তাই অ্যাপটা Play Store এ নয়, সরাসরি APK হিসেবে দেওয়া হয়।
+
+## নিজে বিল্ড করা
+
+```bash
+cd web-terminal && npm ci && npm run build && cd ..
+scripts/fetch-proot.sh            # লাগবে: curl, ar, tar, patchelf
+cd android && ./gradlew assembleRelease
+```
+
+প্রতিবার push এ GitHub Actions নিজেই APK বানিয়ে `latest` রিলিজে দেয় (`.github/workflows/android.yml`)।
+
+ব্রাউজারে UI ডেভেলপমেন্ট (আসল bash সহ, শুধু localhost এ):
+
+```bash
+cd web-terminal
+npm run devbridge &          # 127.0.0.1:7681
+npm run dev                  # তারপর Vite এর URL খুলুন
+node dev/e2e.mjs             # end-to-end চেক (playwright লাগবে)
+```
+
+## লাইসেন্স / ক্রেডিট
+
+- Kalpurush ফন্ট — Avro Font Development Project, OmicronLab (SIL OFL 1.0); JetBrains Mono (SIL OFL 1.1)
+- proot — Termux প্যাকেজ (GPL-2.0), xterm.js (MIT), Apache Commons Compress (Apache-2.0)
+- Antigravity CLI Google এর; এই অ্যাপ শুধু Google এর অফিসিয়াল ইনস্টলার চালায়।

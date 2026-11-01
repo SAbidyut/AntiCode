@@ -1,0 +1,96 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-terminal/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build terminal UI
+        working-directory: web-terminal
+        run: |
+          npm ci
+          npm run build
+
+      - name: Fetch proot (Termux builds)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf
+          scripts/fetch-proot.sh
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Rename
+        run: cp android/app/build/outputs/apk/release/app-release.apk AgyTerminal.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgyTerminal-apk
+          path: AgyTerminal.apk
+
+      # Easiest way to get the APK on a phone: the "latest" release on the repo page.
+      - name: Publish "latest" release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest AgyTerminal.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Agy টার্মিনাল — সর্বশেষ বিল্ড" \
+            --notes "ফোনে এই পেজ খুলে **AgyTerminal.apk** নামিয়ে ইনস্টল করুন। (commit ${GITHUB_SHA::7}, branch ${GITHUB_REF_NAME})"
+
+  # Boots an emulator and checks that the app starts and proot can run.
+  smoke-test:
+    needs: apk
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AgyTerminal-apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: |
+            adb install -r AgyTerminal.apk
+            adb shell am start -W -n com.sabidyut.agyterm/.MainActivity
+            sleep 8
+            adb shell pidof com.sabidyut.agyterm
+            LIB=$(adb shell pm path com.sabidyut.agyterm | tr -d '\r' | sed 's/^package://; s#/base.apk##')/lib/x86_64
+            adb shell ls -l $LIB
+            adb shell "LD_LIBRARY_PATH=$LIB $LIB/libproot.so --version" | head -5
+            adb logcat -d | grep -E "AndroidRuntime|agyterm|UbuntuManager" | tail -40 || true

@@ -1,0 +1,88 @@
+// End-to-end checks of the web terminal against the dev bridge (real bash).
+//   npm run devbridge &  npx vite preview --port 4173 &  node dev/e2e.mjs
+import { createRequire } from 'node:module';
+
+const { chromium } = createRequire(import.meta.url)('playwright');
+const url = process.env.URL ?? 'http://localhost:4173/';
+let failures = 0;
+const check = (name, ok) => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
+  if (!ok) failures++;
+};
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 412, height: 860 } });
+page.on('pageerror', (e) => console.log('[pageerror]', e.message));
+await page.goto(url);
+await page.waitForTimeout(1000);
+if ((await page.getAttribute('body', 'data-screen')) === 'term') await page.click('#home-btn');
+
+const screenText = () => page.evaluate(() => document.querySelector('.session:not([hidden]) .term-rows')?.textContent ?? '');
+const waitFor = async (fn, ms = 4000) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await fn()) return true;
+    await page.waitForTimeout(100);
+  }
+  return false;
+};
+
+// 1. new Ubuntu session from the home screen
+await page.click('#ubuntu-card .btn:not(.primary)');
+check('terminal screen opens', await waitFor(async () => (await page.getAttribute('body', 'data-screen')) === 'term'));
+
+// 2. compose box → Bangla command
+await page.fill('#compose', "echo 'ক্ষমা-'$((40+2))");
+await page.dispatchEvent('#send', 'pointerdown');
+check('compose box runs Bangla command', await waitFor(async () => (await screenText()).includes('ক্ষমা-42')));
+
+// 3. direct typing (hardware keyboard path)
+await page.focus('#kbd');
+await page.keyboard.type('echo typed-$((6*7))');
+await page.keyboard.press('Enter');
+check('direct typing + Enter', await waitFor(async () => (await screenText()).includes('typed-42')));
+
+// 4. key bar: Ctrl latch + c interrupts
+await page.focus('#kbd');
+await page.keyboard.type('sleep 30');
+await page.keyboard.press('Enter');
+await page.waitForTimeout(300);
+await page.locator('.key', { hasText: '^C' }).dispatchEvent('pointerdown');
+await page.fill('#compose', 'echo after-$((1+1))');
+await page.dispatchEvent('#send', 'pointerdown');
+check('^C key interrupts', await waitFor(async () => (await screenText()).includes('after-2')));
+
+// 5. OSC 7770 (our xdg-open shim) opens the URL
+const popup = page.waitForEvent('popup', { timeout: 4000 }).then(() => true).catch(() => false);
+await page.fill('#compose', "printf '\\033]7770;open;https://example.com/login\\007'");
+await page.dispatchEvent('#send', 'pointerdown');
+check('xdg-open escape opens the browser', await popup);
+
+// 6. reader view shows logical lines
+await page.click('#reader-btn');
+const readerText = await page.evaluate(() => document.querySelector('.session:not([hidden]) .reader')?.textContent ?? '');
+check('reader view has text', readerText.includes('ক্ষমা-42') && readerText.includes('typed-42'));
+await page.click('#reader-btn');
+
+// 7. resize → stty sees the new size
+await page.setViewportSize({ width: 700, height: 860 });
+await page.waitForTimeout(400);
+const cols = await page.evaluate(() => {
+  const w = document.querySelector('#sessions').getBoundingClientRect().width;
+  return w;
+});
+await page.fill('#compose', 'stty size');
+await page.dispatchEvent('#send', 'pointerdown');
+await page.waitForTimeout(500);
+const txt = await screenText();
+const m = txt.match(/(\d+) (\d+)\s*\S*\$?\s*$/m) ?? txt.match(/\b(\d{2}) (\d{2,3})\b(?![\s\S]*\b\d{2} \d{2,3}\b)/);
+check(`resize reaches the PTY (stty: ${m?.[0]?.trim()}, width ${Math.round(cols)}px)`, !!m && +m[2] > 60);
+
+// 8. reload → session restored with its output
+await page.reload();
+await page.waitForTimeout(1500);
+check('session restored after reload', await waitFor(async () => (await screenText()).includes('typed-42')));
+
+await browser.close();
+console.log(failures ? `${failures} failed` : 'all passed');
+process.exit(failures ? 1 : 0);
