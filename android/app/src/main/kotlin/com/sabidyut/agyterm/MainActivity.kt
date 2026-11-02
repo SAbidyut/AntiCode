@@ -620,18 +620,26 @@ class MainActivity : ComponentActivity() {
             ic.commitText("echo ", 1)
             for (w in listOf("a", "am", "ami")) ic.setComposingText(w, 1)
             ic.finishComposingText()
-            ic.setComposingRegion(0, 3) // re-select "ami" …
+            ic.setComposingRegion(5, 8) // re-select "ami" (positions in the whole line) …
             ic.commitText("আমি ", 1) // … and replace it
+            for (w in listOf("s", "se")) ic.setComposingText(w, 1)
+            ic.finishComposingText()
+            ic.setComposingRegion(9, 11) // the next word the same way
+            ic.commitText("সেখানে ", 1)
             for (w in listOf("v", "va", "val", "valo")) ic.setComposingText(w, 1)
             ic.finishComposingText()
             ic.deleteSurroundingText(4, 0) // or delete it …
             ic.commitText("ভালো", 1) // … and type the suggestion
+            ic.deleteSurroundingText(1, 0) // ⌫ takes the vowel sign "ো" back …
+            ic.commitText("ো", 1) // … and it's typed again
             ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NONE)
             main.postDelayed({
                 selftestScreen { screen ->
                     val lines = screen.lines().map { it.trim() }.filter { it.isNotEmpty() }
                     for (line in lines.takeLast(4)) Log.i(SELFTEST, "ime| $line")
-                    if (lines.any { it == "আমি ভালো" } && lines.none { it.contains("ami") || it.contains("valo") }) {
+                    if (lines.any { it == "আমি সেখানে ভালো" } &&
+                        lines.none { it.contains("ami") || it.contains("valo") || it.contains("seস") }
+                    ) {
                         Log.i(SELFTEST, "SELFTEST_IME_OK")
                     } else {
                         Log.e(SELFTEST, "SELFTEST_IME_FAIL")

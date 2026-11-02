@@ -153,7 +153,6 @@ const bridge: Bridge = createBridge({
     s.renderer.setPreedit(text);
   },
   onImeText(text) {
-    active?.renderer.setPreedit('');
     if (!typingTarget()) return;
     active!.input(applyMods(text, consumeLatch()));
   },
