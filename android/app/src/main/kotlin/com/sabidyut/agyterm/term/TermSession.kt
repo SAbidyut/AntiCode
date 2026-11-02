@@ -80,9 +80,13 @@ class TermSession(
                 while (true) {
                     val n = input.read(buf)
                     if (n <= 0) break
-                    synchronized(lock) {
-                        append(buf, n)
-                        listener?.onOutput(this, buf, n)
+                    val from = visibleFrom(buf, n)
+                    if (from < n) {
+                        val chunk = if (from == 0) buf else buf.copyOfRange(from, n)
+                        synchronized(lock) {
+                            append(chunk, n - from)
+                            listener?.onOutput(this, chunk, n - from)
+                        }
                     }
                     lastOutputAt = System.currentTimeMillis()
                     outSinceEnter += n
@@ -218,12 +222,41 @@ class TermSession(
      * of the history; the prompt then shows the current time).
      */
     fun claim(rows: Int, cols: Int) {
+        // everything it prints until its fresh prompt (the redraw for the new size, the
+        // command line below) stays out of sight
+        hideUntil = System.currentTimeMillis() + HIDE_MAX_MS
         resize(rows, cols)
         synchronized(lock) {
             ringStart = 0
             ringLen = 0
         }
-        write(" clear\r".toByteArray())
+        write(" __agy_fresh\r".toByteArray())
+    }
+
+    /** While taking over a waiting shell: output before its next prompt is dropped. */
+    @Volatile private var hideUntil = 0L
+
+    /** Where the visible part of this chunk starts ([n] = none of it). */
+    private fun visibleFrom(b: ByteArray, n: Int): Int {
+        if (hideUntil == 0L) return 0
+        val at = indexOf(b, n, PROMPT_MARK)
+        if (at >= 0) {
+            hideUntil = 0
+            return at // the prompt starts here (the marker itself is harmless)
+        }
+        if (System.currentTimeMillis() > hideUntil) {
+            hideUntil = 0 // no prompt came: show what there is
+            return 0
+        }
+        return n
+    }
+
+    private fun indexOf(b: ByteArray, n: Int, pat: ByteArray): Int {
+        outer@ for (i in 0..n - pat.size) {
+            for (j in pat.indices) if (b[i + j] != pat[j]) continue@outer
+            return i
+        }
+        return -1
     }
 
     fun kill() {
@@ -244,6 +277,9 @@ class TermSession(
 
     companion object {
         const val RING_SIZE = 512 * 1024
+        private const val HIDE_MAX_MS = 5000L
+        /** The guest prompt's "command done" escape (OSC 7770;done), printed before each prompt. */
+        private val PROMPT_MARK = "\u001b]7770;done\u0007".toByteArray()
         private val OSC9_SUBCOMMAND = Regex("^9;\\d+(;|$)")
     }
 }

@@ -21,6 +21,9 @@ alias grep='grep --color=auto'
 # after clearing the screen the prompt starts at the very top, without the blank line
 clear() { command clear "$@"; __agy_prompted=; }
 reset() { command reset "$@"; __agy_prompted=; }
+# The app takes over a shell it started ahead of time: an empty screen and a fresh prompt
+# (current time, no gap line) without starting any program.
+__agy_fresh() { printf '\e[H\e[2J\e[3J'; __agy_prompted=; }
 
 __agy_style_file="$HOME/.config/agy-terminal/prompt"
 
