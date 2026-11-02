@@ -62,8 +62,11 @@ class InAppBrowser(private val activity: Activity) {
     var darkTheme = true
 
     fun open(url: String) {
-        // open the dashboard with the account the agent uses, not the browser's first one
-        val uri = Accounts.withAccount(Uri.parse(url), Accounts.forUrl(activity, Uri.parse(url)))
+        // open Google dashboards with the account the agent uses, not the browser's first one
+        val parsed = Uri.parse(url)
+        val host = parsed.host ?: ""
+        val google = host == "google.com" || host.endsWith(".google.com")
+        val uri = if (google) Accounts.withAccount(parsed, Accounts.antigravity(activity)) else parsed
         if (uri.scheme == null || uri.scheme == "file") {
             // Android forbids handing file:// paths to other apps (it would crash the app)
             Toast.makeText(activity, "Can't open local files in a browser: $url", Toast.LENGTH_LONG).show()
@@ -120,7 +123,7 @@ class InAppBrowser(private val activity: Activity) {
         val size = (24 * d).toInt()
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = if (darkTheme) Color.WHITE else Color.parseColor("#1F2128") // readable on a light bar
             style = Paint.Style.STROKE
             strokeWidth = 2.2f * d
             strokeCap = Paint.Cap.ROUND

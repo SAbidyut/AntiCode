@@ -941,8 +941,8 @@ function openSettingsSheet() {
       h('div', { class: 's-sub' }, 'Where Remote Control sessions show up.'),
       urlField('claudeUrl')),
     h('div', { class: 'setting' },
-      h('div', { class: 's-title' }, 'Dashboards after a Google sign-in'),
-      h('div', { class: 's-sub' }, 'A dashboard you signed in to with Google opens in Chrome from then on.'),
+      h('div', { class: 's-title' }, 'Claude Code dashboard after a Google sign-in'),
+      h('div', { class: 's-sub' }, 'Google sign-in only works in Chrome, so claude.ai then opens there for a week. Antigravity always uses Chrome (Google-only sign-in).'),
       resetBtn),
     h('p', { class: 'about-line' }, 'AntiCode · fonts: Kalpurush, JetBrains Mono, Noto Sans Symbols (SIL Open Font License)'),
   );

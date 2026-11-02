@@ -803,7 +803,6 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getAccounts(): String = JSONObject()
             .put("agy", Accounts.antigravity(this@MainActivity) ?: "")
-            .put("claude", Accounts.claude(this@MainActivity) ?: "")
             .toString()
 
         /** Forget "this dashboard opens in Chrome" (after a Google sign-in). */

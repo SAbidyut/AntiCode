@@ -91,6 +91,7 @@ export class TerminalSession {
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, track(false));
     // `reset` (RIS, ESC c) and soft reset (DECSTR, CSI ! p) show the cursor again
     const showAgain = () => {
+      this.renderer.clearLabels();
       this.renderer.cursorVisible = true;
       this.renderer.schedule();
       return false;
@@ -102,6 +103,8 @@ export class TerminalSession {
       const [cmd, ...rest] = data.split(';');
       if (cmd === 'open' && rest.length) this.bridge.openUrl(rest.join(';'));
       else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
+      // a shell prompt: no agent is on screen any more → ordinary terminal layout
+      else if (cmd === 'done') this.renderer.anchorBottom = false;
       else if (cmd === 'storage') this.bridge.requestStorage(); // `setup-storage` inside Ubuntu
       return true;
     });
@@ -150,14 +153,22 @@ export class TerminalSession {
   private accountSeen = false;
   private accountDecoder = new TextDecoder();
   private accountTail = '';
+  private accountScanned = 0;
   private spotAccount(data: Uint8Array) {
-    const text = this.accountTail + this.accountDecoder.decode(data, { stream: true }).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+    // only the CLI's startup screen (the header), not whatever the agent prints later
+    this.accountScanned += data.length;
+    if (this.accountScanned > 64 * 1024) {
+      this.accountSeen = true;
+      return;
+    }
+    const joined = this.accountTail + this.accountDecoder.decode(data, { stream: true });
+    const text = joined.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
     const m = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*\(Google/.exec(text);
     if (m) {
       this.accountSeen = true;
       this.onAccount?.(m[1]);
     }
-    this.accountTail = text.slice(-120);
+    this.accountTail = joined.slice(-200); // raw: an escape split across chunks still strips
   }
 
   write(data: Uint8Array) {
@@ -243,6 +254,7 @@ export class TerminalSession {
     }
     if (rest.length > 1 && rest[0] === '\x1b') return; // arrow keys and other sequences
     for (const ch of rest) {
+      if (ch === '\r' && /^(agy|claude)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
       if (ch === '\r') this.commitLine();
       else if (ch === '\x7f' || ch === '\b') this.lineBuf = Array.from(this.lineBuf).slice(0, -1).join('');
       else if (ch === '\x03' || ch === '\x15' || ch === '\x1b') this.lineBuf = '';

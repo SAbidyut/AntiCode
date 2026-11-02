@@ -65,15 +65,13 @@ __agy_prompt() {
   local mark=$ok
   (( status != 0 )) && mark=$bad
   # The clock sits at the right edge of the screen. The app draws it there (it's not
-  # text in the terminal), so it stays at the edge through zooming and resizing.
+  # text in the terminal), so it stays at the edge through zooming and resizing. Only
+  # when the bar leaves room for it (decided after fitting the bar, below).
   local cols=${COLUMNS:-80} clock= rclock=
-  if (( cols >= 30 )); then
-    printf -v clock '%(%I:%M %p)T' -1
-    rclock="\[\e]7770;rprompt;${clock}\a\]"
-  fi
+  (( cols >= 30 )) && printf -v clock '%(%I:%M %p)T' -1
 
   if [ "$style" = simple ]; then
-    PS1="${gap}${rclock}\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+    PS1="${gap}\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
     __agy_in_prompt=
     return
   fi
@@ -105,6 +103,9 @@ __agy_prompt() {
     __agy_width
     (( width > room )) && segs[1]="243;139;168|${dir_icon} ${path##*/}"
   fi
+
+  # the clock only if it won't cover the bar
+  [ -n "$clock" ] && (( width <= room )) && rclock="\[\e]7770;rprompt;${clock}\a\]"
 
   local fg='30;30;46' line= n=${#segs[@]} bg next
   for (( i = 0; i < n; i++ )); do

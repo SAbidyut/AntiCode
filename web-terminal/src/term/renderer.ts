@@ -230,6 +230,13 @@ export class BanglaRenderer {
     this.schedule();
   }
 
+  /** After a terminal reset the old buffers (and their markers) are gone. */
+  clearLabels() {
+    for (const l of this.rightLabels) l.marker.dispose();
+    this.rightLabels = [];
+    this.schedule();
+  }
+
   /** Labels of the lines first..last that still belong to their prompt. */
   private labelsByLine(first: number, last: number): Map<number, string> {
     const m = new Map<number, string>();
@@ -760,7 +767,8 @@ export class BanglaRenderer {
       }
     }
     const rowY = (i: number) => i * lh + (splitLine >= 0 && i >= splitLine ? splitGap : 0);
-    if (splitLine !== this.splitLine || splitGap !== this.splitGap) {
+    const splitMoved = splitLine !== this.splitLine || splitGap !== this.splitGap;
+    if (splitMoved) {
       this.splitLine = splitLine;
       this.splitGap = splitGap;
       for (const [i, r] of this.rows) r.el.style.transform = `translateY(${rowY(i)}px)`;
@@ -774,7 +782,10 @@ export class BanglaRenderer {
       if (r && !live && !r.live) continue;
       if (r) r.live = live;
       const line = buf.getLine(i);
-      const label = labels.get(i);
+      let label = labels.get(i);
+      // never cover text: only when the row leaves room at its right end (zoomed in,
+      // re-wrapped, or a wide prompt bar → no clock on that row)
+      if (label && (line?.translateToString(true).length ?? 0) > cols - 13) label = undefined;
       const html = this.rowToHtml(line, cols) + (label ? `<span class="rlabel"><b>\uf017</b>${esc(label)}</span>` : '');
       let el: HTMLDivElement | null = null;
       if (!r) {
@@ -845,7 +856,8 @@ export class BanglaRenderer {
       const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;
       if (t !== this.lastCursorT) {
         // glide to the next cell / line; jump when it reappears or moves far (TUIs)
-        const far = !wasShown || Math.abs(cursorLine - this.lastCursorLine) > 2;
+        // jump when it reappears, moves far (TUIs), or the layout itself moved
+        const far = !wasShown || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved || this.insetsMoving;
         this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
         this.cursorEl.style.transform = t;
         this.lastCursorT = t;
@@ -887,7 +899,7 @@ function isRule(text: string): boolean {
   const t = text.trim();
   if (t.length < 8) return false;
   let n = 0;
-  for (const ch of t) if ('─━╌╍┄┅═-'.includes(ch)) n++;
+  for (const ch of t) if ('─━╌╍┄┅═'.includes(ch)) n++;
   return n / t.length >= 0.8;
 }
 
