@@ -80,7 +80,10 @@ class SessionService : Service() {
             val agentDone = armed && s.outSinceEnter > 200 && s.lastOutputAt - s.enterAt > MIN_WORK_MS &&
                 now - s.lastOutputAt > QUIET_MS && s.promptAt <= s.enterAt &&
                 (s.kind == "claude" || s.kind == "agy")
-            val done = (explicit != null && explicit != "bell") ||
+            // A program's own "done" signal (OSC 9 / 777) counts only after the user asked for
+            // something — Claude Code also sends one when it has been idle for a minute
+            // ("waiting for your input"), which is not news.
+            val done = (explicit != null && explicit != "bell" && armed) ||
                 (explicit == "bell" && longRun) ||
                 (shellDone && s.promptAt - s.enterAt > MIN_WORK_MS) ||
                 agentDone

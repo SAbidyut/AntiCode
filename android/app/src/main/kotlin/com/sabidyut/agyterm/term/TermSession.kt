@@ -171,15 +171,17 @@ class TermSession(
 
     fun write(data: ByteArray) {
         if (!alive) return
-        // Enter arms the "answer finished" check. In an agent any key does (answering
-        // "1 / 2 / 3" to a question starts more work); in a shell, typing more means the
-        // user is here and disarms it. Terminal replies (starting with ESC) don't count.
+        // Enter arms the "answer finished" check — so does a digit in an agent (answering
+        // "1 / 2 / 3" to its question starts more work). Typing a prompt doesn't: in a shell
+        // it disarms (the user is here), in an agent it changes nothing. Terminal replies
+        // (starting with ESC) don't count.
         val agent = kind == "agy" || kind == "claude"
-        if (data.contains('\r'.code.toByte()) || (agent && data.isNotEmpty() && data[0] != 0x1b.toByte())) {
+        val choice = agent && data.size == 1 && data[0] in '1'.code.toByte()..'9'.code.toByte()
+        if (data.contains('\r'.code.toByte()) || choice) {
             enterAt = System.currentTimeMillis()
             outSinceEnter = 0
             promptAt = 0
-        } else if (data.isNotEmpty() && data[0] != 0x1b.toByte()) {
+        } else if (!agent && data.isNotEmpty() && data[0] != 0x1b.toByte()) {
             enterAt = 0
         }
         writer.execute {
