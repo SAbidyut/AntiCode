@@ -48,6 +48,8 @@ class UbuntuManager private constructor(private val context: Context) {
         .put("progress", progress)
         .put("message", message)
         .put("storage", com.sabidyut.agyterm.Storage.hasAccess(context))
+        // may run in the background without battery restrictions
+        .put("background", (context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(context.packageName))
         .toString()
 
     private fun update(s: State, p: Double, m: String) {

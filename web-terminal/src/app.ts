@@ -20,6 +20,8 @@ interface Prefs {
   kbCompat: boolean;
   /** Fade-in output, gliding cursor, sliding scroll. */
   animations: boolean;
+  /** Asked once (on the first session) to run without battery restrictions. */
+  askedBackground: boolean;
 }
 const DEFAULT_PREFS: Prefs = {
   fontSize: 14,
@@ -30,6 +32,7 @@ const DEFAULT_PREFS: Prefs = {
   cursor: 'block',
   kbCompat: false,
   animations: true,
+  askedBackground: false,
 };
 const THEME_LABELS: Record<ThemeName, string> = {
   midnight: 'Midnight',
@@ -283,6 +286,38 @@ async function newSession(kind: SessionKind) {
   const s = addSession(id, kind);
   s.notePtySize(cols, rows);
   activate(s);
+  // The first session: ask (once) to be left alone by battery optimisation — otherwise
+  // Android may stop the app, and every session with it, while it's in the background.
+  if (hostState.host === 'android' && hostState.background === false && !prefs.askedBackground) {
+    prefs.askedBackground = true;
+    savePrefs();
+    toast('Allow AntiCode to keep running in the background');
+    window.setTimeout(() => bridge.allowBackground(), 600);
+  }
+}
+
+/** The app was killed with sessions running: say so, and offer to start them again. */
+async function reportLostSessions() {
+  const lost = await bridge.getLostSessions();
+  if (!lost.length) return;
+  bridge.forgetLostSessions();
+  const names = lost.map((l) => l.label || ({ agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu shell', android: 'Android shell' }[l.kind] ?? l.kind));
+  const unique = [...new Set(names)];
+  openSheet(
+    lost.length === 1 ? 'A session was stopped' : `${lost.length} sessions were stopped`,
+    h('p', { class: 'note' },
+      `Android closed AntiCode while it was in the background (${unique.join(', ')}). `,
+      hostState.background === false
+        ? 'Allow it to run without battery limits so this doesn’t happen again.'
+        : 'If it keeps happening, lock AntiCode in Recents (long-press its card → Lock).'),
+    h('div', { class: 'action-list' },
+      action('terminal', lost.length === 1 ? 'Open it again' : 'Open them again', 'Fresh sessions of the same kind', async () => {
+        for (const l of lost) await newSession(l.kind);
+      }),
+      hostState.background === false ? action('shield', 'Allow running in the background', '', () => bridge.allowBackground()) : null,
+      action('x', 'Not now', '', () => {}),
+    ),
+  );
 }
 
 function activate(s: TerminalSession | null) {
@@ -468,6 +503,8 @@ function renderHome() {
   hero.dataset.state = stateKnown ? st.ubuntu : 'starting'; // (the landscape layout trims the ready card)
   hero.replaceChildren(...(body.filter(Boolean) as Node[]));
   renderStorage();
+  // only on the phone, and only until it's allowed
+  $('#bg-card').hidden = !stateKnown || hostState.host !== 'android' || hostState.background !== false;
   renderHomeSessions();
 }
 
@@ -1089,6 +1126,7 @@ function bindChrome() {
   $('#sheet-backdrop').onclick = () => closeSheet();
   $('#remote-btn').onclick = () => openDashboard('agy');
   $('#storage-btn').onclick = () => bridge.requestStorage();
+  $('#bg-btn').onclick = () => bridge.allowBackground();
   $('#claude-remote-btn').onclick = () => openDashboard('claude');
   $('#copy-remote-cmd').onclick = () => {
     bridge.copyText('agy --remote-control');
@@ -1205,6 +1243,7 @@ async function boot() {
     }
     pendingOpen = '';
     restored = true;
+    if (!list.length) await reportLostSessions();
   } catch { /* nothing to restore */ }
 
   new ResizeObserver(() => {

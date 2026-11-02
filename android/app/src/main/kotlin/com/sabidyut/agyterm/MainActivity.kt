@@ -421,6 +421,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @android.annotation.SuppressLint("BatteryLife")
+    private fun requestBackgroundRun() {
+        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        try {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName")),
+            )
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Open Settings → Apps → AntiCode → Battery → Unrestricted", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun pushState() {
         val svc = service ?: return
         js("__native.onState(${JSONObject.quote(svc.ubuntu.stateJson())})")
@@ -820,6 +838,20 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun setSessionLabel(id: String, label: String) {
             svc().sessions[id]?.label = label.take(120)
+            svc().saveLive()
+        }
+
+        /** Sessions Android stopped while the app was gone (JSON [{kind, label}]). */
+        @JavascriptInterface
+        fun getLostSessions(): String = svc().lostSessions()
+
+        @JavascriptInterface
+        fun forgetLostSessions() = svc().forgetLostSessions()
+
+        /** Ask to be left out of battery optimisation (the system's own dialog). */
+        @JavascriptInterface
+        fun allowBackground() {
+            main.post { requestBackgroundRun() }
         }
 
         /** The Antigravity account (seen in the CLI's header, or typed in Settings). */

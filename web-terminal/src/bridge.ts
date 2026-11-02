@@ -23,6 +23,8 @@ export interface HostState {
   message?: string;
   /** Access to the phone's shared storage (/sdcard) has been granted. */
   storage?: boolean;
+  /** Allowed to run in the background without battery restrictions. */
+  background?: boolean;
 }
 
 export interface BridgeEvents {
@@ -87,6 +89,11 @@ export interface Bridge {
   setKeyboardCompat(on: boolean): void;
   /** Ask for access to the phone's storage (like termux-setup-storage). */
   requestStorage(): void;
+  /** Ask to run without battery restrictions (so Android doesn't stop the sessions). */
+  allowBackground(): void;
+  /** Sessions Android stopped while the app was gone; forget them once shown. */
+  getLostSessions(): Promise<{ kind: SessionKind; label: string }[]>;
+  forgetLostSessions(): void;
   exitApp(): void;
 }
 
@@ -124,6 +131,9 @@ interface AndroidBridgeApi {
   hideKeyboard(): void;
   setKeyboardCompat(on: boolean): void;
   requestStorage(): void;
+  allowBackground?(): void;
+  getLostSessions?(): string;
+  forgetLostSessions?(): void;
   exitApp(): void;
 }
 
@@ -172,6 +182,15 @@ class AndroidHostBridge implements Bridge {
   hideKeyboard() { this.api.hideKeyboard(); }
   setKeyboardCompat(on: boolean) { this.api.setKeyboardCompat(on); }
   requestStorage() { this.api.requestStorage(); }
+  allowBackground() { this.api.allowBackground?.(); }
+  async getLostSessions() {
+    try {
+      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string }[];
+    } catch {
+      return [];
+    }
+  }
+  forgetLostSessions() { this.api.forgetLostSessions?.(); }
   exitApp() { this.api.exitApp(); }
 }
 
@@ -244,6 +263,13 @@ class DevBridge implements Bridge {
   hideKeyboard() {}
   setKeyboardCompat() {}
   requestStorage() {}
+  allowBackground() {}
+  /** tests: ?lost=ubuntu,claude */
+  async getLostSessions() {
+    const q = new URLSearchParams(location.search).get('lost');
+    return q ? q.split(',').map((kind) => ({ kind: kind as SessionKind, label: '' })) : [];
+  }
+  forgetLostSessions() {}
   exitApp() {}
 }
 

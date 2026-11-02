@@ -140,6 +140,10 @@ class SessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         ubuntu = UbuntuManager.get(applicationContext)
+        // a fresh process with sessions still written down: they were killed with the old one
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val live = prefs.getString(PREF_LIVE, "[]") ?: "[]"
+        if (sessions.isEmpty() && live != "[]") prefs.edit().putString(PREF_LOST, live).putString(PREF_LIVE, "[]").apply()
         ubuntu.onBusyChanged = { mainHandler.post { updateForeground() } }
         createChannel()
     }
@@ -150,6 +154,7 @@ class SessionService : Service() {
         if (intent?.action == ACTION_STOP) {
             for (s in sessions.values) s.kill()
             sessions.clear()
+            saveLive() // stopped on purpose: nothing to report later
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
@@ -174,9 +179,11 @@ class SessionService : Service() {
         ) { s ->
             // also when no UI is attached: drop the wake lock once nothing runs
             mainHandler.post { updateForeground() }
+            saveLive()
             onSessionExit?.invoke(s)
         }
         sessions[id] = session
+        saveLive()
         updateForeground()
         mainHandler.post { startWatching() }
         return session
@@ -185,7 +192,30 @@ class SessionService : Service() {
     fun closeSession(id: String) {
         clearFinished(id)
         sessions.remove(id)?.kill()
+        saveLive()
         updateForeground()
+    }
+
+    // ---- sessions Android stopped ----
+    // The running sessions are written down as they come and go. If the app is killed (the
+    // phone ran low on memory, or a battery saver / "clean up" closed everything), the list
+    // is still there when it starts again: the page tells the user and offers to reopen them.
+
+    /** Writes down the running sessions (kind + what the UI calls them). */
+    @Synchronized
+    fun saveLive() {
+        val arr = org.json.JSONArray()
+        for (s in sessions.values.sortedBy { it.createdAt }) {
+            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label))
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LIVE, arr.toString()).apply()
+    }
+
+    /** Sessions that were running when the app was last killed ("[]" if none). */
+    fun lostSessions(): String = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_LOST, "[]") ?: "[]"
+
+    fun forgetLostSessions() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_LOST).apply()
     }
 
     /**
@@ -325,6 +355,8 @@ class SessionService : Service() {
         private const val DONE_NOTIFICATION_BASE = 1000
         private const val PREFS = "service"
         private const val PREF_NOTIFY = "notifyWhenDone"
+        private const val PREF_LIVE = "liveSessions"
+        private const val PREF_LOST = "lostSessions"
         const val EXTRA_OPEN_SESSION = "openSession"
         /** Quiet this long after output = the answer is done. */
         private const val QUIET_MS = 4000L
