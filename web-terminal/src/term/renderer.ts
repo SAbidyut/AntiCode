@@ -208,7 +208,8 @@ export class BanglaRenderer {
   // ---- motion ----
   /** Highest buffer line that has been shown with content (new lines past it fade in). */
   private revealedUpTo = -1;
-  private suppressReveal = true;
+  /** Whatever is on screen at the next frame is not "new output" (no fade-in). */
+  suppressReveal = true;
   private lastCursorT = '';
   private lastCursorLine = -1;
   private typingTimer = 0;
@@ -325,6 +326,14 @@ export class BanglaRenderer {
     this.preeditEl.className = 'term-preedit';
     this.preeditEl.style.display = 'none';
     this.viewport.append(this.cursorEl, this.preeditEl);
+    // a row's fade-in plays once: without the class it doesn't replay when the session is
+    // shown again (display:none → visible restarts animations)
+    this.viewport.addEventListener('animationend', (e) => {
+      const t = e.target as HTMLElement;
+      if (!t.classList.contains('row-in')) return;
+      t.classList.remove('row-in');
+      t.style.animationDelay = '';
+    });
     this.zoomLayer.append(this.viewport);
     this.el.append(this.zoomLayer);
     this.palette = build256(opts.theme);
@@ -760,10 +769,15 @@ export class BanglaRenderer {
     if (this.scrollPx > 0) this.scrollPx += n * lh;
   }
 
+  /** A restored session's old output is being replayed: draw once it's all in. */
+  paused = false;
+
   render() {
-    if (this.disposed) return;
+    if (this.disposed || this.paused) return;
     this.lastRenderAt = performance.now();
-    if (this.shouldWait()) {
+    // (nothing on screen — e.g. right after a text-size change — then don't wait: holding an
+    // empty picture is worse than a half-drawn one)
+    if (this.rows.size && this.shouldWait()) {
       if (!this.frame) this.frame = window.setTimeout(() => { this.frame = 0; this.render(); }, 20) as unknown as number;
       return;
     }
@@ -921,6 +935,7 @@ export class BanglaRenderer {
     // When the keyboard covers part of the screen the terminal is NOT resized (that makes
     // programs redraw and flicker); instead the screen slides up just enough to keep the
     // cursor — and a line of context under it — visible. A prompt at the top never moves.
+    let panEased = false;
     if (this.scrollPx === 0) {
       const overflow = rows * lh - visible;
       const below = (lastY + 1) * lh - visible;
@@ -939,6 +954,7 @@ export class BanglaRenderer {
       const ease = motion && !this.insetsMoving && this.zoom === 1 && d > 0 && d <= 4 * lh;
       const dur = ease ? '160ms' : '0s';
       if (this.zoomLayer.style.transitionDuration !== dur) this.zoomLayer.style.transitionDuration = dur;
+      panEased = ease && pan !== this.pan;
       this.pan = pan;
     }
     this.applyLayerTransform();
@@ -961,7 +977,10 @@ export class BanglaRenderer {
         // Typing moves it along its line: there it jumps at once (a glide trails behind the
         // letters and makes typing feel slow). It glides only to another line (after Enter).
         const sameLine = cursorLine === this.lastCursorLine;
-        const far = !wasShown || sameLine || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved || this.insetsMoving;
+        // … and when the screen itself slides (new line at the bottom, keyboard pan): the
+        // cursor rides along inside it instead of a second, out-of-step glide (it dipped)
+        const far = !wasShown || sameLine || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved ||
+          this.insetsMoving || slide || panEased;
         this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
         this.cursorEl.style.transform = t;
         this.lastCursorT = t;

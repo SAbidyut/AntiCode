@@ -95,7 +95,7 @@ const jsErrors: string[] = [];
 function reportError(msg: string) {
   jsErrors.push(`${new Date().toISOString()} ${msg}`);
   if (jsErrors.length > 20) jsErrors.shift();
-  toast('Something went wrong — use ⋮ → Copy debug log and send it');
+  toast('Something went wrong — Settings → Advanced → Copy debug log');
 }
 window.addEventListener('error', (e) => reportError(`${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
 window.addEventListener('unhandledrejection', (e) => reportError(`unhandled rejection: ${String(e.reason)}`));
@@ -408,35 +408,49 @@ function renderTabs(scrollToActive = false) {
     bridge.setSessionLabel(s.id, l);
   }
   const sig = [...sessions.values()]
-    .map((s) => [s.id, s.label, s.about, s.customName, s.alive, s === active].join('|'))
+    .map((s) => [s.id, s.label, s.about, s.customName, s.alive].join('|'))
     .join('\n');
   if (sig !== tabsSig) {
     tabsSig = sig;
-    buildTabs(tabs);
+    syncTabs(tabs);
     renderHomeSessions();
   }
+  // switching tabs only moves the highlight (existing tabs, so it eases)
+  for (const el of tabs.children) (el as HTMLElement).classList.toggle('active', (el as HTMLElement).dataset.id === active?.id);
   if (scrollToActive) tabs.querySelector('.tab.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
 
-function buildTabs(tabs: HTMLElement) {
-  tabs.replaceChildren(
-    ...[...sessions.values()].map((s) => {
-      const tab = h('div', { class: `tab kind-${s.kind}` + (s === active ? ' active' : '') + (s.alive ? '' : ' dead'), title: s.label },
-        svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.label));
-      const x = h('button', { class: 'tx', 'aria-label': 'Close' }, svg('x'));
-      x.onclick = (e) => {
-        e.stopPropagation();
-        confirmClose(s);
-      };
-      tab.append(x);
-      tab.onclick = () => {
-        haptic();
-        activate(s);
-      };
-      onLongPress(tab, () => openRenameSheet(s));
-      return tab;
-    }),
-  );
+/** Update the tabs in place: same elements for the same sessions (no flash, no jump). */
+function syncTabs(tabs: HTMLElement) {
+  const existing = new Map<string, HTMLElement>();
+  for (const el of tabs.children) existing.set((el as HTMLElement).dataset.id ?? '', el as HTMLElement);
+  const order: HTMLElement[] = [];
+  for (const s of sessions.values()) {
+    const tab = existing.get(s.id) ?? makeTab(s);
+    tab.classList.toggle('dead', !s.alive);
+    tab.title = s.label;
+    const tt = tab.querySelector('.tt')!;
+    if (tt.textContent !== s.label) tt.textContent = s.label;
+    order.push(tab);
+  }
+  if (order.length !== tabs.children.length || order.some((t, i) => tabs.children[i] !== t)) tabs.replaceChildren(...order);
+}
+
+function makeTab(s: TerminalSession): HTMLElement {
+  const tab = h('div', { class: `tab kind-${s.kind}`, 'data-id': s.id },
+    svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.label));
+  const x = h('button', { class: 'tx', 'aria-label': 'Close' }, svg('x'));
+  x.onclick = (e) => {
+    e.stopPropagation();
+    confirmClose(s);
+  };
+  tab.append(x);
+  tab.onclick = () => {
+    haptic();
+    activate(s);
+  };
+  onLongPress(tab, () => openRenameSheet(s));
+  return tab;
 }
 
 // ================================================================ screens
@@ -485,14 +499,24 @@ function renderHome() {
     };
     return b;
   };
+  // the hero is rebuilt only when what it shows changes (state updates come often: a rebuild
+  // restarts its transitions and flashes); install progress is updated in place
+  const kind = !stateKnown ? 'starting' : st.ubuntu === 'ready' || st.ubuntu === 'installing' ? st.ubuntu : `${st.ubuntu}|${st.message ?? ''}`;
+  if (kind === 'installing' && hero.dataset.kind === 'installing') {
+    updateInstallProgress(hero);
+    finishRenderHome();
+    return;
+  }
+  if (hero.dataset.kind === kind && hero.childElementCount) {
+    finishRenderHome();
+    return;
+  }
   let body: Kid[];
   if (!stateKnown) {
     body = [pill('busy', 'Starting…')]; // not "Install Ubuntu" for a moment on every start
   } else if (st.ubuntu === 'ready') {
     body = [
-      pill('ok', 'Ubuntu 24.04 · ready'),
       h('h2', {}, 'Pick your agent'),
-      h('p', {}, 'Each one runs in a real Ubuntu terminal. The first launch installs it and asks you to sign in.'),
       h('div', { class: 'agents' },
         agentTile('agy', 'sparkle', 'Antigravity', 'Google'),
         agentTile('claude', 'claude', 'Claude Code', 'Anthropic'),
@@ -502,12 +526,11 @@ function renderHome() {
       ),
     ];
   } else if (st.ubuntu === 'installing') {
-    const pct = Math.round((st.progress ?? 0) * 100);
     body = [
       pill('busy', 'Installing Ubuntu'),
       h('h2', {}, 'Setting things up'),
-      h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` })),
-      h('div', { class: 'progress-row' }, h('span', {}, st.message ?? 'Downloading…'), h('span', {}, `${pct}%`)),
+      h('div', { class: 'progress' }, h('div', { class: 'bar' })),
+      h('div', { class: 'progress-row' }, h('span', { class: 'msg' }), h('span', { class: 'pct' })),
       h('p', { style: 'margin-top:12px' }, 'Keep the app open — this only happens once.'),
     ];
   } else {
@@ -526,11 +549,64 @@ function renderHome() {
     ];
   }
   hero.dataset.state = stateKnown ? st.ubuntu : 'starting'; // (the landscape layout trims the ready card)
+  hero.dataset.kind = kind;
+  // (not while the home screen's own entrance is playing: that already brings it in)
+  const was = hero.childElementCount > 0 && document.body.dataset.screen === 'home' && !$('#home').classList.contains('enter');
   hero.replaceChildren(...(body.filter(Boolean) as Node[]));
+  if (kind === 'installing') updateInstallProgress(hero);
+  // a new state (installed, failed…) fades in rather than snapping
+  if (was && prefs.animations) hero.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
+  finishRenderHome();
+}
+
+function updateInstallProgress(hero: HTMLElement) {
+  const st = hostState;
+  const frac = Math.max(0, Math.min(1, st.progress ?? 0));
+  const bar = hero.querySelector('.progress .bar') as HTMLElement | null;
+  if (bar) bar.style.transform = `scaleX(${frac})`;
+  const msg = hero.querySelector('.progress-row .msg');
+  const text = st.message ?? 'Downloading…';
+  if (msg && msg.textContent !== text) msg.textContent = text;
+  const pct = hero.querySelector('.progress-row .pct');
+  const p = `${Math.round(frac * 100)}%`;
+  if (pct && pct.textContent !== p) pct.textContent = p;
+}
+
+function finishRenderHome() {
   renderStorage();
   // only on the phone, and only until it's allowed
-  $('#bg-card').hidden = !stateKnown || hostState.host !== 'android' || hostState.background !== false;
+  setCardShown($('#bg-card'), stateKnown && hostState.host === 'android' && hostState.background === false);
   renderHomeSessions();
+}
+
+/** Shows / hides a home card; one that is done (permission given) folds away instead of vanishing. */
+function setCardShown(el: HTMLElement, show: boolean) {
+  if (show) {
+    if (el.dataset.folding) {
+      delete el.dataset.folding;
+      for (const a of el.getAnimations()) a.cancel();
+    }
+    el.hidden = false;
+    return;
+  }
+  if (el.hidden || el.dataset.folding) return;
+  if (!prefs.animations || document.body.dataset.screen !== 'home' || !el.offsetHeight) {
+    el.hidden = true;
+    return;
+  }
+  el.dataset.folding = '1';
+  const cs = getComputedStyle(el);
+  const from = { opacity: 1, height: `${el.offsetHeight}px`, paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom, marginBottom: cs.marginBottom };
+  const to = { opacity: 0, height: '0px', paddingTop: '0px', paddingBottom: '0px', marginBottom: '0px' };
+  el.style.overflow = 'hidden';
+  const a = el.animate([from, to], { duration: 280, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' });
+  const done = (hide: boolean) => {
+    el.style.overflow = '';
+    if (hide && el.dataset.folding) el.hidden = true;
+    delete el.dataset.folding;
+  };
+  a.onfinish = () => done(true);
+  a.oncancel = () => done(false);
 }
 
 function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
@@ -538,7 +614,8 @@ function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
     h('span', { class: 'agent-icon' }, svg(ic)),
     h('span', { class: 'agent-name' }, name),
     h('span', { class: 'agent-sub' }, maker),
-    h('span', { class: 'agent-go' }, 'Launch', svg('chevron')));
+    h('span', { class: 'agent-go' }, svg('chevron')));
+  b.setAttribute('aria-label', `Launch ${name}`);
   b.onclick = () => {
     haptic();
     newSession(kind);
@@ -549,16 +626,13 @@ function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
 function renderStorage() {
   const status = $('#storage-status');
   const button = $('#storage-btn');
-  $('#storage-card').hidden = !stateKnown;
+  // nothing left to do here once access is granted
+  setCardShown($('#storage-card'), stateKnown && !(hostState.host !== 'dev' && hostState.storage));
   if (!stateKnown) return;
   if (hostState.host === 'dev') {
     status.textContent = 'Available in the Android app.';
     button.hidden = true;
-  } else if (hostState.storage) {
-    // Nothing left to do here once access is granted.
-    $('#storage-card').hidden = true;
-    return;
-  } else {
+  } else if (!hostState.storage) {
     status.textContent = 'Not allowed yet.';
     button.hidden = false;
   }
@@ -596,7 +670,7 @@ function onLongPress(el: HTMLElement, run: () => void) {
 }
 
 function openRenameSheet(s: TerminalSession) {
-  const input = h('input', { class: 'text-input', type: 'text', maxlength: '60', placeholder: s.about || s.kindLabel, spellcheck: 'false' }) as HTMLInputElement;
+  const input = h('input', { class: 'text-input', type: 'text', maxlength: '60', placeholder: s.about || s.kindLabel, spellcheck: 'false', 'data-autofocus': '1' }) as HTMLInputElement;
   input.value = s.customName;
   const save = () => {
     s.rename(input.value);
@@ -729,7 +803,13 @@ function bindTerminalGestures(s: TerminalSession) {
       if (!moved) {
         haptic();
         s.toggleReader(true);
-        toast('Reader view — select text to copy. Back to return.');
+        // the hint once; after that the gesture speaks for itself
+        let seen = false;
+        try {
+          seen = localStorage.getItem('readerHint') === '1';
+          localStorage.setItem('readerHint', '1');
+        } catch { /* no storage: show it */ }
+        if (!seen) toast('Reader view — select text to copy. Back to return.');
       }
     }, 650);
   });
@@ -809,13 +889,13 @@ function fitSoon() {
   }, 250);
 }
 
-function setFontSize(size: number, persist: boolean) {
+function setFontSize(size: number, persist: boolean, say = false) {
   prefs.fontSize = size;
   for (const s of sessions.values()) s.renderer.setOptions({ fontSize: size });
   active?.fit();
   if (persist) {
     savePrefs();
-    toast(`Text size ${size}`);
+    if (say) toast(`Text size ${size}`);
   }
 }
 
@@ -906,29 +986,48 @@ function buildKeyBar() {
 
 // ================================================================ bottom sheet
 function sheetOpen() {
-  return !$('#sheet').hidden;
+  const sheet = $('#sheet');
+  return !sheet.hidden && !sheet.classList.contains('closing');
 }
 let sheetHideTimer = 0;
 function openSheet(title: string, ...content: Kid[]) {
   const sheet = $('#sheet');
-  // an action that opens another sheet (⋮ → Settings) must not be hidden by the
-  // previous sheet's closing animation
+  const backdrop = $('#sheet-backdrop');
+  const body = sheet.querySelector('.sheet-body') as HTMLElement;
+  // a sheet replacing another (⋮ → Settings): the sheet stays, its height eases to the new
+  // content and the content fades in, instead of a jump
+  const swap = !sheet.hidden;
+  const h0 = swap ? sheet.offsetHeight : 0;
   clearTimeout(sheetHideTimer);
   sheet.classList.remove('closing');
-  sheet.querySelector('.sheet-body')!.replaceChildren(...([title ? h('h3', {}, title) : null, ...content].filter(Boolean) as Node[]));
-  $('#sheet-backdrop').hidden = false;
+  backdrop.classList.remove('closing');
+  body.replaceChildren(...([title ? h('h3', {}, title) : null, ...content].filter(Boolean) as Node[]));
+  backdrop.hidden = false;
   sheet.hidden = false;
   sheet.scrollTop = 0;
+  if (swap && prefs.animations) {
+    const h1 = sheet.offsetHeight;
+    if (h1 !== h0) {
+      sheet.animate([{ transform: `translateY(${h1 - h0}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+    }
+    body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
+  }
+  // the terminal's keyboard would squeeze the sheet into a strip above it (not for a sheet
+  // that wants typing: the keyboard moves on to its field)
+  if (keyboardShown && screen === 'term' && !body.querySelector('[data-autofocus]')) hideKeyboard();
 }
 function closeSheet() {
   const sheet = $('#sheet');
+  const backdrop = $('#sheet-backdrop');
   if (sheet.hidden) return;
   sheet.classList.add('closing');
-  $('#sheet-backdrop').hidden = true;
+  backdrop.classList.add('closing');
   clearTimeout(sheetHideTimer);
   sheetHideTimer = window.setTimeout(() => {
     sheet.hidden = true;
+    backdrop.hidden = true;
     sheet.classList.remove('closing');
+    backdrop.classList.remove('closing');
   }, 190);
 }
 function action(ic: string, title: string, sub: string, run: () => void, danger = false) {
@@ -955,7 +1054,7 @@ function openNewSessionSheet() {
 function openMoreSheet() {
   const s = active;
   openSheet('', h('div', { class: 'action-list' },
-    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', 'Read and copy text with perfect Bangla', () => s.toggleReader()),
+    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', '', () => s.toggleReader()),
     s && action('copy', 'Copy all text', '', () => {
       bridge.copyText(s.allText());
       toast('Copied');
@@ -964,29 +1063,28 @@ function openMoreSheet() {
       const t = await bridge.readClipboard();
       if (t) s.paste(t);
     }),
-    action('remote', 'Antigravity dashboard', 'Antigravity running on your computer', () => openDashboard('agy')),
-    action('claude', 'Claude Code dashboard', 'claude.ai/code — Remote Control sessions', () => openDashboard('claude')),
-    action('zoomIn', 'Bigger text', '', () => setFontSize(Math.min(28, prefs.fontSize + 1), true)),
-    action('zoomOut', 'Smaller text', '', () => setFontSize(Math.max(9, prefs.fontSize - 1), true)),
+    action('remote', 'Antigravity dashboard', '', () => openDashboard('agy')),
+    action('claude', 'Claude Code dashboard', '', () => openDashboard('claude')),
     s && action('eraser', 'Clear screen', '', () => {
       s.term.clear();
       s.scrollToBottom();
     }),
     action('settings', 'Settings', '', openSettingsSheet),
-    s && action('bug', 'Copy debug log', 'Paste it into a chat if something misbehaves', () => {
-      bridge.copyText(
-        [
-          `AntiCode debug log — ${new Date().toISOString()}`,
-          `host=${bridge.host} ubuntu=${hostState.ubuntu} storage=${hostState.storage} ua=${navigator.userAgent}`,
-          `--- JavaScript errors (${jsErrors.length}) ---`,
-          ...jsErrors,
-          s.debugDump(),
-        ].join('\n'),
-      );
-      toast('Debug log copied');
-    }),
     s && action('power', 'Close session', '', () => confirmClose(s), true),
   ));
+}
+
+function copyDebugLog() {
+  bridge.copyText(
+    [
+      `AntiCode debug log — ${new Date().toISOString()}`,
+      `host=${bridge.host} ubuntu=${hostState.ubuntu} storage=${hostState.storage} ua=${navigator.userAgent}`,
+      `--- JavaScript errors (${jsErrors.length}) ---`,
+      ...jsErrors,
+      active ? active.debugDump() : '(no session open)',
+    ].join('\n'),
+  );
+  toast('Debug log copied');
 }
 
 // ================================================================ settings
@@ -1073,7 +1171,7 @@ function openSettingsSheet() {
     accounts.agy = v;
     bridge.setAntigravityAccount(accounts.agy);
   };
-  const resetBtn = h('button', { class: 'btn btn-secondary' }, 'Open them in the app again');
+  const resetBtn = h('button', { class: 'btn btn-secondary' }, 'Open claude.ai in the app again');
   resetBtn.onclick = () => {
     bridge.resetDashboardChoices();
     toast('Dashboards will open in the app again');
@@ -1103,51 +1201,63 @@ function openSettingsSheet() {
   openSheet('Settings',
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Theme'), swatches),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Preview'), preview),
+    // while dragging only the preview changes; the terminals once the finger lifts (each
+    // change resizes them and makes their programs redraw)
     range('Text size', 9, 28, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
-      setFontSize(v, false);
+      prefs.fontSize = v;
       sample?.renderer.setOptions({ fontSize: v });
-    }, () => setFontSize(prefs.fontSize, true)),
+    }, () => setFontSize(prefs.fontSize, true, false)),
     range('Bangla letter size', 0.8, 1.3, 0.05, prefs.bnScale, (v) => `${Math.round(v * 100)}%`, (v) => {
       prefs.bnScale = v;
       for (const s of sessions.values()) s.renderer.setOptions({ bnScale: v });
       sample?.renderer.setOptions({ bnScale: v });
     }, savePrefs),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
-    toggle('Notify when a task finishes', 'A notification when an agent has answered or a long command is done — unless you are looking at it.', notifyWhenDone, (v) => {
+    toggle('Notify when a task finishes', 'When an agent answers while you’re elsewhere.', notifyWhenDone, (v) => {
       notifyWhenDone = v;
       bridge.setNotifyWhenDone(v);
     }),
-    toggle('Animations', 'New output fades in, the cursor glides and the screen slides smoothly.', prefs.animations, (v) => {
+    toggle('Animations', 'Fades, glides and slides.', prefs.animations, (v) => {
       prefs.animations = v;
       savePrefs();
       for (const s of sessions.values()) s.renderer.setOptions({ animate: v });
     }),
-    toggle('Smart keyboard', 'Suggestions and Bangla typing (amon → এমন), like in a chat app. A word goes to the terminal when you press space or pick a suggestion. Off: raw keys with a number row.', prefs.kbSmart, (v) => {
+    toggle('Smart keyboard', 'Suggestions and Bangla typing, like in a chat app. Off: raw keys.', prefs.kbSmart, (v) => {
       prefs.kbSmart = v;
       savePrefs();
       bridge.setKeyboardSmart(v);
     }),
-    toggle('Keyboard compatibility mode', 'Only without the smart keyboard: turn on if your keyboard types nothing or wrong characters.', prefs.kbCompat, (v) => {
-      prefs.kbCompat = v;
-      savePrefs();
-      bridge.setKeyboardCompat(v);
-    }),
-    h('div', { class: 'setting' },
-      h('div', { class: 's-title' }, 'Antigravity Google account'),
-      h('div', { class: 's-sub' }, 'Dashboards open with this account (found automatically when agy starts).'),
-      accountField),
-    h('div', { class: 'setting' },
-      h('div', { class: 's-title' }, 'Antigravity dashboard address'),
-      h('div', { class: 's-sub' }, 'Paste the link agy shows if it differs.'),
-      urlField('remoteUrl')),
-    h('div', { class: 'setting' },
-      h('div', { class: 's-title' }, 'Claude Code dashboard address'),
-      h('div', { class: 's-sub' }, 'Where Remote Control sessions show up.'),
-      urlField('claudeUrl')),
-    h('div', { class: 'setting' },
-      h('div', { class: 's-title' }, 'Claude Code dashboard after a Google sign-in'),
-      h('div', { class: 's-sub' }, 'Google sign-in only works in Chrome, so claude.ai then opens there for a week. Antigravity always uses Chrome (Google-only sign-in).'),
-      resetBtn),
+    // rarely needed: folded away
+    h('details', { class: 'advanced' },
+      h('summary', {}, h('span', {}, 'Advanced'), svg('chevron')),
+      toggle('Keyboard compatibility mode', 'Smart keyboard off and keys type nothing or the wrong thing? Turn this on.', prefs.kbCompat, (v) => {
+        prefs.kbCompat = v;
+        savePrefs();
+        bridge.setKeyboardCompat(v);
+      }),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Antigravity Google account'),
+        h('div', { class: 's-sub' }, 'Found automatically when agy starts.'),
+        accountField),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Antigravity dashboard address'),
+        urlField('remoteUrl')),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Claude Code dashboard address'),
+        urlField('claudeUrl')),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'claude.ai after a Google sign-in'),
+        h('div', { class: 's-sub' }, 'Opens in Chrome for a week (Google sign-in needs it).'),
+        resetBtn),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Something misbehaving?'),
+        h('div', { class: 's-sub' }, 'Copy a log to paste into a chat.'),
+        (() => {
+          const b = h('button', { class: 'btn btn-secondary' }, svg('bug'), h('span', {}, 'Copy debug log'));
+          b.onclick = () => copyDebugLog();
+          return b;
+        })()),
+    ),
     h('p', { class: 'about-line' }, 'AntiCode · fonts: Kalpurush, JetBrains Mono, Noto Sans Symbols (SIL Open Font License)'),
   );
 }
@@ -1249,8 +1359,9 @@ async function boot() {
     savedUi = { ...savedUi, ...JSON.parse(localStorage.getItem('ui') ?? '{}') };
   } catch { /* none saved */ }
   const [, first] = await Promise.all([state, listed]);
-  const toTerm = first.length > 0 && (!!pendingOpen || savedUi.screen !== 'home');
-  if (!toTerm) enterHome();
+  // nothing to restore: the home screen right away (with sessions, after they're listed —
+  // so its "Open sessions" don't pop in later and push everything down)
+  if (first.length === 0) enterHome();
   // a terminal to come back to: it appears once restored (the home screen if that stalls)
   window.setTimeout(() => {
     if (document.body.dataset.screen === 'boot') enterHome();
@@ -1297,7 +1408,7 @@ async function boot() {
     if (list.length) {
       // a tapped notification first; else the tab (and screen) that was open
       activate((pendingOpen && sessions.get(pendingOpen)) || sessions.get(savedUi.active) || [...sessions.values()].pop()!);
-      if (!pendingOpen && savedUi.screen === 'home') showHome();
+      if (!pendingOpen && savedUi.screen === 'home') enterHome();
     }
     pendingOpen = '';
     restored = true;

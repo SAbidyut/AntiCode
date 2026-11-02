@@ -552,6 +552,16 @@ export class TerminalSession {
   /** A restored session: its saved output comes next (requests in it were answered then). */
   beginReplay() {
     this.replaying = true;
+    // draw it once, when it's all in — not flickering through the old screens
+    this.renderer.paused = true;
+    window.setTimeout(() => this.endReplayPause(), 4000); // in case the end never comes
+  }
+
+  private endReplayPause() {
+    if (!this.renderer.paused) return;
+    this.renderer.paused = false;
+    this.renderer.suppressReveal = true; // old output: no fade-in
+    this.renderer.schedule();
   }
 
   /**
@@ -563,6 +573,7 @@ export class TerminalSession {
   restoreModes() {
     this.term.write('', () => {
       this.replaying = false; // everything up to here was the replay
+      this.endReplayPause();
     });
     let k: string | null = null;
     try {
