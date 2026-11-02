@@ -600,10 +600,46 @@ class MainActivity : ComponentActivity() {
                 } else {
                     Log.e(SELFTEST, "SELFTEST_ZOOM_FAIL bars=$bars lines=${lines.size} strayClocks=$strayClocks")
                 }
-                selftestClaudeInUi()
+                selftestImeWords()
             }
           }
         }, 10_000L + sizes.size * 2500L + 2500L)
+    }
+
+    /**
+     * Phase 3d: the smart keyboard, driven like Gboard does it: a word composed in Latin,
+     * finished, then replaced by its Bangla suggestion (by re-selecting it, and by deleting
+     * it). The terminal must end up with only the Bangla words.
+     */
+    private fun selftestImeWords() {
+        Log.i(SELFTEST, "phase 3d: smart keyboard words")
+        web.evaluateJavascript("__selftest.send('clear')", null)
+        main.postDelayed({
+            focusTerminalKeys()
+            val ic = keys.onCreateInputConnection(android.view.inputmethod.EditorInfo())
+            ic.commitText("echo ", 1)
+            for (w in listOf("a", "am", "ami")) ic.setComposingText(w, 1)
+            ic.finishComposingText()
+            ic.setComposingRegion(0, 3) // re-select "ami" …
+            ic.commitText("আমি ", 1) // … and replace it
+            for (w in listOf("v", "va", "val", "valo")) ic.setComposingText(w, 1)
+            ic.finishComposingText()
+            ic.deleteSurroundingText(4, 0) // or delete it …
+            ic.commitText("ভালো", 1) // … and type the suggestion
+            ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NONE)
+            main.postDelayed({
+                selftestScreen { screen ->
+                    val lines = screen.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                    for (line in lines.takeLast(4)) Log.i(SELFTEST, "ime| $line")
+                    if (lines.any { it == "আমি ভালো" } && lines.none { it.contains("ami") || it.contains("valo") }) {
+                        Log.i(SELFTEST, "SELFTEST_IME_OK")
+                    } else {
+                        Log.e(SELFTEST, "SELFTEST_IME_FAIL")
+                    }
+                    selftestClaudeInUi()
+                }
+            }, 3000)
+        }, 2000)
     }
 
     /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */

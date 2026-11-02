@@ -118,64 +118,105 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
      * A full-editor connection whose Editable is emptied whenever text is committed.
      * (Keyboards that compose words even in raw mode deliver the word when it's committed.)
      */
+    /**
+     * A full editor that mirrors the word being typed, the way the keyboard expects a text
+     * field to behave: it may finish a word and then replace it (a Bangla suggestion for
+     * "ami"), re-select it, or delete parts of it — so the text stays here until the word
+     * is over. The terminal always gets the difference: what was committed since the last
+     * sync (and ⌫ for what was taken back); the composing part is only shown by the page.
+     */
     private inner class Connection : BaseInputConnection(this@KeyCaptureView, true) {
 
+        /** Committed text of the current word that the terminal already has. */
+        private var sent = ""
         private var shown = ""
 
-        /** Tell the page what is being composed (only when it changed). */
-        fun preedit() {
-            val t = editable?.toString() ?: ""
-            if (t != shown) {
-                shown = t
-                sink.onComposing(t)
-            }
+        private fun composingRange(e: CharSequence): IntRange? {
+            val a = getComposingSpanStart(e as android.text.Spannable)
+            val b = getComposingSpanEnd(e)
+            return if (a in 0..b && b <= e.length && a < b) a until b else null
         }
 
-        private fun flushEditable() {
+        /** Bring the terminal and the page up to date with the editor. */
+        fun sync() {
             val e = editable ?: return
-            if (e.isNotEmpty()) {
-                sink.onText(e.toString().replace('\n', '\r'))
-                e.clear()
+            val text = e.toString()
+            val comp = composingRange(e)
+            val committed = if (comp == null) text else text.removeRange(comp)
+            val composing = if (comp == null) "" else text.substring(comp)
+            if (committed != sent) {
+                var p = 0
+                while (p < sent.length && p < committed.length && sent[p] == committed[p]) p++
+                if (p > 0 && p < sent.length && Character.isLowSurrogate(sent[p])) p-- // whole characters
+                repeat(sent.codePointCount(p, sent.length)) { sink.onKey(KeyEvent.KEYCODE_DEL, false, false, false, "") }
+                val add = committed.substring(p)
+                if (add.isNotEmpty()) sink.onText(add.replace('\n', '\r'))
+                sent = committed
             }
-            preedit()
+            if (composing != shown) {
+                shown = composing
+                sink.onComposing(composing)
+            }
+            // a finished word (ends with a space / newline, nothing composing): start afresh,
+            // so ⌫ from here on is a plain terminal backspace
+            if (composing.isEmpty() && committed.isNotEmpty() && committed.last().isWhitespace()) reset()
         }
 
+        private fun reset() {
+            editable?.clear()
+            sent = ""
+            (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                .updateSelection(this@KeyCaptureView, 0, 0, -1, -1)
+        }
+
+        /** Everything typed so far goes to the terminal now (before Enter, a key …). */
+        private fun flushAll() {
+            super.finishComposingText()
+            sync()
+            if (editable?.isNotEmpty() == true) reset()
+        }
+
+        /** The page sent the composing text itself (before a key-bar key): forget it here. */
         fun discard() {
             editable?.clear()
-            preedit()
+            sent = ""
+            if (shown.isNotEmpty()) {
+                shown = ""
+                sink.onComposing("")
+            }
             (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                 .restartInput(this@KeyCaptureView)
         }
 
         override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
             super.setComposingText(text, newCursorPosition)
-            preedit()
+            sync()
             return true
         }
 
         override fun setComposingRegion(start: Int, end: Int): Boolean {
             super.setComposingRegion(start, end)
-            preedit()
+            sync()
             return true
         }
 
         override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
             super.commitText(text, newCursorPosition)
-            flushEditable()
+            sync()
             return true
         }
 
         override fun finishComposingText(): Boolean {
             super.finishComposingText()
-            flushEditable()
+            sync()
             return true
         }
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            // inside the word being composed: the keyboard edits it
+            // text the keyboard can see (the current word): it edits it, the terminal follows
             if (editable?.isNotEmpty() == true) {
                 super.deleteSurroundingText(beforeLength, afterLength)
-                preedit()
+                sync()
                 return true
             }
             // Our editor is otherwise empty, so a delete means "backspace in the terminal".
@@ -187,16 +228,17 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         override fun sendKeyEvent(event: KeyEvent): Boolean {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) return super.sendKeyEvent(event)
-                flushEditable() // a word being composed goes first (then Enter, ⌫ …)
+                flushAll() // a word being typed goes first (then Enter, ⌫ …)
                 handleKey(event)
             } else if (event.action == KeyEvent.ACTION_MULTIPLE && event.keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+                flushAll()
                 event.characters?.let { sink.onText(it) }
             }
             return true
         }
 
         override fun performEditorAction(actionCode: Int): Boolean {
-            flushEditable()
+            flushAll()
             sink.onKey(KeyEvent.KEYCODE_ENTER, false, false, false, "")
             return true
         }

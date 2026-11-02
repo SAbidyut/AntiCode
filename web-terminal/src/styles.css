@@ -460,7 +460,7 @@ body[data-screen='home']::before {
 .term-preedit {
   position: absolute; left: 0; top: 0; z-index: 2; height: var(--lh); line-height: var(--lh);
   white-space: pre; pointer-events: none; padding-right: 1px;
-  background: inherit; text-decoration: underline; text-underline-offset: 3px;
+  background: var(--tbg, #000); text-decoration: underline; text-underline-offset: 3px;
   border-right: 2px solid var(--accent);
 }
 .term-cursor {

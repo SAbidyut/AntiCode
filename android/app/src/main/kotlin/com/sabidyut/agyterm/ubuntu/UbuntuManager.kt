@@ -413,6 +413,7 @@ class UbuntuManager private constructor(private val context: Context) {
             // proves that an "open this link" request comes from our xdg-open (not from text
             // a program printed, e.g. `cat` of a downloaded file)
             "ANTICODE_LINK_TOKEN=$linkToken",
+            timeZoneEnv(), // the phone's time, not UTC (the prompt's clock, `date`, logs)
         )
         when (kind) {
             "agy" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
@@ -447,6 +448,24 @@ class UbuntuManager private constructor(private val context: Context) {
             "ANDROID_ROOT=/system",
         )
         return Launch(proot, args.toTypedArray(), env, context.filesDir.absolutePath)
+    }
+
+    /**
+     * The phone's time zone for Ubuntu: its name when Ubuntu has the zone files (tzdata),
+     * otherwise a POSIX rule with the current offset (no files needed), e.g. "<+06>-6".
+     */
+    private fun timeZoneEnv(): String {
+        val tz = java.util.TimeZone.getDefault()
+        if (File(rootfs, "usr/share/zoneinfo/${tz.id}").isFile) return "TZ=${tz.id}"
+        val minutes = tz.getOffset(System.currentTimeMillis()) / 60_000
+        val a = kotlin.math.abs(minutes)
+        val h = a / 60
+        val m = a % 60
+        val east = minutes >= 0
+        val name = (if (east) "+" else "-") + "%02d".format(h) + (if (m > 0) "%02d".format(m) else "")
+        // POSIX counts the other way round: UTC+6 is written "-6"
+        val rule = (if (east) "-" else "+") + h + (if (m > 0) ":%02d".format(m) else "")
+        return "TZ=<$name>$rule"
     }
 
     /** Plain Android shell (no Ubuntu) — handy for debugging. */

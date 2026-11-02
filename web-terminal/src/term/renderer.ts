@@ -441,6 +441,7 @@ export class BanglaRenderer {
     s.setProperty('--bw', `${Math.max(1, Math.round(fontSize / 13))}px`);
     s.background = theme.background;
     s.color = theme.foreground;
+    s.setProperty('--tbg', theme.background);
     this.cursorEl.style.setProperty('--cursor', theme.cursor);
   }
 
