@@ -147,8 +147,18 @@ class SessionService : Service() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val live = prefs.getString(PREF_LIVE, "[]") ?: "[]"
         if (sessions.isEmpty() && live != "[]") prefs.edit().putString(PREF_LOST, live).putString(PREF_LIVE, "[]").apply()
-        ubuntu.onBusyChanged = { mainHandler.post { updateForeground() } }
+        ubuntu.onBusyChanged = {
+            mainHandler.post {
+                updateForeground()
+                if (ubuntu.state == UbuntuManager.State.READY) warmUp()
+            }
+        }
         createChannel()
+        // after the UI had its start: unpack the helper files once, then a shell in waiting
+        mainHandler.postDelayed({
+            Thread({ ubuntu.prepare() }, "ubuntu-prepare").start()
+            warmUp()
+        }, 1500)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -162,10 +172,58 @@ class SessionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_RESHOW) {
+            mainHandler.post { updateForeground() } // the notification was swiped away
+            return START_NOT_STICKY
+        }
         return START_NOT_STICKY
     }
 
+    // ---- a shell started ahead of time ----
+    // Ubuntu (proot) and the shell's line editor (ble.sh) take a moment to start. One shell
+    // waits, hidden, so "Ubuntu shell" opens at once; the next one is started after it.
+    @Volatile private var standby: TermSession? = null
+    @Volatile private var warming = false
+
+    fun warmUp() {
+        if (standby != null || warming || !ubuntu.isInstalled() || !ubuntu.baseSetupDone()) return
+        warming = true
+        Thread({
+            try {
+                val launch = ubuntu.launch("ubuntu")
+                standby = TermSession(
+                    UUID.randomUUID().toString().substring(0, 8), "ubuntu", "Ubuntu",
+                    launch.command, launch.args, launch.env, launch.cwd, STANDBY_ROWS, STANDBY_COLS,
+                ) { s -> sessionEnded(s) }
+            } catch (e: Exception) {
+                Log.w("SessionService", "standby shell failed", e)
+            } finally {
+                warming = false
+            }
+        }, "warm-shell").start()
+    }
+
+    private fun sessionEnded(s: TermSession) {
+        if (standby === s) standby = null
+        // also when no UI is attached: drop the wake lock once nothing runs
+        mainHandler.post { updateForeground() }
+        saveLive()
+        if (sessions.containsKey(s.id)) onSessionExit?.invoke(s)
+    }
+
     fun createSession(kind: String, cols: Int, rows: Int): TermSession {
+        val warm = standby
+        if (kind == "ubuntu" && warm != null && warm.alive) {
+            standby = null
+            // its own size, a fresh screen and a prompt with the current time
+            warm.claim(rows, cols)
+            sessions[warm.id] = warm
+            saveLive()
+            updateForeground()
+            mainHandler.post { startWatching() }
+            mainHandler.postDelayed({ warmUp() }, 4000)
+            return warm
+        }
         val launch = when (kind) {
             "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind)
             else -> ubuntu.launchAndroidShell()
@@ -179,16 +237,12 @@ class SessionService : Service() {
         }
         val session = TermSession(
             id, kind, title, launch.command, launch.args, launch.env, launch.cwd, rows, cols,
-        ) { s ->
-            // also when no UI is attached: drop the wake lock once nothing runs
-            mainHandler.post { updateForeground() }
-            saveLive()
-            onSessionExit?.invoke(s)
-        }
+        ) { s -> sessionEnded(s) }
         sessions[id] = session
         saveLive()
         updateForeground()
         mainHandler.post { startWatching() }
+        if (kind == "ubuntu") mainHandler.postDelayed({ warmUp() }, 4000)
         return session
     }
 
@@ -273,22 +327,28 @@ class SessionService : Service() {
     fun updateForeground() {
         val running = sessions.values.count { it.alive }
         val installing = ubuntu.state == UbuntuManager.State.INSTALLING
-        if (running == 0 && !installing) {
-            // nothing runs (finished sessions may still have open tabs): no need to keep
-            // the phone awake or show "running"
+        if (sessions.isEmpty() && !installing) {
             releaseWakeLock()
             stopForegroundCompat()
-            if (sessions.isEmpty()) stopSelf()
+            stopSelf()
             return
         }
+        // The notification stays as long as any session is open (finished ones too, until
+        // their tabs are closed); the phone is kept awake only while something runs.
         startService(Intent(this, SessionService::class.java))
-        startForeground(NOTIFICATION_ID, buildNotification(running, installing))
-        acquireWakeLock()
+        startForeground(NOTIFICATION_ID, buildNotification(running, sessions.size, installing))
+        if (running > 0 || installing) acquireWakeLock() else releaseWakeLock()
     }
 
-    private fun buildNotification(running: Int, installing: Boolean): Notification {
-        val open = PendingIntent.getActivity(
+    private fun buildNotification(running: Int, open: Int, installing: Boolean): Notification {
+        val tap = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // Android 14+ lets the user swipe even a foreground service's notification away:
+        // put it straight back while sessions are open
+        val swiped = PendingIntent.getService(
+            this, 2, Intent(this, SessionService::class.java).setAction(ACTION_RESHOW),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stop = PendingIntent.getService(
@@ -302,13 +362,15 @@ class SessionService : Service() {
             .setContentTitle("AntiCode")
             .setContentText(
                 when {
-                    installing && running == 0 -> "Installing Ubuntu…"
+                    installing && open == 0 -> "Installing Ubuntu…"
+                    running == 0 -> if (open == 1) "1 session open — tap to open" else "$open sessions open — tap to open"
                     running == 1 -> "1 session running — tap to open"
                     else -> "$running sessions running — tap to open"
                 },
             )
             .setOngoing(true)
-            .setContentIntent(open)
+            .setDeleteIntent(swiped)
+            .setContentIntent(tap)
             .addAction(Notification.Action.Builder(null, "Stop all", stop).build())
             .build()
     }
@@ -345,6 +407,8 @@ class SessionService : Service() {
 
     override fun onDestroy() {
         ubuntu.onBusyChanged = null
+        standby?.kill()
+        standby = null
         for (s in sessions.values) s.kill()
         sessions.clear()
         releaseWakeLock()
@@ -368,5 +432,8 @@ class SessionService : Service() {
         private const val WATCH_MS = 1500L
         private const val SELFTEST = "AgySelfTest"
         const val ACTION_STOP = "com.sabidyut.agyterm.STOP"
+        const val ACTION_RESHOW = "com.sabidyut.agyterm.RESHOW"
+        private const val STANDBY_COLS = 80
+        private const val STANDBY_ROWS = 24
     }
 }

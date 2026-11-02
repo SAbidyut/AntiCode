@@ -457,6 +457,14 @@ function showHome() {
   keyboardShown = false;
   renderHome();
 }
+/** The first appearance of the home screen: its parts rise in one after another. */
+function enterHome() {
+  const home = $('#home');
+  home.classList.add('enter');
+  showHome();
+  window.setTimeout(() => home.classList.remove('enter'), 900);
+}
+
 function showTerm() {
   screen = 'term';
   saveUiState();
@@ -1209,7 +1217,9 @@ async function boot() {
   document.body.dataset.host = bridge.host;
   if (prefs.kbCompat) bridge.setKeyboardCompat(true);
   bridge.setKeyboardSmart(prefs.kbSmart);
-  showHome();
+  // Nothing is shown until it's clear which screen comes first (the home screen, or the
+  // terminal that was open), so the app doesn't flash one and then slide to the other.
+  const listed = bridge.listSessions().catch(() => [] as Awaited<ReturnType<Bridge['listSessions']>>);
   // the home screen's state doesn't need the fonts: ask right away
   const state = bridge.getState().then(
     (st) => st,
@@ -1221,6 +1231,17 @@ async function boot() {
     stateKnown = true;
     renderHome();
   });
+  let savedUi = { active: '', screen: 'term' };
+  try {
+    savedUi = { ...savedUi, ...JSON.parse(localStorage.getItem('ui') ?? '{}') };
+  } catch { /* none saved */ }
+  const [, first] = await Promise.all([state, listed]);
+  const toTerm = first.length > 0 && (!!pendingOpen || savedUi.screen !== 'home');
+  if (!toTerm) enterHome();
+  // a terminal to come back to: it appears once restored (the home screen if that stalls)
+  window.setTimeout(() => {
+    if (document.body.dataset.screen === 'boot') enterHome();
+  }, 2500);
 
   // Measure the cell size only after the fonts are really there
   // (bounded: a font that never finishes loading must not stall the whole UI).
@@ -1238,12 +1259,11 @@ async function boot() {
 
   notifyWhenDone = await bridge.getNotifyWhenDone();
   accounts = await bridge.getAccounts();
-  await state;
   renderHome();
 
   // Re-attach to sessions that kept running while the UI was gone.
   try {
-    const list = await bridge.listSessions();
+    const list = first;
     // forget saved terminal modes of sessions that no longer exist
     try {
       const ids = new Set(list.map((i) => i.id));
@@ -1262,18 +1282,15 @@ async function boot() {
       bridge.attach(info.id); // its saved output, then onReplayed → restoreModes()
     }
     if (list.length) {
-      let ui = { active: '', screen: 'term' };
-      try {
-        ui = { ...ui, ...JSON.parse(localStorage.getItem('ui') ?? '{}') };
-      } catch { /* none saved */ }
       // a tapped notification first; else the tab (and screen) that was open
-      activate((pendingOpen && sessions.get(pendingOpen)) || sessions.get(ui.active) || [...sessions.values()].pop()!);
-      if (!pendingOpen && ui.screen === 'home') showHome();
+      activate((pendingOpen && sessions.get(pendingOpen)) || sessions.get(savedUi.active) || [...sessions.values()].pop()!);
+      if (!pendingOpen && savedUi.screen === 'home') showHome();
     }
     pendingOpen = '';
     restored = true;
     if (!list.length) await reportLostSessions();
   } catch { /* nothing to restore */ }
+  if (document.body.dataset.screen === 'boot') enterHome();
 
   new ResizeObserver(() => {
     active?.renderer.schedule(); // re-pan right away; resize (if any) once things settle

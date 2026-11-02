@@ -42,6 +42,19 @@ class UbuntuManager private constructor(private val context: Context) {
 
     fun isInstalled() = marker.exists() && File(rootfs, "bin/bash").exists()
 
+    /** The first-time setup (apt base tools) is done: a plain shell won't start it. */
+    fun baseSetupDone() =
+        File(rootfs, "root/.agy-terminal-base-done").exists() || File(rootfs, "root/.agy-terminal-setup-done").exists()
+
+    /** Helper files and library links, ahead of the first launch (launch also calls it). */
+    @Synchronized
+    fun prepare() {
+        if (!isInstalled()) return
+        tmpDir.mkdirs()
+        prepareLibs()
+        syncGuestFiles()
+    }
+
     fun stateJson(): String = JSONObject()
         .put("host", "android")
         .put("ubuntu", state.name.lowercase())
@@ -368,9 +381,7 @@ class UbuntuManager private constructor(private val context: Context) {
      * "claude" (Claude Code, then a shell).
      */
     fun launch(kind: String): Launch {
-        tmpDir.mkdirs()
-        prepareLibs()
-        syncGuestFiles()
+        prepare()
         val proot = "$nativeDir/libproot.so"
         val args = mutableListOf(
             proot,

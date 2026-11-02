@@ -117,6 +117,20 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--surface-2)
 #term { transition: transform 0.24s var(--ease), opacity 0.24s var(--ease); will-change: transform; }
 body[data-screen='home'] #term { transform: translateX(100%); opacity: 0.6; pointer-events: none; visibility: hidden; }
 body[data-screen='term'] #home { opacity: 0; transform: translateX(-12%); pointer-events: none; }
+/* starting up: nothing until the first screen is known (then it fades / rises in) */
+body[data-screen='boot'] #home, body[data-screen='boot'] #term { opacity: 0; visibility: hidden; pointer-events: none; }
+#home.enter .appbar, #home.enter .hero, #home.enter .home-side > section:not([hidden]) {
+  animation: home-in 0.5s var(--ease) both;
+}
+#home.enter .hero { animation-delay: 70ms; }
+#home.enter .home-side > section:nth-child(1) { animation-delay: 140ms; }
+#home.enter .home-side > section:nth-child(2) { animation-delay: 190ms; }
+#home.enter .home-side > section:nth-child(3) { animation-delay: 240ms; }
+#home.enter .home-side > section:nth-child(4) { animation-delay: 290ms; }
+@keyframes home-in { from { opacity: 0; transform: translateY(16px); } }
+@media (prefers-reduced-motion: reduce) {
+  #home.enter .appbar, #home.enter .hero, #home.enter .home-side > section { animation: none; }
+}
 
 /* ------------------------------------------------------------------ buttons */
 .icon-btn {

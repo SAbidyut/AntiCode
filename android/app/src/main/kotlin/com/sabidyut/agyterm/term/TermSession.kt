@@ -212,6 +212,20 @@ class TermSession(
         synchronized(fdLock) { if (fdOpen) Pty.setWindowSize(fd, rows, cols) }
     }
 
+    /**
+     * A shell started ahead of time is taken into use: give it the real size, drop what it
+     * printed so far, and let it print a fresh prompt (` clear`: a leading space keeps it out
+     * of the history; the prompt then shows the current time).
+     */
+    fun claim(rows: Int, cols: Int) {
+        resize(rows, cols)
+        synchronized(lock) {
+            ringStart = 0
+            ringLen = 0
+        }
+        write(" clear\r".toByteArray())
+    }
+
     fun kill() {
         val wasAlive = alive
         if (wasAlive) Pty.sendSignal(pid, 1) // SIGHUP, like closing a terminal window
