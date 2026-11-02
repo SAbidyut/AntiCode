@@ -147,18 +147,10 @@ class SessionService : Service() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val live = prefs.getString(PREF_LIVE, "[]") ?: "[]"
         if (sessions.isEmpty() && live != "[]") prefs.edit().putString(PREF_LOST, live).putString(PREF_LIVE, "[]").apply()
-        ubuntu.onBusyChanged = {
-            mainHandler.post {
-                updateForeground()
-                if (ubuntu.state == UbuntuManager.State.READY) warmUp()
-            }
-        }
+        ubuntu.onBusyChanged = { mainHandler.post { updateForeground() } }
         createChannel()
-        // after the UI had its start: unpack the helper files once, then a shell in waiting
-        mainHandler.postDelayed({
-            Thread({ ubuntu.prepare() }, "ubuntu-prepare").start()
-            warmUp()
-        }, 1500)
+        // after the UI had its start: unpack the helper files once, ahead of the first launch
+        mainHandler.postDelayed({ Thread({ ubuntu.prepare() }, "ubuntu-prepare").start() }, 1500)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -179,32 +171,7 @@ class SessionService : Service() {
         return START_NOT_STICKY
     }
 
-    // ---- a shell started ahead of time ----
-    // Ubuntu (proot) and the shell's line editor (ble.sh) take a moment to start. One shell
-    // waits, hidden, so "Ubuntu shell" opens at once; the next one is started after it.
-    @Volatile private var standby: TermSession? = null
-    @Volatile private var warming = false
-
-    fun warmUp() {
-        if (standby != null || warming || !ubuntu.isInstalled() || !ubuntu.baseSetupDone()) return
-        warming = true
-        Thread({
-            try {
-                val launch = ubuntu.launch("ubuntu")
-                standby = TermSession(
-                    UUID.randomUUID().toString().substring(0, 8), "ubuntu", "Ubuntu",
-                    launch.command, launch.args, launch.env, launch.cwd, STANDBY_ROWS, STANDBY_COLS,
-                ) { s -> sessionEnded(s) }
-            } catch (e: Exception) {
-                Log.w("SessionService", "standby shell failed", e)
-            } finally {
-                warming = false
-            }
-        }, "warm-shell").start()
-    }
-
     private fun sessionEnded(s: TermSession) {
-        if (standby === s) standby = null
         // also when no UI is attached: drop the wake lock once nothing runs
         mainHandler.post { updateForeground() }
         saveLive()
@@ -212,18 +179,6 @@ class SessionService : Service() {
     }
 
     fun createSession(kind: String, cols: Int, rows: Int): TermSession {
-        val warm = standby
-        if (kind == "ubuntu" && warm != null && warm.alive) {
-            standby = null
-            // its own size, a fresh screen and a prompt with the current time
-            warm.claim(rows, cols)
-            sessions[warm.id] = warm
-            saveLive()
-            updateForeground()
-            mainHandler.post { startWatching() }
-            mainHandler.postDelayed({ warmUp() }, 4000)
-            return warm
-        }
         val launch = when (kind) {
             "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind)
             else -> ubuntu.launchAndroidShell()
@@ -242,7 +197,6 @@ class SessionService : Service() {
         saveLive()
         updateForeground()
         mainHandler.post { startWatching() }
-        if (kind == "ubuntu") mainHandler.postDelayed({ warmUp() }, 4000)
         return session
     }
 
@@ -407,8 +361,6 @@ class SessionService : Service() {
 
     override fun onDestroy() {
         ubuntu.onBusyChanged = null
-        standby?.kill()
-        standby = null
         for (s in sessions.values) s.kill()
         sessions.clear()
         releaseWakeLock()
@@ -433,7 +385,5 @@ class SessionService : Service() {
         private const val SELFTEST = "AgySelfTest"
         const val ACTION_STOP = "com.sabidyut.agyterm.STOP"
         const val ACTION_RESHOW = "com.sabidyut.agyterm.RESHOW"
-        private const val STANDBY_COLS = 80
-        private const val STANDBY_ROWS = 24
     }
 }

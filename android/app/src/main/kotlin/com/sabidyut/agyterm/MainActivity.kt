@@ -578,18 +578,6 @@ class MainActivity : ComponentActivity() {
     private fun selftestZoom() {
         Log.i(SELFTEST, "phase 3c: zooming a shell")
         web.evaluateJavascript("__selftest.open('ubuntu')", null)
-        // a shell taken over from the waiting one shows just its fresh prompt
-        main.postDelayed({
-            selftestScreen { screen ->
-                val lines = screen.lines().map { it.trimEnd() }.filter { it.isNotBlank() }
-                for (line in lines) Log.i(SELFTEST, "fresh| $line")
-                if (lines.size == 2 && lines[0].contains("root") && lines[1].trim() == "❯") {
-                    Log.i(SELFTEST, "SELFTEST_FRESH_OK")
-                } else {
-                    Log.e(SELFTEST, "SELFTEST_FRESH_FAIL lines=${lines.size}")
-                }
-            }
-        }, 5000)
         main.postDelayed({ web.evaluateJavascript("__selftest.send('clear')", null) }, 6000)
         main.postDelayed({ web.evaluateJavascript("__selftest.send('echo ZOOM-A1')", null) }, 8000)
         val sizes = listOf(20, 10, 17, 14)

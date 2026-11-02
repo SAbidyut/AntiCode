@@ -42,10 +42,6 @@ class UbuntuManager private constructor(private val context: Context) {
 
     fun isInstalled() = marker.exists() && File(rootfs, "bin/bash").exists()
 
-    /** The first-time setup (apt base tools) is done: a plain shell won't start it. */
-    fun baseSetupDone() =
-        File(rootfs, "root/.agy-terminal-base-done").exists() || File(rootfs, "root/.agy-terminal-setup-done").exists()
-
     /** Helper files and library links, ahead of the first launch (launch also calls it). */
     @Synchronized
     fun prepare() {
