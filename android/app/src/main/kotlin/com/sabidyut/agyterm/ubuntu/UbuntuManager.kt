@@ -286,6 +286,7 @@ class UbuntuManager private constructor(private val context: Context) {
             }
         }
         nameAndroidGroups()
+        writeFakeProc() // (installs made by older versions get the new ones too)
         guestFilesSynced = true
     }
 
@@ -347,6 +348,8 @@ class UbuntuManager private constructor(private val context: Context) {
             "uptime" to "124.08 932.80\n",
             "version" to "Linux version ${System.getProperty("os.version")} (proot) #1 SMP PREEMPT\n",
             "vmstat" to "nr_free_pages 136234\nnr_inactive_anon 0\nnr_active_anon 0\n",
+            // no user namespaces for apps (see launch)
+            "max_user_namespaces" to "0\n",
         )
         for ((name, text) in files) File(fakeProc, name).writeText(text)
     }
@@ -400,6 +403,14 @@ class UbuntuManager private constructor(private val context: Context) {
         for (name in listOf("loadavg", "stat", "uptime", "version", "vmstat")) {
             if (!File("/proc/$name").canRead()) args += listOf("-b", "${fakeProc.absolutePath}/$name:/proc/$name")
         }
+        // Android doesn't let apps create user namespaces (its security policy refuses them),
+        // even where the kernel's limit says they're allowed. Programs that look at the limit
+        // before sandboxing their commands — the Antigravity CLI's terminal sandbox — would
+        // otherwise go ahead, and every command they run fails with "fork/exec …: operation
+        // not permitted". With the truth here they run the commands normally.
+        if (File(fakeProc, "max_user_namespaces").isFile) {
+            args += listOf("-b", "${fakeProc.absolutePath}/max_user_namespaces:/proc/sys/user/max_user_namespaces")
+        }
         // The phone's storage. Bound even before access is granted, so a grant later works
         // without restarting the session (the kernel checks permission on each access).
         val sdcard = com.sabidyut.agyterm.Storage.root
@@ -436,6 +447,11 @@ class UbuntuManager private constructor(private val context: Context) {
                     "c=FAIL; [ \"\$PWD\" = /tmp ] && c=OK; echo SELFTEST_CWD_\$c; cd; " +
                     "agy-setup && agy --version && " +
                     "claude-setup --auto && claude --version && echo SELFTEST_OK; " +
+                    // agy must see that the terminal sandbox (user namespaces) isn't available
+                    // here, or every command its agent runs fails with "operation not permitted"
+                    "echo USERNS=$(cat /proc/sys/user/max_user_namespaces 2>&1); " +
+                    "r=FAIL; timeout 20 agy --mode auto --print hi </dev/null 2>&1 | head -3 | sed 's/^/AGYSBX| /' | " +
+                    "tee /dev/stderr | grep -q 'terminal sandbox is not available' && r=OK; echo SELFTEST_SANDBOX_\$r; " +
                     // diagnostics: ble.sh (autosuggestions) unpacked and loading in an interactive shell
                     "ls -la /usr/share/blesh/ble.sh /usr/share/blesh/.agy-version 2>&1 | sed 's/^/BLESH| /'; " +
                     "printf 'echo BLEI=\$BLE_VERSION:\$-\nexit\n' | script -qec 'bash -i' /dev/null 2>&1 | grep -a 'BLEI=[^\$]' | sed 's/^/BLESH| /'; " +
