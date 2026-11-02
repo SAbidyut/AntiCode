@@ -218,6 +218,9 @@ body[data-theme='paper'] .agent-agy { --agent: #d0477a; }
 .progress > div { height: 100%; background: var(--grad); border-radius: 99px; transition: width 0.4s var(--ease); }
 .progress-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
 
+/* the two columns are only real in landscape (below); in portrait they're one flow */
+.home-main, .home-side { display: contents; }
+
 .group { margin-bottom: 18px; }
 .group-title { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.9px; color: var(--muted); margin: 0 4px 8px; font-weight: 700; }
 .list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
@@ -288,6 +291,69 @@ body[data-theme='paper'] .tint-green { color: #2b8a3e; }
   transition: transform 0.12s var(--ease), background 0.15s;
 }
 .open-btn:active { transform: scale(0.95); background: var(--surface-2); }
+
+/* ------------------------------------------------------------------ home, landscape */
+/* Side by side: the app bar across the top, the agents on the left (always in view), and
+   sessions / remote control / storage in their own scrolling column on the right. */
+@media (orientation: landscape) and (min-width: 600px) {
+  #home {
+    max-width: 1120px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: 'bar bar' 'main side';
+    column-gap: 18px;
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+  #home > .appbar { grid-area: bar; }
+  .home-main, .home-side {
+    display: block; min-height: 0;
+    overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+    padding-bottom: calc(var(--safe-bottom) + 18px);
+  }
+  .home-main { grid-area: main; }
+  .home-side { grid-area: side; }
+  .home-main::-webkit-scrollbar, .home-side::-webkit-scrollbar { display: none; }
+  .hero { margin-bottom: 0; }
+}
+
+/* Phones on their side: little height, so everything gets more compact. */
+@media (orientation: landscape) and (min-width: 600px) and (max-height: 600px) {
+  .appbar { padding: 2px 2px 10px; }
+  .logo { width: 38px; height: 38px; border-radius: 12px; }
+  .logo svg { width: 33px; height: 33px; }
+  .brand { gap: 11px; }
+  .brand h1 { font-size: 18px; }
+  .brand p { font-size: 12px; }
+  .hero { padding: 14px; border-radius: 20px; }
+  .hero h2 { margin: 10px 0 12px; font-size: 19px; }
+  .hero[data-state='ready'] > p { display: none; } /* the tiles say it */
+  .hero .btn { height: 44px; border-radius: 13px; }
+  .agents { gap: 8px; margin-bottom: 8px; }
+  /* shorter tiles: icon, name, maker; the › moves to the corner */
+  .agent-tile { min-height: 0; padding: 11px 12px 11px; border-radius: 16px; }
+  .agent-icon { width: 34px; height: 34px; border-radius: 11px; margin-bottom: 8px; }
+  .agent-icon .ic { width: 19px; height: 19px; }
+  .agent-name { font-size: 14.5px; }
+  .agent-sub { font-size: 12px; }
+  .agent-go { position: absolute; top: 12px; right: 10px; margin: 0; padding: 0; font-size: 0; }
+  .agent-go .ic { width: 18px; height: 18px; }
+  .group { margin-bottom: 14px; }
+  .list-item { padding: 10px 12px; }
+  .remote-row { padding: 10px 10px 10px 12px; }
+  .card { padding: 14px; }
+}
+/* very short screens: the tagline goes, the card tightens a little more */
+@media (orientation: landscape) and (min-width: 600px) and (max-height: 380px) {
+  .brand p { display: none; }
+  .appbar { padding-bottom: 8px; }
+  .hero { padding: 12px 14px; }
+  .hero h2 { margin: 8px 0 10px; font-size: 18px; }
+  .hero .btn { height: 40px; }
+  .agent-tile { padding: 9px 11px; }
+  .agent-icon { width: 30px; height: 30px; margin-bottom: 6px; }
+}
 /* the status bar is transparent: keep scrolled content from showing under its icons */
 body[data-screen='home']::before {
   content: ''; position: fixed; left: 0; right: 0; top: 0; height: var(--safe-top); z-index: 30;

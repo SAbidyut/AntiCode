@@ -447,6 +447,7 @@ function renderHome() {
       ),
     ];
   }
+  hero.dataset.state = stateKnown ? st.ubuntu : 'starting'; // (the landscape layout trims the ready card)
   hero.replaceChildren(...(body.filter(Boolean) as Node[]));
   renderStorage();
   renderHomeSessions();
