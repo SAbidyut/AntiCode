@@ -9,6 +9,7 @@ import androidx.core.view.WindowInsetsCompat
 import android.Manifest
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.FrameLayout
@@ -75,12 +76,18 @@ class MainActivity : ComponentActivity() {
             pending.getOrPut(id) { ByteArrayOutputStream() }.write(data, 0, len)
             if (!flushScheduled) {
                 flushScheduled = true
-                main.postDelayed(::flush, 8)
+                // the echo of a key (nothing sent for a frame): right away; a stream of output
+                // still goes in batches
+                val idle = SystemClock.uptimeMillis() - lastFlush > 16
+                if (idle) main.post(::flush) else main.postDelayed(::flush, 8)
             }
         }
     }
 
+    @Volatile private var lastFlush = 0L
+
     private fun flush() {
+        lastFlush = SystemClock.uptimeMillis()
         val batch: List<Pair<String, ByteArray>>
         synchronized(pendingLock) {
             batch = pending.map { (id, buf) -> id to buf.toByteArray() }

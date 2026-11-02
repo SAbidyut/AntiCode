@@ -439,6 +439,17 @@ export class BanglaRenderer {
     };
   }
 
+  private lastRenderAt = 0;
+  /**
+   * New output. After a quiet moment (the echo of a typed key) draw it now, in this frame,
+   * instead of waiting for the next one; a stream of output is still drawn once per frame.
+   */
+  scheduleEager() {
+    if (this.frame) return;
+    if (performance.now() - this.lastRenderAt > 40) this.render();
+    else this.schedule();
+  }
+
   schedule() {
     if (this.frame) return;
     this.frame = requestAnimationFrame(() => {
@@ -736,6 +747,7 @@ export class BanglaRenderer {
 
   render() {
     if (this.disposed) return;
+    this.lastRenderAt = performance.now();
     if (this.shouldWait()) {
       if (!this.frame) this.frame = window.setTimeout(() => { this.frame = 0; this.render(); }, 20) as unknown as number;
       return;
@@ -925,7 +937,10 @@ export class BanglaRenderer {
       if (t !== this.lastCursorT) {
         // glide to the next cell / line; jump when it reappears or moves far (TUIs)
         // jump when it reappears, moves far (TUIs), or the layout itself moved
-        const far = !wasShown || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved || this.insetsMoving;
+        // Typing moves it along its line: there it jumps at once (a glide trails behind the
+        // letters and makes typing feel slow). It glides only to another line (after Enter).
+        const sameLine = cursorLine === this.lastCursorLine;
+        const far = !wasShown || sameLine || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved || this.insetsMoving;
         this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
         this.cursorEl.style.transform = t;
         this.lastCursorT = t;

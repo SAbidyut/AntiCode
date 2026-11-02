@@ -75,7 +75,7 @@ export class TerminalSession {
     this.term.onWriteParsed(() => {
       this.saveModes();
       this.renderer.lastOutput = performance.now();
-      this.renderer.schedule();
+      this.renderer.scheduleEager();
       if (this.readerOpen) this.scheduleReader();
       this.onActivity?.();
     });
