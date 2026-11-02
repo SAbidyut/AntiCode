@@ -268,6 +268,12 @@ export class BanglaRenderer {
   private trimMarker: IMarker | null = null;
   private trimLine = 0;
   private trimGen = 0;
+  // ---- reading history: the line at the top of the view, so a re-wrap (zoom, rotation)
+  // keeps showing it (viewFrac: how far into that line the view starts) ----
+  private viewMarker: IMarker | null = null;
+  private viewFrac = 0;
+  private lastCols = 0;
+  private disposed = false;
 
   cellWidth = 8;
   lineHeight = 18;
@@ -317,12 +323,34 @@ export class BanglaRenderer {
 
   /** Scroll by pixels (positive = back in history). Returns false at an edge. */
   scrollByPixels(px: number): boolean {
-    const max = this.term.buffer.active.baseY * this.lineHeight;
-    const next = Math.max(0, Math.min(max, this.scrollPx + px));
+    const next = Math.max(0, Math.min(this.maxScroll(), this.scrollPx + px));
     const moved = next !== this.scrollPx;
     this.scrollPx = next;
     if (moved) this.schedule();
     return moved;
+  }
+
+  /**
+   * How far back the view can go: the whole scrollback, plus what the keyboard pan hides
+   * at the top (with the keyboard up, the first lines would be out of reach otherwise).
+   */
+  private maxScroll(): number {
+    return this.term.buffer.active.baseY * this.lineHeight + this.pan;
+  }
+
+  /** The session closed: no more frames, timers or markers. */
+  dispose() {
+    this.disposed = true;
+    cancelAnimationFrame(this.frame);
+    clearTimeout(this.frame);
+    this.frame = 0;
+    clearTimeout(this.typingTimer);
+    this.trimMarker?.dispose();
+    this.trimMarker = null;
+    this.viewMarker?.dispose();
+    this.viewMarker = null;
+    for (const l of this.rightLabels) l.marker.dispose();
+    this.rightLabels = [];
   }
 
   setOptions(opts: Partial<RendererOptions>) {
@@ -645,11 +673,13 @@ export class BanglaRenderer {
   }
 
   /**
-   * How many lines were trimmed off the top of the buffer since the last call: 0 if none,
-   * or -1 when unknown (the row cache is then rebuilt). Uses a marker on the cursor line,
-   * which xterm moves up as lines are trimmed and disposes when its line goes.
+   * How many lines were trimmed off the top of the buffer since the last call: 0 if none
+   * (or after a re-wrap, which rebuilds the rows anyway); unknown → the rows are rebuilt.
+   * Uses a marker on the newest scrollback line: xterm moves it up as lines are trimmed
+   * and disposes it when its line goes — while lines inserted or deleted on the screen
+   * (TUIs, ble.sh) don't move it, unlike a marker on any line of the screen.
    */
-  private checkTrim(normal: boolean): number {
+  private checkTrim(normal: boolean, reflowed: boolean): number {
     const m = this.trimMarker;
     if (!normal) {
       // alternate screen: no scrollback (switching buffers rebuilds the rows anyway)
@@ -662,14 +692,25 @@ export class BanglaRenderer {
       trimmed = m.isDisposed || m.line < 0 ? -1 : this.trimLine - m.line;
       m.dispose();
     }
+    if (reflowed) trimmed = 0;
     if (trimmed < 0) {
       this.trimGen++; // lost track: rebuild
       trimmed = 0;
     }
-    // re-anchor on the cursor line, which stays in the buffer the longest
-    this.trimMarker = this.term.registerMarker(0) ?? null;
+    const buf = this.term.buffer.active;
+    // (no scrollback yet: every row is still live and gets redrawn anyway)
+    this.trimMarker = buf.baseY > 0 ? this.term.registerMarker(-(buf.cursorY + 1)) ?? null : null;
     this.trimLine = this.trimMarker?.line ?? 0;
     return trimmed;
+  }
+
+  /** Cells up to the last one with text (wide characters count as two). */
+  private usedCells(line: IBufferLine, cols: number): number {
+    for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
+      const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
+      if (c && (c.getWidth() === 0 || c.getChars() !== '')) return x + 1;
+    }
+    return 0;
   }
 
   private shiftRows(n: number) {
@@ -689,6 +730,7 @@ export class BanglaRenderer {
   }
 
   render() {
+    if (this.disposed) return;
     if (this.shouldWait()) {
       if (!this.frame) this.frame = window.setTimeout(() => { this.frame = 0; this.render(); }, 20) as unknown as number;
       return;
@@ -701,7 +743,9 @@ export class BanglaRenderer {
 
     // Lines dropped off the top of a full scrollback (or cleared with it) shift every
     // line number down: move the rendered rows along instead of rebuilding them.
-    const trimmed = this.checkTrim(buf.type === 'normal');
+    const reflowed = this.lastCols !== 0 && cols !== this.lastCols;
+    this.lastCols = cols;
+    const trimmed = this.checkTrim(buf.type === 'normal', reflowed);
     if (trimmed > 0) this.shiftRows(trimmed);
 
     // A different buffer (alt screen), a resize (reflow), or a trim we couldn't measure
@@ -719,14 +763,30 @@ export class BanglaRenderer {
       }
     }
 
-    // While scrolled back, keep looking at the same lines when new output arrives.
-    if (buf.baseY !== this.lastBaseY) {
+    // While scrolled back, keep looking at the same lines: when new output arrives, and
+    // when the lines were re-wrapped to a new width (zoom, rotation).
+    const vm = this.viewMarker;
+    if (reflowed && this.scrollPx > 0 && buf.type === 'normal' && vm && !vm.isDisposed && vm.line >= 0) {
+      this.scrollPx = (buf.baseY - vm.line - this.viewFrac) * lh;
+      this.lastBaseY = buf.baseY;
+    } else if (buf.baseY !== this.lastBaseY) {
       if (this.scrollPx > 0 && buf.baseY > this.lastBaseY) this.scrollPx += (buf.baseY - this.lastBaseY) * lh;
       this.lastBaseY = buf.baseY;
     }
-    this.scrollPx = Math.max(0, Math.min(buf.baseY * lh, this.scrollPx));
+    this.scrollPx = Math.max(0, Math.min(this.maxScroll(), this.scrollPx));
 
     const topPx = buf.baseY * lh - this.scrollPx; // y of the first visible pixel row
+    if (this.scrollPx > 0 && buf.type === 'normal') {
+      const topLine = Math.max(0, Math.floor(topPx / lh));
+      if (!vm || vm.isDisposed || vm.line !== topLine) {
+        vm?.dispose();
+        this.viewMarker = this.term.registerMarker(topLine - (buf.baseY + buf.cursorY)) ?? null;
+      }
+      this.viewFrac = Math.max(0, topPx / lh - topLine);
+    } else if (vm) {
+      vm.dispose();
+      this.viewMarker = null;
+    }
     const first = Math.max(0, Math.floor(topPx / lh) - OVERSCAN);
     const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + rows + OVERSCAN);
 
@@ -785,7 +845,7 @@ export class BanglaRenderer {
       let label = labels.get(i);
       // never cover text: only when the row leaves room at its right end (zoomed in,
       // re-wrapped, or a wide prompt bar → no clock on that row)
-      if (label && (line?.translateToString(true).length ?? 0) > cols - 13) label = undefined;
+      if (label && line && this.usedCells(line, cols) > cols - 13) label = undefined;
       const html = this.rowToHtml(line, cols) + (label ? `<span class="rlabel"><b>\uf017</b>${esc(label)}</span>` : '');
       let el: HTMLDivElement | null = null;
       if (!r) {

@@ -35,6 +35,7 @@ __agy_git_branch() {
         ref:\ refs/heads/*) __agy_branch=${head#ref: refs/heads/} ;;
         *) __agy_branch=${head:0:7} ;;
       esac
+      __agy_branch=${__agy_branch//[[:cntrl:]]/?}
       return
     fi
     [ -z "$d" ] || [ "$d" = / ] && return
@@ -53,6 +54,8 @@ __agy_prompt() {
   [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
 
   local path=${PWD/#$HOME/\~}
+  # a folder name can't smuggle escape sequences into the title or the bar
+  path=${path//[[:cntrl:]]/?}
   # Text that comes from outside (folder names, git branches) is never put into PS1
   # itself — bash would expand $(…) in it — but referenced as ${__agy_txt[i]}.
   __agy_txt=()

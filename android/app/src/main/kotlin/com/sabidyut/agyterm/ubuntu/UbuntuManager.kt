@@ -19,7 +19,7 @@ import java.util.zip.GZIPInputStream
  * Installs and launches an Ubuntu userland (official "Ubuntu Base" tarball) inside the
  * app's private storage and runs it with proot — no root needed.
  */
-class UbuntuManager(private val context: Context) {
+class UbuntuManager private constructor(private val context: Context) {
 
     enum class State { NONE, INSTALLING, READY, ERROR }
 
@@ -31,6 +31,8 @@ class UbuntuManager(private val context: Context) {
         private set
 
     var onStateChanged: (() -> Unit)? = null
+    /** The service: stays in the foreground (with a wake lock) while installing. */
+    var onBusyChanged: (() -> Unit)? = null
 
     val rootfs: File get() = File(context.filesDir, "ubuntu")
     private val tmpDir: File get() = File(context.filesDir, "tmp")
@@ -49,10 +51,12 @@ class UbuntuManager(private val context: Context) {
         .toString()
 
     private fun update(s: State, p: Double, m: String) {
+        val changed = s != state
         state = s
         progress = p
         message = m
         onStateChanged?.invoke()
+        if (changed) onBusyChanged?.invoke()
     }
 
     // ------------------------------------------------------------------ install
@@ -84,7 +88,7 @@ class UbuntuManager(private val context: Context) {
 
     private fun doInstall() {
         val arch = arch()
-        rootfs.deleteRecursively()
+        deleteTree(rootfs) // never through ~/storage/shared → /sdcard
         rootfs.mkdirs()
         tmpDir.mkdirs()
 
@@ -219,13 +223,13 @@ class UbuntuManager(private val context: Context) {
         val stamp = File(dir, ".agy-version")
         if (stamp.exists() && stamp.readText().trim() == version) return
         try {
-            dir.deleteRecursively()
+            deleteTree(dir)
             dir.mkdirs()
             context.assets.open("blesh.pack").use { extractTarGz(it, dir) }
             stamp.writeText(version)
         } catch (e: Exception) {
             Log.w(TAG, "ble.sh unpack failed", e)
-            dir.deleteRecursively()
+            deleteTree(dir)
         }
     }
 
@@ -294,6 +298,26 @@ class UbuntuManager(private val context: Context) {
         if (missing.isNotEmpty()) groupFile.appendText(missing.joinToString("") { "aid_$it:x:$it:\n" })
     }
 
+    /**
+     * `rm -rf` that never follows symbolic links. (Kotlin's deleteRecursively does: through
+     * ~/storage/shared → /sdcard it would empty the phone's own storage.)
+     */
+    private fun deleteTree(f: File) {
+        val st = try {
+            Os.lstat(f.absolutePath)
+        } catch (_: Exception) {
+            return // already gone
+        }
+        if (android.system.OsConstants.S_ISDIR(st.st_mode)) {
+            try {
+                Os.chmod(f.absolutePath, (st.st_mode and 0x1ff) or 0x1c0) // read-only dirs in the rootfs
+            } catch (_: Exception) {
+            }
+            f.listFiles()?.forEach { deleteTree(it) }
+        }
+        f.delete() // a link itself, not what it points to
+    }
+
     private fun isSymlink(f: File) = try {
         android.system.OsConstants.S_ISLNK(Os.lstat(f.absolutePath).st_mode)
     } catch (_: Exception) {
@@ -326,11 +350,15 @@ class UbuntuManager(private val context: Context) {
      * ships files named lib*.so in the APK. Point that name at the bundled copy. The native
      * library dir changes on every app update, so this is refreshed before each launch.
      */
+    @Synchronized
     private fun prepareLibs() {
         libDir.mkdirs()
         val link = File(libDir, "libtalloc.so.2")
+        val target = "$nativeDir/libtalloc.so"
+        // only when it changed: a launch running right now must not see it missing
+        if (isSymlink(link) && (try { Os.readlink(link.absolutePath) } catch (_: Exception) { null }) == target) return
         link.delete()
-        Os.symlink("$nativeDir/libtalloc.so", link.absolutePath)
+        Os.symlink(target, link.absolutePath)
     }
 
     /**
@@ -380,6 +408,9 @@ class UbuntuManager(private val context: Context) {
             "TMPDIR=/tmp",
             "BROWSER=/usr/local/bin/xdg-open",
             "AGY_TERMINAL=1",
+            // proves that an "open this link" request comes from our xdg-open (not from text
+            // a program printed, e.g. `cat` of a downloaded file)
+            "ANTICODE_LINK_TOKEN=$linkToken",
         )
         when (kind) {
             "agy" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
@@ -435,5 +466,18 @@ class UbuntuManager(private val context: Context) {
         const val UBUNTU_VERSION = "24.04"
         // Newest first; the installer falls back if a point release isn't published.
         private val UBUNTU_POINT_RELEASES = listOf("24.04.5", "24.04.4", "24.04.3")
+
+        @Volatile private var instance: UbuntuManager? = null
+
+        /** Random per app process; see ANTICODE_LINK_TOKEN. */
+        val linkToken: String = java.util.UUID.randomUUID().toString().replace("-", "")
+
+        /**
+         * One per process: an install keeps running when the service is recreated, and a
+         * new service must see it (not start a second install over the first).
+         */
+        fun get(context: Context): UbuntuManager = instance ?: synchronized(this) {
+            instance ?: UbuntuManager(context.applicationContext).also { instance = it }
+        }
     }
 }

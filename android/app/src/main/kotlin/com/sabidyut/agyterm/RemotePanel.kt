@@ -40,6 +40,8 @@ class RemotePanel(
     private val chooseFiles: (ValueCallback<Array<Uri>>) -> Unit,
     private val onOpened: () -> Unit,
     private val onClosed: () -> Unit,
+    /** The pages' renderer died: the activity rebuilds its WebViews. */
+    private val onRendererGone: () -> Unit,
 ) : FrameLayout(context) {
 
     private val d = resources.displayMetrics.density
@@ -113,9 +115,11 @@ class RemotePanel(
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
-                val scheme = url.scheme ?: ""
+                val scheme = url.scheme?.lowercase() ?: ""
                 if (scheme != "http" && scheme != "https") {
-                    openInBrowser(url.toString()) // intent:, mailto: … → the system
+                    // intent:, mailto: … → another app, but only for a link the user tapped
+                    // (not a page redirecting there by itself)
+                    if (request.hasGesture()) openInBrowser(url.toString())
                     return true
                 }
                 if (url.host == GOOGLE_SIGN_IN) {
@@ -130,6 +134,13 @@ class RemotePanel(
                     return true
                 }
                 return false
+            }
+
+            // All of the app's WebViews share one renderer: if it dies (out of memory) and any
+            // of them doesn't handle that, Android kills the whole app with every session.
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                onRendererGone()
+                return true
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -205,9 +216,10 @@ class RemotePanel(
     }
 
     private var insetTop = 0
-    /** Status bar on top; navigation bar or keyboard at the bottom (pixels). */
-    fun applyInsets(top: Int, bottom: Int) {
+    /** Status bar on top; navigation bar or keyboard at the bottom; a side nav bar (pixels). */
+    fun applyInsets(top: Int, bottom: Int, left: Int = 0, right: Int = 0) {
         insetTop = top
+        setPadding(left, 0, right, 0)
         header.setPadding(dp(4), top, dp(4), 0)
         header.layoutParams = (header.layoutParams as LayoutParams).apply { height = top + dp(56) }
         (progress.layoutParams as LayoutParams).topMargin = top + dp(56)

@@ -101,6 +101,8 @@ let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
 let active: TerminalSession | null = null;
 let hostState: HostState = { host: 'dev', ubuntu: 'none' };
+/** getState() has answered (until then the home screen shows a neutral "starting"). */
+let stateKnown = false;
 const latch: Mods = {};
 let screen: 'home' | 'term' = 'home';
 let keyboardShown = false;
@@ -122,26 +124,33 @@ const bridge: Bridge = createBridge({
     sessions.get(id)?.markExited(code);
     renderTabs();
   },
+  onReplayed(id) {
+    sessions.get(id)?.restoreModes();
+  },
   onState(state) {
     hostState = state;
+    stateKnown = true;
     renderHome();
   },
   onImeText(text) {
-    if (!active) return;
-    active.input(applyMods(text, consumeLatch()));
+    if (!typingTarget()) return;
+    active!.input(applyMods(text, consumeLatch()));
   },
-  onImeKey(keyCode, ctrl, alt, shift) {
-    if (!active) return;
-    const l = consumeLatch();
-    const seq = androidKeySeq(keyCode, { ctrl: ctrl || l.ctrl, alt: alt || l.alt, shift }, active.appCursor);
-    if (seq) active.input(seq);
+  onImeKey(keyCode, ctrl, alt, shift, ch) {
+    if (!typingTarget()) return;
+    const seq = androidKeySeq(keyCode, { ctrl: ctrl || latch.ctrl, alt: alt || latch.alt, shift }, active!.appCursor, ch ?? '');
+    if (!seq) return; // e.g. Shift on its own: keep the Ctrl/Alt latch for the next key
+    consumeLatch();
+    active!.input(seq);
   },
-  onInsets(top, bottom, keyboard, settled) {
+  onInsets(top, bottom, keyboard, settled, left = 0, right = 0) {
     // The page draws edge-to-edge; padding follows the bars and the keyboard frame by frame,
     // and the bottom-anchored terminal glides with it. Resize the terminal once it settles.
     const root = document.documentElement.style;
     root.setProperty('--safe-top', `${top}px`);
     root.setProperty('--safe-bottom', `${bottom}px`);
+    root.setProperty('--safe-left', `${left}px`);
+    root.setProperty('--safe-right', `${right}px`);
     // The keyboard's height doesn't resize the terminal (see TerminalSession.fit).
     if (!keyboard) navBottom = bottom;
     TerminalSession.keyboardInset = keyboard ? Math.max(0, bottom - navBottom) : 0;
@@ -151,6 +160,9 @@ const bridge: Bridge = createBridge({
       keyboardShown = keyboard;
       clearTimeout(fitTimer);
       active?.fit();
+      // a field in a sheet (Settings, rename) that the keyboard now covers
+      const f = document.activeElement;
+      if (keyboard && f instanceof HTMLInputElement && f.closest('.sheet')) f.scrollIntoView({ block: 'nearest' });
     }
   },
   onKeyboardReleased() {
@@ -179,6 +191,11 @@ const bridge: Bridge = createBridge({
   },
 });
 
+/** The session typing goes to: none while the home screen or a sheet covers it. */
+function typingTarget(): TerminalSession | null {
+  return active && screen === 'term' && !sheetOpen() ? active : null;
+}
+
 function consumeLatch(): Mods {
   const m = { ...latch };
   if (latch.ctrl || latch.alt) {
@@ -201,11 +218,34 @@ function openDashboard(which: 'agy' | 'claude') {
   else bridge.openRemote(prefs.remoteUrl, 'Antigravity');
 }
 
+/**
+ * A program asked to open a link. Our own xdg-open (Antigravity / Claude Code sign-in …)
+ * opens web pages straight away; anything else — the same escape printed by `cat` of a
+ * downloaded file, or a link to another app — only after the user says so.
+ */
+function openLink(url: string, trusted: boolean) {
+  if (trusted && /^https?:\/\//i.test(url)) {
+    bridge.openUrl(url);
+    return;
+  }
+  openSheet(
+    'Open this link?',
+    h('p', { class: 'note link-ask' }, url.length > 400 ? `${url.slice(0, 400)}…` : url),
+    h('div', { class: 'action-list' },
+      action('external', 'Open', '', () => bridge.openUrl(url)),
+      action('x', 'Cancel', '', () => {}),
+    ),
+  );
+}
+
 function addSession(id: string, kind: SessionKind): TerminalSession {
+  const existing = sessions.get(id);
+  if (existing) return existing; // listed and created at the same moment
   const s = new TerminalSession(bridge, id, kind, rendererOpts());
+  s.onLink = openLink;
   s.renderer.el.dataset.cursor = prefs.cursor;
-  s.onTitle = renderTabs;
-  s.onMeta = renderTabs;
+  s.onTitle = () => renderTabs();
+  s.onMeta = () => renderTabs();
   s.onAccount = (email) => {
     if (email === accounts.agy) return;
     accounts.agy = email;
@@ -254,12 +294,15 @@ function activate(s: TerminalSession | null) {
     s.fit(); // layout is already known; don't wait for a frame (rAF is paused when the screen is off)
     requestAnimationFrame(() => s.fit());
   }
-  renderTabs();
+  renderTabs(true);
+  saveUiState();
 }
 
 function closeSession(s: TerminalSession) {
   bridge.close(s.id);
   sessions.delete(s.id);
+  early.delete(s.id);
+  sentLabels.delete(s.id);
   s.dispose();
   // closing a background tab keeps the current one
   const next = active && active !== s && sessions.has(active.id) ? active : [...sessions.values()].pop() ?? null;
@@ -273,7 +316,7 @@ function confirmClose(s: TerminalSession) {
     return;
   }
   openSheet(
-    `Close “${s.title}”?`,
+    `Close “${s.label}”?`,
     h('p', { class: 'note' }, 'Anything running in this session will be stopped.'),
     h('div', { class: 'action-list' },
       action('power', 'Close session', '', () => closeSession(s), true),
@@ -282,9 +325,30 @@ function confirmClose(s: TerminalSession) {
   );
 }
 
-function renderTabs() {
+let tabsSig = '';
+const sentLabels = new Map<string, string>();
+
+/** Tabs + the home list. Cheap when nothing they show changed (titles change a lot). */
+function renderTabs(scrollToActive = false) {
   const tabs = $('#tabs');
-  for (const s of sessions.values()) bridge.setSessionLabel(s.id, s.customName || s.about || s.kindLabel);
+  for (const s of sessions.values()) {
+    const l = s.customName || s.about || s.kindLabel;
+    if (sentLabels.get(s.id) === l) continue;
+    sentLabels.set(s.id, l);
+    bridge.setSessionLabel(s.id, l);
+  }
+  const sig = [...sessions.values()]
+    .map((s) => [s.id, s.label, s.about, s.customName, s.alive, s === active].join('|'))
+    .join('\n');
+  if (sig !== tabsSig) {
+    tabsSig = sig;
+    buildTabs(tabs);
+    renderHomeSessions();
+  }
+  if (scrollToActive) tabs.querySelector('.tab.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}
+
+function buildTabs(tabs: HTMLElement) {
   tabs.replaceChildren(
     ...[...sessions.values()].map((s) => {
       const tab = h('div', { class: 'tab' + (s === active ? ' active' : '') + (s.alive ? '' : ' dead') },
@@ -303,13 +367,20 @@ function renderTabs() {
       return tab;
     }),
   );
-  tabs.querySelector('.tab.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-  renderHomeSessions();
 }
 
 // ================================================================ screens
+/** Which tab was open, and whether the home screen was: back there after the UI restarts. */
+function saveUiState() {
+  if (!restored) return; // not before it was read back
+  try {
+    localStorage.setItem('ui', JSON.stringify({ active: active?.id ?? '', screen }));
+  } catch { /* storage unavailable */ }
+}
+
 function showHome() {
   screen = 'home';
+  saveUiState();
   bridge.setActiveSession(''); // looking at no session: all of them may notify
   document.body.dataset.screen = 'home';
   bridge.hideKeyboard();
@@ -318,6 +389,7 @@ function showHome() {
 }
 function showTerm() {
   screen = 'term';
+  saveUiState();
   if (active) bridge.setActiveSession(active.id);
   document.body.dataset.screen = 'term';
   requestAnimationFrame(() => active?.fit());
@@ -336,7 +408,9 @@ function renderHome() {
     return b;
   };
   let body: Kid[];
-  if (st.ubuntu === 'ready') {
+  if (!stateKnown) {
+    body = [pill('busy', 'Starting…')]; // not "Install Ubuntu" for a moment on every start
+  } else if (st.ubuntu === 'ready') {
     body = [
       pill('ok', 'Ubuntu 24.04 · ready'),
       h('h2', {}, 'Pick your agent'),
@@ -394,7 +468,8 @@ function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
 function renderStorage() {
   const status = $('#storage-status');
   const button = $('#storage-btn');
-  $('#storage-card').hidden = false;
+  $('#storage-card').hidden = !stateKnown;
+  if (!stateKnown) return;
   if (hostState.host === 'dev') {
     status.textContent = 'Available in the Android app.';
     button.hidden = true;
@@ -517,7 +592,7 @@ kbd.addEventListener('blur', () => active?.setFocused(false));
 function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
   let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0, vel = 0;
-  let longTimer = 0, inertia = 0;
+  let longTimer = 0, inertia = 0, caughtFling = false;
   let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize;
   const touches = new Map<number, { x: number; y: number }>();
 
@@ -551,6 +626,7 @@ function bindTerminalGestures(s: TerminalSession) {
   };
 
   el.addEventListener('pointerdown', (e) => {
+    caughtFling = inertia !== 0; // a tap that only stops the scrolling isn't a tap
     stopInertia();
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2) {
@@ -616,10 +692,11 @@ function bindTerminalGestures(s: TerminalSession) {
       if (performance.now() - lastT < 80 && Math.abs(vel) > 0.2) startInertia(vel, e.clientX, e.clientY);
       return;
     }
+    if (caughtFling) return;
     if (Date.now() - t0 < 600) {
       const url = s.urlAt(e.clientX, e.clientY);
       if (url) {
-        bridge.openUrl(url);
+        bridge.openUrl(url); // the user tapped it
         return;
       }
       s.click(e.clientX, e.clientY);
@@ -698,12 +775,16 @@ function buildKeyBar() {
         const m = consumeLatch();
         active.input(k.key ? namedKeySeq(k.key, m, active.appCursor) : applyMods(k.text!, m));
       };
+      // fingers on this key: it repeats until the last one lifts
+      const down = new Set<number>();
       // pointerdown + preventDefault keeps the soft keyboard open
       b.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         haptic();
         b.classList.add('pressed');
+        down.add(e.pointerId);
         fire();
+        clearTimeout(repeat);
         if (k.repeat) {
           repeat = window.setTimeout(function loop() {
             fire();
@@ -711,7 +792,9 @@ function buildKeyBar() {
           }, 380);
         }
       });
-      const stop = () => {
+      const stop = (e: PointerEvent) => {
+        down.delete(e.pointerId);
+        if (down.size) return;
         clearTimeout(repeat);
         b.classList.remove('pressed');
       };
@@ -883,7 +966,13 @@ function openSettingsSheet() {
   const accountField = h('input', { class: 'text-input', type: 'email', spellcheck: 'false', placeholder: 'you@gmail.com' }) as HTMLInputElement;
   accountField.value = accounts.agy;
   accountField.onchange = () => {
-    accounts.agy = accountField.value.trim();
+    const v = accountField.value.trim();
+    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+      toast('That doesn’t look like an email address');
+      accountField.value = accounts.agy;
+      return;
+    }
+    accounts.agy = v;
     bridge.setAntigravityAccount(accounts.agy);
   };
   const resetBtn = h('button', { class: 'btn btn-secondary' }, 'Open them in the app again');
@@ -895,7 +984,19 @@ function openSettingsSheet() {
     const input = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
     input.value = prefs[key];
     input.onchange = () => {
-      prefs[key] = input.value.trim() || DEFAULT_PREFS[key];
+      let v = input.value.trim();
+      if (v && !/^[a-z][\w+.-]*:/i.test(v)) v = `https://${v}`; // "claude.ai/code"
+      let ok = !v;
+      try {
+        ok ||= ['https:', 'http:'].includes(new URL(v).protocol);
+      } catch { /* not a URL */ }
+      if (!ok) {
+        toast('Enter a web address (https://…)');
+        input.value = prefs[key];
+        return;
+      }
+      prefs[key] = v || DEFAULT_PREFS[key];
+      input.value = prefs[key];
       savePrefs();
     };
     return input;
@@ -904,7 +1005,7 @@ function openSettingsSheet() {
   openSheet('Settings',
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Theme'), swatches),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Preview'), preview),
-    range('Text size', 9, 24, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
+    range('Text size', 9, 28, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
       setFontSize(v, false);
       sample?.renderer.setOptions({ fontSize: v });
     }, () => setFontSize(prefs.fontSize, true)),
@@ -981,7 +1082,8 @@ function bindChrome() {
   // Any text field in the page (settings) takes the keyboard back from the terminal.
   document.addEventListener('focusin', (e) => {
     const t = e.target as HTMLElement;
-    if ((t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && t.id !== 'kbd') {
+    // text fields only (a switch or a slider in Settings doesn't need the keyboard)
+    if (t.matches('textarea:not(#kbd), input:not([type=checkbox]):not([type=range]):not([type=radio])')) {
       active?.setFocused(false);
       bridge.setTerminalKeyboard(false);
     }
@@ -1022,6 +1124,17 @@ async function boot() {
   document.body.dataset.host = bridge.host;
   if (prefs.kbCompat) bridge.setKeyboardCompat(true);
   showHome();
+  // the home screen's state doesn't need the fonts: ask right away
+  const state = bridge.getState().then(
+    (st) => st,
+    (): HostState => ({ host: bridge.host, ubuntu: 'error', message: 'Could not reach the app' }),
+  );
+  state.then((st) => {
+    if (stateKnown) return; // onState was faster
+    hostState = st;
+    stateKnown = true;
+    renderHome();
+  });
 
   // Measure the cell size only after the fonts are really there
   // (bounded: a font that never finishes loading must not stall the whole UI).
@@ -1039,11 +1152,7 @@ async function boot() {
 
   notifyWhenDone = await bridge.getNotifyWhenDone();
   accounts = await bridge.getAccounts();
-  try {
-    hostState = await bridge.getState();
-  } catch {
-    hostState = { host: bridge.host, ubuntu: 'error', message: 'Could not reach the app' };
-  }
+  await state;
   renderHome();
 
   // Re-attach to sessions that kept running while the UI was gone.
@@ -1063,10 +1172,18 @@ async function boot() {
       if (!info.alive) s.alive = false;
       // replay the saved output at the size it was written for (background tabs too)
       if (info.cols && info.rows) s.notePtySize(info.cols, info.rows);
-      s.restoreModes();
-      bridge.attach(info.id);
+      s.beginReplay();
+      bridge.attach(info.id); // its saved output, then onReplayed → restoreModes()
     }
-    if (list.length) activate((pendingOpen && sessions.get(pendingOpen)) || [...sessions.values()].pop()!);
+    if (list.length) {
+      let ui = { active: '', screen: 'term' };
+      try {
+        ui = { ...ui, ...JSON.parse(localStorage.getItem('ui') ?? '{}') };
+      } catch { /* none saved */ }
+      // a tapped notification first; else the tab (and screen) that was open
+      activate((pendingOpen && sessions.get(pendingOpen)) || sessions.get(ui.active) || [...sessions.values()].pop()!);
+      if (!pendingOpen && ui.screen === 'home') showHome();
+    }
     pendingOpen = '';
     restored = true;
   } catch { /* nothing to restore */ }

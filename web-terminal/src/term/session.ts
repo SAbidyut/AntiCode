@@ -35,6 +35,12 @@ export class TerminalSession {
   private rawSize = 0;
   onTitle?: () => void;
   onActivity?: () => void;
+  /** A restored session's saved output is being replayed (see beginReplay). */
+  private replaying = false;
+  /** Mouse reports in SGR form (CSI ? 1006 h); otherwise the classic CSI M bytes. */
+  private sgrMouse = false;
+  /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
+  onLink?: (url: string, trusted: boolean) => void;
 
   constructor(
     private bridge: Bridge,
@@ -64,8 +70,8 @@ export class TerminalSession {
     this.el.append(this.renderer.el, this.readerEl, fab);
 
     // Replies the terminal generates itself (cursor position reports, device attributes…)
-    this.term.onData((d) => this.bridge.write(this.id, d));
-    this.term.onBinary((d) => this.bridge.write(this.id, d));
+    this.term.onData((d) => this.reply(d));
+    this.term.onBinary((d) => this.reply(d));
     this.term.onWriteParsed(() => {
       this.saveModes();
       this.renderer.lastOutput = performance.now();
@@ -85,27 +91,39 @@ export class TerminalSession {
         this.renderer.cursorVisible = show;
         this.renderer.schedule();
       }
+      if (params.some((p) => p === 1006)) this.sgrMouse = show; // how mouse reports look
       return false; // let xterm handle it too
     };
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, track(true));
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, track(false));
-    // `reset` (RIS, ESC c) and soft reset (DECSTR, CSI ! p) show the cursor again
-    const showAgain = () => {
-      this.renderer.clearLabels();
+    // `reset` (RIS, ESC c) and soft reset (DECSTR, CSI ! p) show the cursor again; only
+    // the full reset clears the screen (and with it the prompt clocks)
+    const showAgain = (full: boolean) => () => {
+      if (full) {
+        this.renderer.clearLabels();
+        this.sgrMouse = false;
+      }
       this.renderer.cursorVisible = true;
       this.renderer.schedule();
       return false;
     };
-    this.term.parser.registerEscHandler({ final: 'c' }, showAgain);
-    this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain);
-    // OSC 7770 ; open ; <url>  — emitted by our xdg-open shim inside Ubuntu.
+    this.term.parser.registerEscHandler({ final: 'c' }, showAgain(true));
+    this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain(false));
+    // OSC 7770 ; <cmd> ; …  — from our scripts inside Ubuntu.
     this.term.parser.registerOscHandler(7770, (data) => {
       const [cmd, ...rest] = data.split(';');
-      if (cmd === 'open' && rest.length) this.bridge.openUrl(rest.join(';'));
+      // xdg-open and setup-storage sign their requests: open;<token>;<url>. The same text
+      // printed by anything else (`cat` of a downloaded file, curl output …) is not trusted.
+      const token = this.bridge.linkToken();
+      const signed = rest.length > 0 && rest[0] === token;
+      const args = signed ? rest.slice(1) : rest;
+      const trusted = signed || !token;
+      // (not again while a restored session's old output is replayed)
+      if (cmd === 'open' && args.length && !this.replaying) this.onLink?.(args.join(';'), trusted);
       else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
       else if (cmd === 'done') this.renderer.anchorBottom = false;
-      else if (cmd === 'storage') this.bridge.requestStorage(); // `setup-storage` inside Ubuntu
+      else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
     // Colour queries (OSC 10/11/12 ; ?) — TUIs like the Antigravity CLI ask for the
@@ -117,7 +135,7 @@ export class TerminalSession {
     ] as const) {
       this.term.parser.registerOscHandler(osc, (data) => {
         if (data !== '?') return false;
-        this.bridge.write(this.id, `\x1b]${osc};${xtermRgb(pick(this.renderer.options.theme))}\x1b\\`);
+        this.reply(`\x1b]${osc};${xtermRgb(pick(this.renderer.options.theme))}\x1b\\`);
         return true;
       });
     }
@@ -127,12 +145,12 @@ export class TerminalSession {
     // vowel sign as a cell of its own and the text falls apart (◌া ◌ি, broken lines).
     this.term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, (params) => {
       if (params[0] !== 2027) return false; // other modes: xterm answers
-      this.bridge.write(this.id, '\x1b[?2027;3$y');
+      this.reply('\x1b[?2027;3$y');
       return true;
     });
     // XTVERSION (CSI > q): name the terminal.
     this.term.parser.registerCsiHandler({ prefix: '>', final: 'q' }, () => {
-      this.bridge.write(this.id, '\x1bP>|AgyTerminal 0.2\x1b\\');
+      this.reply('\x1bP>|AgyTerminal 0.2\x1b\\');
       return true;
     });
     // OSC 52 clipboard copy (used by many TUIs).
@@ -357,7 +375,7 @@ export class TerminalSession {
       if (this.mouseTracking && clientX !== undefined && clientY !== undefined) {
         const { x, y } = this.renderer.cellAt(clientX, clientY);
         const btn = n > 0 ? 64 : 65;
-        this.bridge.write(this.id, `\x1b[<${btn};${x + 1};${y + 1}M`.repeat(Math.min(Math.abs(n), 10)));
+        this.bridge.write(this.id, this.mouseReport(btn, x, y, true).repeat(Math.min(Math.abs(n), 10)));
       } else {
         // no scrollback in full-screen apps: arrow keys are the usual fallback
         const seq = n > 0 ? (this.appCursor ? '\x1bOA' : '\x1b[A') : this.appCursor ? '\x1bOB' : '\x1b[B';
@@ -377,8 +395,17 @@ export class TerminalSession {
   click(clientX: number, clientY: number): boolean {
     if (!this.mouseTracking) return false;
     const { x, y } = this.renderer.cellAt(clientX, clientY);
-    this.bridge.write(this.id, `\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`);
+    this.bridge.write(this.id, this.mouseReport(0, x, y, true) + this.mouseReport(0, x, y, false));
     return true;
+  }
+
+  /** One mouse event at cell x/y (0-based), in the encoding the program asked for. */
+  private mouseReport(btn: number, x: number, y: number, press: boolean): string {
+    if (this.sgrMouse) return `\x1b[<${btn};${x + 1};${y + 1}${press ? 'M' : 'm'}`;
+    // classic X10/normal encoding: bytes 32 + value (release = button 3), max 223
+    const b = press ? btn : 3;
+    const ch = (v: number) => String.fromCharCode(Math.min(255, 32 + v));
+    return `\x1b[M${ch(b)}${ch(x + 1)}${ch(y + 1)}`;
   }
 
   /** If a URL is under the point, return it. */
@@ -392,7 +419,8 @@ export class TerminalSession {
     for (let i = start; i < buf.length; i++) {
       const line = buf.getLine(i);
       if (!line || (i > start && !line.isWrapped)) break;
-      if (i === at) offset = text.length + x;
+      // x is a cell; the text has one char per letter cluster or wide character
+      if (i === at) offset = text.length + line.translateToString(false, 0, x).length;
       text += line.translateToString(false);
     }
     for (const m of text.matchAll(URL_RE)) {
@@ -476,7 +504,16 @@ export class TerminalSession {
 
   markExited(code: number) {
     this.alive = false;
-    this.term.write(`\r\n\x1b[2m[process exited with code ${code} — close the tab with ×]\x1b[0m\r\n`);
+    // after everything it printed: a program that died mid-screen (alternate screen, mouse
+    // mode) can't clean up — back to the normal screen with its history, mouse off, no
+    // blinking cursor
+    this.term.write('', () => {
+      const leave = this.term.buffer.active.type === 'alternate' ? '\x1b[?1049l' : '';
+      this.term.write(
+        `${leave}\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25l` +
+          `\r\n\x1b[0;2m[exited${code ? ` with code ${code}` : ''} — close the tab with ×]\x1b[0m\r\n`,
+      );
+    });
   }
 
   // ---- terminal modes survive a reload of the UI ----
@@ -495,6 +532,7 @@ export class TerminalSession {
     ].join(',');
   }
   private saveModes() {
+    if (this.replaying) return; // keep what was saved before: restoreModes compares with it
     const k = this.modesKey();
     if (k === this.modesSaved) return;
     this.modesSaved = k;
@@ -502,25 +540,60 @@ export class TerminalSession {
       localStorage.setItem(`modes:${this.id}`, k);
     } catch { /* storage unavailable */ }
   }
-  /** Before replaying a restored session's output. */
+  /**
+   * An answer to a program's question (cursor position, colours, device attributes …).
+   * Not for questions in replayed old output: they were answered back then, and a second
+   * answer would arrive at the shell or agent as typed text.
+   */
+  private reply(data: string) {
+    if (!this.replaying) this.bridge.write(this.id, data);
+  }
+
+  /** A restored session: its saved output comes next (requests in it were answered then). */
+  beginReplay() {
+    this.replaying = true;
+  }
+
+  /**
+   * After a restored session's saved output has been replayed (the service keeps only its
+   * last 512 KB, which may have lost the escapes that turned these modes on): turn on what
+   * the replay didn't. Not before it — a replay that starts on the shell and then enters
+   * vim would otherwise draw the shell's history into vim's alternate screen.
+   */
   restoreModes() {
+    this.term.write('', () => {
+      this.replaying = false; // everything up to here was the replay
+    });
     let k: string | null = null;
     try {
       k = localStorage.getItem(`modes:${this.id}`);
     } catch { /* storage unavailable */ }
-    if (!k) return;
+    if (!k || !this.alive) return; // a finished session has no modes to restore
     const [bp, ac, alt, cur, mouse] = k.split(',');
-    const mouseMode: Record<string, number> = { x10: 9, vt200: 1000, drag: 1002, any: 1003 };
-    let seq = '';
-    if (alt === '1') seq += '\x1b[?1049h';
-    if (bp === '1') seq += '\x1b[?2004h';
-    if (ac === '1') seq += '\x1b[?1h';
-    if (cur === '0') seq += '\x1b[?25l';
-    if (mouseMode[mouse]) seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
-    if (seq) this.term.write(seq);
+    this.term.write('', () => {
+      const m = this.term.modes;
+      const mouseMode: Record<string, number> = { x10: 9, vt200: 1000, drag: 1002, any: 1003 };
+      let seq = '';
+      const lostAlt = alt === '1' && this.term.buffer.active.type !== 'alternate';
+      if (lostAlt) seq += '\x1b[?1049h';
+      if (bp === '1' && !m.bracketedPasteMode) seq += '\x1b[?2004h';
+      if (ac === '1' && !m.applicationCursorKeysMode) seq += '\x1b[?1h';
+      if (cur === '0' && this.renderer.cursorVisible) seq += '\x1b[?25l';
+      if (mouseMode[mouse] && m.mouseTrackingMode === 'none') seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
+      if (seq) this.term.write(seq);
+      if (lostAlt && this.alive) {
+        // its screen wasn't in the replay: a size change makes the program draw it again
+        const { cols, rows } = this.term;
+        this.bridge.resize(this.id, cols, Math.max(4, rows - 1));
+        window.setTimeout(() => this.bridge.resize(this.id, this.term.cols, this.term.rows), 150);
+      }
+    });
   }
 
   dispose() {
+    clearTimeout(this.resizeTimer);
+    clearTimeout(this.readerFrame);
+    this.renderer.dispose();
     try {
       localStorage.removeItem(`modes:${this.id}`);
       localStorage.removeItem(`meta:${this.id}`);

@@ -65,7 +65,7 @@ export function applyMods(text: string, m: Mods): string {
     else if (c === '\\' || c === '4') out = '\x1c';
     else if (c === ']' || c === '5') out = '\x1d';
     else if (c === '^' || c === '6') out = '\x1e';
-    else if (c === '_' || c === '-' || c === '7') out = '\x1f';
+    else if (c === '_' || c === '-' || c === '/' || c === '7') out = '\x1f';
     else if (c === '?' || c === '8') out = '\x7f';
   }
   if (m.alt) out = ESC + out;
@@ -81,9 +81,11 @@ const ANDROID_KEYS: Record<number, NamedKey> = {
   139: 'F9', 140: 'F10', 141: 'F11', 142: 'F12',
 };
 
-export function androidKeySeq(keyCode: number, m: Mods, appCursor: boolean): string | null {
+/** [ch]: what the key types on the phone's keyboard layout (Ctrl/Alt + punctuation). */
+export function androidKeySeq(keyCode: number, m: Mods, appCursor: boolean, ch = ''): string | null {
   const named = ANDROID_KEYS[keyCode];
   if (named) return namedKeySeq(named, m, appCursor);
+  if (ch) return applyMods(ch, m);
   // KEYCODE_A..Z = 29..54, 0..9 = 7..16, SPACE = 62
   if (keyCode >= 29 && keyCode <= 54) return applyMods(String.fromCharCode(97 + keyCode - 29), m);
   if (keyCode >= 7 && keyCode <= 16) return applyMods(String(keyCode - 7), m);

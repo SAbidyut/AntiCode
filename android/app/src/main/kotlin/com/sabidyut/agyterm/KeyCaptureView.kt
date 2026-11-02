@@ -24,7 +24,8 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
 
     interface Sink {
         fun onText(text: String)
-        fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean)
+        /** [char]: what the key types on this layout (with Shift, without Ctrl/Alt), or "". */
+        fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean, char: String)
     }
 
     /**
@@ -70,14 +71,26 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
     }
 
     private fun handleKey(event: KeyEvent) {
+        val meta = event.metaState
         val ctrl = event.isCtrlPressed
         val alt = event.isAltPressed
+        fun printable(c: Int) = c >= 0x20 && (c and KeyCharacterMap.COMBINING_ACCENT) == 0
+        // AltGr (right Alt) types characters on many layouts (German AltGr+Q = @)
+        if (alt && !ctrl && (meta and KeyEvent.META_ALT_LEFT_ON) == 0) {
+            val g = event.getUnicodeChar(meta and KeyEvent.META_CTRL_MASK.inv())
+            if (printable(g)) {
+                sink.onText(String(Character.toChars(g)))
+                return
+            }
+        }
         // Printable keys without Ctrl/Alt → text (respects Shift and the keyboard layout).
-        val uc = event.getUnicodeChar(event.metaState and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK).inv())
-        if (uc >= 0x20 && !ctrl && !alt && (uc and KeyCharacterMap.COMBINING_ACCENT) == 0) {
+        val uc = event.getUnicodeChar(meta and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK).inv())
+        if (printable(uc) && !ctrl && !alt) {
             sink.onText(String(Character.toChars(uc)))
         } else {
-            sink.onKey(event.keyCode, ctrl, alt, event.isShiftPressed)
+            // Ctrl/Alt + a key: the page needs its character too (Alt+. , Ctrl+\ , Alt+Shift+F)
+            val ch = if (printable(uc)) String(Character.toChars(uc)) else ""
+            sink.onKey(event.keyCode, ctrl, alt, event.isShiftPressed, ch)
         }
     }
 
@@ -108,8 +121,8 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
             // Our editor is always empty, so a delete means "backspace in the terminal".
-            repeat(beforeLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_DEL, false, false, false) }
-            repeat(afterLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_FORWARD_DEL, false, false, false) }
+            repeat(beforeLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_DEL, false, false, false, "") }
+            repeat(afterLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_FORWARD_DEL, false, false, false, "") }
             return true
         }
 
@@ -124,7 +137,7 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         }
 
         override fun performEditorAction(actionCode: Int): Boolean {
-            sink.onKey(KeyEvent.KEYCODE_ENTER, false, false, false)
+            sink.onKey(KeyEvent.KEYCODE_ENTER, false, false, false, "")
             return true
         }
     }

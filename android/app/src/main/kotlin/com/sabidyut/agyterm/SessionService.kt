@@ -139,7 +139,8 @@ class SessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        ubuntu = UbuntuManager(applicationContext)
+        ubuntu = UbuntuManager.get(applicationContext)
+        ubuntu.onBusyChanged = { mainHandler.post { updateForeground() } }
         createChannel()
     }
 
@@ -231,28 +232,28 @@ class SessionService : Service() {
         }, "selftest").start()
     }
 
-    /** Foreground while anything runs; otherwise let the system stop us when unbound. */
+    /**
+     * Foreground while anything runs (or Ubuntu is being installed); otherwise let the
+     * system stop us when unbound. Called from the main and the JS-bridge threads.
+     */
+    @Synchronized
     fun updateForeground() {
         val running = sessions.values.count { it.alive }
-        if (sessions.isEmpty()) {
+        val installing = ubuntu.state == UbuntuManager.State.INSTALLING
+        if (running == 0 && !installing) {
+            // nothing runs (finished sessions may still have open tabs): no need to keep
+            // the phone awake or show "running"
             releaseWakeLock()
             stopForegroundCompat()
-            stopSelf()
-            return
-        }
-        if (running == 0) {
-            // only finished sessions left (their tabs are still open): no need to keep the
-            // phone awake or show "running"
-            releaseWakeLock()
-            stopForegroundCompat()
+            if (sessions.isEmpty()) stopSelf()
             return
         }
         startService(Intent(this, SessionService::class.java))
-        startForeground(NOTIFICATION_ID, buildNotification(running))
+        startForeground(NOTIFICATION_ID, buildNotification(running, installing))
         acquireWakeLock()
     }
 
-    private fun buildNotification(running: Int): Notification {
+    private fun buildNotification(running: Int, installing: Boolean): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -266,7 +267,13 @@ class SessionService : Service() {
         return builder
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("AntiCode")
-            .setContentText(if (running == 1) "1 session running — tap to open" else "$running sessions running — tap to open")
+            .setContentText(
+                when {
+                    installing && running == 0 -> "Installing Ubuntu…"
+                    running == 1 -> "1 session running — tap to open"
+                    else -> "$running sessions running — tap to open"
+                },
+            )
             .setOngoing(true)
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(null, "Stop all", stop).build())
@@ -304,6 +311,7 @@ class SessionService : Service() {
     }
 
     override fun onDestroy() {
+        ubuntu.onBusyChanged = null
         for (s in sessions.values) s.kill()
         sessions.clear()
         releaseWakeLock()

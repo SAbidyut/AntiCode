@@ -64,6 +64,9 @@
   --mono: 'JetBrains Mono', 'AgySymbols', 'AgySym', 'Kalpurush', ui-monospace, monospace;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* landscape: the navigation bar (and a camera cutout) can sit at a side */
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 body[data-theme='black'] {
@@ -141,7 +144,7 @@ body[data-screen='term'] #home { opacity: 0; transform: translateX(-12%); pointe
 /* ------------------------------------------------------------------ home */
 #home {
   overflow-y: auto;
-  padding: calc(var(--safe-top) + 10px) 16px calc(var(--safe-bottom) + 28px);
+  padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 28px) calc(var(--safe-left) + 16px);
   max-width: 620px; margin: 0 auto;
   scrollbar-width: none;
 }
@@ -258,6 +261,7 @@ body[data-theme='paper'] .tint-green { color: #2b8a3e; }
 .steps li { margin-bottom: 6px; }
 .cmd { display: inline-flex; align-items: center; gap: 6px; }
 .note { font-size: 13.5px; color: var(--muted); margin: 0 0 14px; line-height: 1.75; }
+.note.link-ask { font-family: var(--mono); color: var(--text); overflow-wrap: anywhere; line-height: 1.5; }
 .ok-text { color: var(--good); }
 /* remote control: one compact row per agent — name and Open on top, the command under */
 .remote-row {
@@ -293,7 +297,7 @@ body[data-screen='home']::before {
 /* ------------------------------------------------------------------ terminal screen */
 #term {
   display: flex; flex-direction: column;
-  padding-top: var(--safe-top); padding-bottom: var(--safe-bottom);
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   background: var(--term-bg, var(--bg));
 }
 .topbar {
@@ -466,8 +470,10 @@ body[data-screen='home']::before {
   animation: fade-in 0.2s var(--ease);
 }
 .sheet {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 41;
+  position: fixed; left: var(--safe-left); right: var(--safe-right); bottom: 0; z-index: 41;
   max-height: 86vh; overflow-y: auto;
+  /* a focused field scrolls into view above the keyboard (the bottom padding) */
+  scroll-padding-bottom: calc(var(--safe-bottom) + 24px);
   background: var(--surface); border-top: 1px solid var(--line-strong);
   border-radius: 24px 24px 0 0;
   padding: 8px 16px calc(var(--safe-bottom) + 16px);
@@ -475,7 +481,7 @@ body[data-screen='home']::before {
   animation: sheet-up 0.26s var(--ease);
   max-width: 640px; margin: 0 auto;
 }
-.sheet.closing { animation: sheet-down 0.2s var(--ease) forwards; }
+.sheet.closing { animation: sheet-down 0.2s var(--ease) forwards; pointer-events: none; }
 .sheet-grip { width: 40px; height: 4px; border-radius: 99px; background: var(--line-strong); margin: 4px auto 12px; }
 .sheet h3 { margin: 4px 4px 12px; font-size: 17px; }
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }

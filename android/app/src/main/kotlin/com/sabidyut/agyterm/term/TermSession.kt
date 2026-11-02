@@ -32,6 +32,7 @@ class TermSession(
     val pid: Int
     @Volatile var alive = true
         private set
+    val createdAt = System.nanoTime()
     @Volatile var exitCode = 0
         private set
 
@@ -90,10 +91,7 @@ class TermSession(
             } catch (_: IOException) {
                 // EIO when the child side closes — normal end of session
             }
-            try {
-                pfd.close()
-            } catch (_: IOException) {
-            }
+            closePty()
         }, "pty-reader-$id")
         reader.start()
 
@@ -163,7 +161,9 @@ class TermSession(
     private fun finishOsc() {
         val s = osc.toString("UTF-8")
         when {
-            s.startsWith("9;") && !s.startsWith("9;4;") -> alert = s.substring(2) // 9;4 = progress bar
+            // ConEmu-style OSC 9 ; <number> ; … (9;4 progress bar, 9;9 working directory from
+            // prompts) are not notifications
+            s.startsWith("9;") && !OSC9_SUBCOMMAND.containsMatchIn(s) -> alert = s.substring(2)
             s.startsWith("777;notify;") -> alert = s.substring(11).split(';').filter { it.isNotBlank() }.joinToString(" — ")
             s == "7770;done" -> promptAt = System.currentTimeMillis()
         }
@@ -191,24 +191,43 @@ class TermSession(
         }
     }
 
+    private val fdLock = Object()
+    private var fdOpen = true
+
+    /** Closes the PTY master once (the fd number may be reused right after). */
+    private fun closePty() = synchronized(fdLock) {
+        if (!fdOpen) return@synchronized
+        fdOpen = false
+        try {
+            pfd.close()
+        } catch (_: IOException) {
+        }
+    }
+
     fun resize(rows: Int, cols: Int) {
         this.rows = rows
         this.cols = cols
-        if (alive) Pty.setWindowSize(fd, rows, cols)
+        synchronized(fdLock) { if (fdOpen) Pty.setWindowSize(fd, rows, cols) }
     }
 
     fun kill() {
-        if (alive) {
-            Pty.sendSignal(pid, 1) // SIGHUP, like closing a terminal window
-            Thread {
+        val wasAlive = alive
+        if (wasAlive) Pty.sendSignal(pid, 1) // SIGHUP, like closing a terminal window
+        Thread {
+            if (wasAlive) {
                 Thread.sleep(1500)
                 if (alive) Pty.sendSignal(pid, 9)
-            }.start()
-        }
+                Thread.sleep(300)
+            }
+            // a background job may still hold the terminal open: let the reader (and its
+            // output buffer) go
+            closePty()
+        }.start()
         writer.shutdown()
     }
 
     companion object {
         const val RING_SIZE = 512 * 1024
+        private val OSC9_SUBCOMMAND = Regex("^9;\\d+(;|$)")
     }
 }

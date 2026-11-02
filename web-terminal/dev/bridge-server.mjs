@@ -65,6 +65,7 @@ wss.on('connection', (ws) => {
     if (msg.method === 'attach') {
       const s = sessions.get(msg.args[0]);
       if (s) ws.send(JSON.stringify({ type: 'output', id: msg.args[0], data: Buffer.concat(s.buf).toString('base64') }));
+      if (s) ws.send(JSON.stringify({ type: 'replayed', id: msg.args[0] }));
       return;
     }
     const value = methods[msg.method]?.(...(msg.args ?? []));

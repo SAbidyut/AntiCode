@@ -67,12 +67,13 @@ class InAppBrowser(private val activity: Activity) {
         val host = parsed.host ?: ""
         val google = host == "google.com" || host.endsWith(".google.com")
         val uri = if (google) Accounts.withAccount(parsed, Accounts.antigravity(activity)) else parsed
-        if (uri.scheme == null || uri.scheme == "file") {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == null || scheme == "file") {
             // Android forbids handing file:// paths to other apps (it would crash the app)
             Toast.makeText(activity, "Can't open local files in a browser: $url", Toast.LENGTH_LONG).show()
             return
         }
-        if (uri.scheme != "https" && uri.scheme != "http") {
+        if (scheme != "https" && scheme != "http") {
             openExternal(uri)
             return
         }
@@ -111,7 +112,24 @@ class InAppBrowser(private val activity: Activity) {
 
     private fun openExternal(uri: Uri) {
         try {
-            activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+            if (uri.scheme.equals("intent", ignoreCase = true)) {
+                // intent://…#Intent;package=…;end (links from web pages to apps): only as a
+                // plain browsable link — never a specific component of some app
+                val intent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).apply {
+                    component = null
+                    selector = null
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                }
+                try {
+                    activity.startActivity(intent)
+                } catch (_: android.content.ActivityNotFoundException) {
+                    val fallback = intent.getStringExtra("browser_fallback_url")
+                    if (fallback != null && (fallback.startsWith("https://") || fallback.startsWith("http://"))) open(fallback)
+                    else throw IllegalStateException("no app")
+                }
+                return
+            }
+            activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
         } catch (_: Exception) {
             Toast.makeText(activity, "No app found to open the link", Toast.LENGTH_LONG).show()
         }

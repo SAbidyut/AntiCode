@@ -1,6 +1,6 @@
 #!/bin/sh
-# Like termux-setup-storage: ask Agy Terminal for access to the phone's storage.
-printf '\033]7770;storage\007' > /dev/tty 2>/dev/null || printf '\033]7770;storage\007'
+# Like termux-setup-storage: ask AntiCode for access to the phone's storage.
+printf '\033]7770;storage;%s\007' "${ANTICODE_LINK_TOKEN:-}" > /dev/tty 2>/dev/null || printf '\033]7770;storage;%s\007' "${ANTICODE_LINK_TOKEN:-}"
 echo "Allow storage access in the dialog on your phone."
 echo "Your phone's files are then in /sdcard and ~/storage:"
 echo "  ~/storage/shared      whole shared storage"

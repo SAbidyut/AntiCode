@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agy Terminal — basic tools every agent needs (curl, git …).
+# AntiCode — basic tools every agent needs (curl, git …).
 #   term-setup          install / refresh them
 #   term-setup --auto   only if this hasn't been done yet (used by agy-setup / claude-setup)
 set -o pipefail
@@ -7,6 +7,14 @@ G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
 done_marker="$HOME/.agy-terminal-base-done"
 if [ "$1" = "--auto" ] && { [ -f "$done_marker" ] || [ -f "$HOME/.agy-terminal-setup-done" ]; }; then
   exit 0
+fi
+# One setup at a time (e.g. Antigravity and Claude Code opened together — two apt-gets
+# would fight over the package lock): the second waits, then finds the work done.
+exec 9>/tmp/.anticode-setup.lock
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+  echo -e "${Y}✦ Setup is running in another tab — waiting for it to finish…${N}"
+  flock 9
+  [ "$1" = "--auto" ] && [ -f "$done_marker" ] && exit 0
 fi
 echo -e "${Y}✦ First-time setup — this takes a few minutes, keep the app open.${N}"
 export DEBIAN_FRONTEND=noninteractive

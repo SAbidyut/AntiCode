@@ -28,14 +28,16 @@ export interface HostState {
 export interface BridgeEvents {
   onOutput(id: string, data: Uint8Array): void;
   onExit(id: string, code: number): void;
+  /** A re-attached session's saved output has all been delivered. */
+  onReplayed(id: string): void;
   onState(state: HostState): void;
   /** Raw text from the native "terminal keyboard" (Android InputConnection). */
   onImeText(text: string): void;
   /** Raw key from the native terminal keyboard: Android KeyEvent keyCode + modifiers. */
-  onImeKey(keyCode: number, ctrl: boolean, alt: boolean, shift: boolean): void;
+  onImeKey(keyCode: number, ctrl: boolean, alt: boolean, shift: boolean, ch?: string): void;
   onBack(): boolean;
   /** System bar / keyboard insets in CSS px; called every frame while the keyboard slides. */
-  onInsets(top: number, bottom: number, keyboard: boolean, settled: boolean): void;
+  onInsets(top: number, bottom: number, keyboard: boolean, settled: boolean, left?: number, right?: number): void;
   /** The app went to the background and dropped the terminal keyboard. */
   onKeyboardReleased(): void;
   /** Show this session (e.g. its "task finished" notification was tapped). */
@@ -54,6 +56,11 @@ export interface Bridge {
   getState(): Promise<HostState>;
   installUbuntu(): void;
   openUrl(url: string): void;
+  /**
+   * The secret our xdg-open / setup-storage put in their escape sequences ('' = none, then
+   * every request is trusted: the development bridge).
+   */
+  linkToken(): string;
   /** A remote dashboard in the app's own panel (title shown in its header). */
   openRemote(url: string, title: string): void;
   copyText(text: string): void;
@@ -99,6 +106,7 @@ interface AndroidBridgeApi {
   getState(): string;
   installUbuntu(): void;
   openUrl(url: string): void;
+  linkToken?(): string;
   openRemote(url: string, title?: string): void;
   copyText(text: string): void;
   readClipboard(): string;
@@ -139,6 +147,8 @@ class AndroidHostBridge implements Bridge {
   async getState() { return JSON.parse(this.api.getState()) as HostState; }
   installUbuntu() { this.api.installUbuntu(); }
   openUrl(url: string) { this.api.openUrl(url); }
+  private token?: string;
+  linkToken() { return (this.token ??= this.api.linkToken?.() ?? ''); }
   openRemote(url: string, title: string) { this.api.openRemote(url, title); }
   copyText(text: string) { this.api.copyText(text); }
   async readClipboard() { return this.api.readClipboard(); }
@@ -178,6 +188,7 @@ class DevBridge implements Bridge {
       this.ws.addEventListener('open', () => resolve(), { once: true });
       this.ws.addEventListener('error', () => reject(new Error('dev bridge unavailable')), { once: true });
     });
+    this.ready.catch(() => console.warn('dev bridge unavailable'));
     this.ws.addEventListener('message', (ev) => {
       const msg = JSON.parse(String(ev.data));
       if (msg.reply !== undefined) {
@@ -187,6 +198,8 @@ class DevBridge implements Bridge {
         this.events.onOutput(msg.id, b64ToBytes(msg.data));
       } else if (msg.type === 'exit') {
         this.events.onExit(msg.id, msg.code);
+      } else if (msg.type === 'replayed') {
+        this.events.onReplayed(msg.id);
       } else if (msg.type === 'state') {
         this.events.onState(msg.state);
       }
@@ -201,7 +214,7 @@ class DevBridge implements Bridge {
     });
   }
   private send(method: string, ...args: unknown[]) {
-    this.ready.then(() => this.ws.send(JSON.stringify({ method, args })));
+    this.ready.then(() => this.ws.send(JSON.stringify({ method, args }))).catch(() => {});
   }
   createSession(kind: SessionKind, cols: number, rows: number) { return this.call<string>('createSession', kind, cols, rows); }
   write(id: string, data: string) { this.send('write', id, data); }
@@ -212,6 +225,8 @@ class DevBridge implements Bridge {
   getState() { return this.call<HostState>('getState'); }
   installUbuntu() { this.send('installUbuntu'); }
   openUrl(url: string) { window.open(url, '_blank'); }
+  /** tests can set one with ?linktoken= */
+  linkToken() { return new URLSearchParams(location.search).get('linktoken') ?? ''; }
   openRemote(url: string) { window.open(url, '_blank'); }
   copyText(text: string) { navigator.clipboard?.writeText(text).catch(() => {}); }
   async readClipboard() { try { return await navigator.clipboard.readText(); } catch { return ''; } }
@@ -236,11 +251,12 @@ export function createBridge(events: BridgeEvents): Bridge {
   window.__native = {
     onOutput: (id: string, b64: string) => events.onOutput(id, b64ToBytes(b64)),
     onExit: (id: string, code: number) => events.onExit(id, code),
+    onReplayed: (id: string) => events.onReplayed(id),
     onState: (json: string) => events.onState(JSON.parse(json)),
     onImeText: (text: string) => events.onImeText(text),
-    onImeKey: (k: number, c: boolean, a: boolean, s: boolean) => events.onImeKey(k, c, a, s),
+    onImeKey: (k: number, c: boolean, a: boolean, s: boolean, ch?: string) => events.onImeKey(k, c, a, s, ch),
     onBack: () => events.onBack(),
-    onInsets: (t: number, b: number, k: boolean, s: boolean) => events.onInsets(t, b, k, s),
+    onInsets: (t: number, b: number, k: boolean, s: boolean, l?: number, r?: number) => events.onInsets(t, b, k, s, l, r),
     onKeyboardReleased: () => events.onKeyboardReleased(),
     onOpenSession: (id: string) => events.onOpenSession(id),
   };

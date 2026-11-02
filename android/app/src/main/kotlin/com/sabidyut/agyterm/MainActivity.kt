@@ -147,8 +147,8 @@ class MainActivity : ComponentActivity() {
         // Owns the keyboard while typing into the terminal (see KeyCaptureView).
         keys = KeyCaptureView(this, object : KeyCaptureView.Sink {
             override fun onText(text: String) = js("__native.onImeText(${JSONObject.quote(text)})")
-            override fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean) =
-                js("__native.onImeKey($keyCode, $ctrl, $alt, $shift)")
+            override fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean, char: String) =
+                js("__native.onImeKey($keyCode, $ctrl, $alt, $shift, ${JSONObject.quote(char)})")
         })
         keys.compatMode = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_COMPAT, false)
         val root = FrameLayout(this).apply {
@@ -166,6 +166,10 @@ class MainActivity : ComponentActivity() {
             // while the panel covers the terminal, no session is "being watched"
             onOpened = { service?.activeSessionId = null },
             onClosed = { service?.activeSessionId = shownSessionId },
+            onRendererGone = {
+                Log.e("AgyWeb", "dashboard renderer gone, recreating")
+                rebuildUi()
+            },
         )
         root.addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         setContentView(root)
@@ -199,7 +203,7 @@ class MainActivity : ComponentActivity() {
             // service and are re-attached by the new page.
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 Log.e("AgyWeb", "WebView renderer gone (crash=${detail.didCrash()}), recreating")
-                recreate()
+                rebuildUi()
                 return true
             }
 
@@ -235,6 +239,15 @@ class MainActivity : ComponentActivity() {
         startService(serviceIntent)
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
         takeOpenSession(intent)
+    }
+
+    private var rebuilding = false
+
+    /** A dead WebView renderer: new WebViews (sessions keep running in the service). */
+    private fun rebuildUi() {
+        if (rebuilding) return // both WebViews report the same renderer
+        rebuilding = true
+        main.post { recreate() }
     }
 
     override fun onDestroy() {
@@ -292,16 +305,19 @@ class MainActivity : ComponentActivity() {
 
     private fun sendInsets(insets: WindowInsetsCompat, settled: Boolean) {
         val d = resources.displayMetrics.density
-        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        // the bars and a camera cutout; in landscape the navigation bar may be at a side
+        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
         val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-        panel.applyInsets(bars.top, maxOf(bars.bottom, ime.bottom))
+        panel.applyInsets(bars.top, maxOf(bars.bottom, ime.bottom), bars.left, bars.right)
         val top = bars.top / d
         val bottom = maxOf(bars.bottom, ime.bottom) / d
+        val left = bars.left / d
+        val right = bars.right / d
         val keyboard = ime.bottom > bars.bottom
-        val key = "%.1f,%.1f,%b,%b".format(top, bottom, keyboard, settled)
+        val key = "%.1f,%.1f,%b,%b,%.1f,%.1f".format(top, bottom, keyboard, settled, left, right)
         if (key == lastInsets) return
         lastInsets = key
-        js("__native.onInsets($top, $bottom, $keyboard, $settled)")
+        js("__native.onInsets($top, $bottom, $keyboard, $settled, $left, $right)")
     }
 
     // ---------------------------------------------------------------- keyboard focus
@@ -677,16 +693,18 @@ class MainActivity : ComponentActivity() {
         fun attach(id: String) {
             val s = svc().sessions[id] ?: return
             s.attach(outputListener) { snap -> if (snap.isNotEmpty()) queue(id, snap, snap.size) }
-            if (!s.alive) main.post {
-                flush() // history first, then the exit banner
-                js("__native.onExit('$id', ${s.exitCode})")
+            main.post {
+                flush() // the history first, then what depends on it (modes, exit banner)
+                js("__native.onReplayed('$id')")
+                if (!s.alive) js("__native.onExit('$id', ${s.exitCode})")
             }
         }
 
         @JavascriptInterface
         fun listSessions(): String {
             val arr = JSONArray()
-            for (s in svc().sessions.values) {
+            // in the order they were opened (the map itself has none)
+            for (s in svc().sessions.values.sortedBy { it.createdAt }) {
                 arr.put(
                     JSONObject().put("id", s.id).put("kind", s.kind).put("title", s.title).put("alive", s.alive)
                         .put("cols", s.cols).put("rows", s.rows),
@@ -705,6 +723,10 @@ class MainActivity : ComponentActivity() {
         fun openUrl(url: String) {
             main.post { browser.open(url) }
         }
+
+        /** What our xdg-open puts in front of a link (the page trusts only those). */
+        @JavascriptInterface
+        fun linkToken(): String = com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken
 
         /** A remote dashboard in the app's own panel (Chrome tab for Google-only sites). */
         @JavascriptInterface

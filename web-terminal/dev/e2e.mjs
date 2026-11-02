@@ -3,7 +3,7 @@
 import { createRequire } from 'node:module';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
-const url = process.env.URL ?? 'http://localhost:4173/?selftest=1';
+const url = process.env.URL ?? 'http://localhost:4173/?selftest=1&linktoken=t0k3n';
 let failures = 0;
 const check = (name, ok) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
@@ -91,10 +91,19 @@ await page.locator('.key', { hasText: '^C' }).dispatchEvent('pointerdown');
 await send('echo after-$((1+1))');
 check('^C key interrupts', await waitFor(async () => (await screenText()).includes('after-2')));
 
-// 5. OSC 7770 (our xdg-open shim) opens the URL
+// 5. OSC 7770 (our xdg-open shim, signed with the session's token) opens the URL
 const popup = page.waitForEvent('popup', { timeout: 4000 }).then(() => true).catch(() => false);
-await send("printf '\\033]7770;open;https://example.com/login\\007'");
+await send("printf '\\033]7770;open;t0k3n;https://example.com/login\\007'");
 check('xdg-open escape opens the browser', await popup);
+// the same escape without the token (e.g. `cat` of a downloaded file) only asks
+let popped = false;
+page.once('popup', () => { popped = true; });
+await send("printf '\\033]7770;open;https://example.com/unsigned\\007'");
+await page.waitForTimeout(800);
+const asked = await page.evaluate(() => document.querySelector('#sheet .link-ask')?.textContent ?? '');
+check('unsigned link asks first', !popped && asked.includes('example.com/unsigned'));
+await page.click('#sheet-backdrop').catch(() => {});
+await page.waitForTimeout(400);
 
 // 6. reader view (from the ⋮ sheet) shows logical lines
 await page.click('#more-btn');
@@ -123,6 +132,28 @@ check(`resize reaches the PTY (stty: ${m?.[0]?.trim()}, width ${Math.round(cols)
 await page.reload();
 await page.waitForTimeout(1500);
 check('session restored after reload', await waitFor(async () => (await screenText()).includes('typed-42')));
+
+// 9. reading history while output keeps deleting/scrolling lines on the screen: every
+//    drawn row still shows its own line (no off-by-n rows after false "trims")
+await send("clear; for i in $(seq 1 300); do echo L$i; done");
+await page.waitForTimeout(1200);
+await send("sleep 1; for k in 1 2 3; do printf '\\e[3A\\e[M\\e[3B'; printf '\\e[S'; echo M$k; sleep 0.2; done");
+await page.waitForTimeout(300);
+await page.evaluate(() => window.__selftest.session().scrollLines(20));
+await page.waitForTimeout(2500);
+const rowCheck = await page.evaluate(() => {
+  const s = window.__selftest.session();
+  const b = s.term.buffer.active;
+  const lh = s.renderer.lineHeight;
+  let bad = 0;
+  for (const r of document.querySelectorAll('.session:not([hidden]) .term-row')) {
+    const y = Number(/translateY\(([-\d.]+)px\)/.exec(r.style.transform)?.[1] ?? 0);
+    if (r.textContent.trim() !== (b.getLine(Math.round(y / lh))?.translateToString(true).trim() ?? '')) bad++;
+  }
+  return { bad, scrolled: s.renderer.scrollPx > 0 };
+});
+check(`history rows stay right while lines are deleted (${rowCheck.bad} wrong)`, rowCheck.scrolled && rowCheck.bad === 0);
+await page.evaluate(() => window.__selftest.session().scrollToBottom());
 
 check('no JavaScript errors', pageErrors.length === 0);
 
