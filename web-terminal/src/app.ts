@@ -174,6 +174,11 @@ const bridge: Bridge = createBridge({
   },
   onImeText(text) {
     if (!typingTarget()) return;
+    // several lines at once (the keyboard's clipboard): a paste, not lines typed and run
+    if (text.length > 1 && /[\r\n]/.test(text) && !latch.ctrl && !latch.alt) {
+      active!.paste(text);
+      return;
+    }
     active!.input(applyMods(text, consumeLatch()));
   },
   onImeKey(keyCode, ctrl, alt, shift, ch) {

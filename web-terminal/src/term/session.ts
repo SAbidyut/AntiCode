@@ -321,7 +321,9 @@ export class TerminalSession {
   }
 
   paste(text: string) {
-    const t = text.replace(/\r?\n/g, '\r');
+    // (the paste markers themselves are taken out: a clip containing "ESC[201~" would end
+    // the paste early and the rest would run as if typed)
+    const t = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
     this.input(this.term.modes.bracketedPasteMode ? `\x1b[200~${t}\x1b[201~` : t);
   }
 
