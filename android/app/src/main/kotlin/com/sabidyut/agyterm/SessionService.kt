@@ -189,9 +189,9 @@ class SessionService : Service() {
         if (sessions.containsKey(s.id)) onSessionExit?.invoke(s)
     }
 
-    fun createSession(kind: String, cols: Int, rows: Int): TermSession {
+    fun createSession(kind: String, cols: Int, rows: Int, cwd: String = ""): TermSession {
         val launch = when (kind) {
-            "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind)
+            "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind, cwd)
             else -> ubuntu.launchAndroidShell()
         }
         val id = UUID.randomUUID().toString().substring(0, 8)
@@ -264,7 +264,7 @@ class SessionService : Service() {
                 }
             }
             Log.i(SELFTEST, "ubuntu installed, starting session")
-            val s = createSession("selftest", 100, 30)
+            val s = createSession("selftest", 100, 30, "/tmp") // (checks the folder picker's start folder)
             val line = StringBuilder()
             s.attach(object : TermSession.OutputListener {
                 override fun onOutput(session: TermSession, data: ByteArray, len: Int) {

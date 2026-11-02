@@ -4,6 +4,9 @@
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const PORT = Number(process.env.PORT ?? 7681);
 const sessions = new Map(); // id -> { p, kind, title, alive, buf: Buffer[], size }
@@ -15,13 +18,21 @@ const broadcast = (msg) => {
   for (const c of clients) if (c.readyState === 1) c.send(s);
 };
 
-function create(kind, cols, rows) {
+const HOME = os.homedir();
+/** "~/x" → HOME/x; a full path as it is (normalized) */
+const resolveDir = (p) => path.resolve(p === '~' ? HOME : p.startsWith('~/') ? path.join(HOME, p.slice(2)) : p);
+
+function create(kind, cols, rows, cwd) {
   const id = randomUUID().slice(0, 8);
+  let dir = HOME;
+  try {
+    if (cwd && fs.statSync(resolveDir(cwd)).isDirectory()) dir = resolveDir(cwd);
+  } catch { /* not there: home */ }
   const p = pty.spawn(process.env.SHELL || 'bash', ['-l'], {
     name: 'xterm-256color',
     cols,
     rows,
-    cwd: process.env.HOME,
+    cwd: dir,
     env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'C.UTF-8' },
     encoding: null,
   });
@@ -42,7 +53,28 @@ function create(kind, cols, rows) {
 }
 
 const methods = {
-  createSession: (kind, cols, rows) => create(kind, cols, rows),
+  createSession: (kind, cols, rows, cwd) => create(kind, cols, rows, cwd),
+  listDir: (p) => {
+    const dir = resolveDir(String(p));
+    try {
+      const dirs = fs.readdirSync(dir, { withFileTypes: true })
+        .filter((e) => !e.name.startsWith('.'))
+        .filter((e) => { try { return fs.statSync(path.join(dir, e.name)).isDirectory(); } catch { return false; } })
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+      return { path: dir, dirs };
+    } catch (e) {
+      return { path: dir, error: e.code === 'EACCES' ? 'noaccess' : 'notfound' };
+    }
+  },
+  makeDir: (p) => {
+    try {
+      fs.mkdirSync(resolveDir(String(p)));
+      return '';
+    } catch (e) {
+      return e.code === 'EEXIST' ? '' : String(e.message);
+    }
+  },
   write: (id, data) => sessions.get(id)?.alive && sessions.get(id).p.write(data),
   resize: (id, cols, rows) => sessions.get(id)?.alive && sessions.get(id).p.resize(cols, rows),
   close: (id) => {
@@ -52,7 +84,7 @@ const methods = {
     sessions.delete(id);
   },
   listSessions: () => [...sessions].map(([id, s]) => ({ id, kind: s.kind, title: s.title, alive: s.alive })),
-  getState: () => ({ host: 'dev', ubuntu: 'ready' }),
+  getState: () => ({ host: 'dev', ubuntu: 'ready', home: HOME }),
   installUbuntu: () => {},
 };
 

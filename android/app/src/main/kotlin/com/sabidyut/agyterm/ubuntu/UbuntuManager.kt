@@ -53,6 +53,7 @@ class UbuntuManager private constructor(private val context: Context) {
 
     fun stateJson(): String = JSONObject()
         .put("host", "android")
+        .put("home", "/root")
         .put("ubuntu", state.name.lowercase())
         .put("progress", progress)
         .put("message", message)
@@ -376,7 +377,7 @@ class UbuntuManager private constructor(private val context: Context) {
      * kind = "ubuntu" (login shell), "agy" (Antigravity CLI, then a shell) or
      * "claude" (Claude Code, then a shell).
      */
-    fun launch(kind: String): Launch {
+    fun launch(kind: String, cwd: String = ""): Launch {
         prepare()
         val proot = "$nativeDir/libproot.so"
         val args = mutableListOf(
@@ -422,13 +423,18 @@ class UbuntuManager private constructor(private val context: Context) {
             "ANTICODE_LINK_TOKEN=$linkToken",
             timeZoneEnv(), // the phone's time, not UTC (the prompt's clock, `date`, logs)
         )
+        // the folder picked in the app: the login shell goes there first (profile.sh)
+        if (cwd.isNotEmpty()) normalizeGuestPath(cwd)?.takeIf { it != "/root" }?.let { args += "ANTICODE_CWD=$it" }
         when (kind) {
             "agy" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
             "claude" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/claude-start")
             // used by the debug-only self test (see SessionService.runSelfTest)
             "selftest" -> args += listOf(
                 "/bin/bash", "-lc",
-                "head -2 /etc/os-release; echo PROOT_OK; agy-setup && agy --version && " +
+                "head -2 /etc/os-release; echo PROOT_OK; " +
+                    // started in the folder picked in the app (the self test picks /tmp)
+                    "c=FAIL; [ \"\$PWD\" = /tmp ] && c=OK; echo SELFTEST_CWD_\$c; cd; " +
+                    "agy-setup && agy --version && " +
                     "claude-setup --auto && claude --version && echo SELFTEST_OK; " +
                     // diagnostics: ble.sh (autosuggestions) unpacked and loading in an interactive shell
                     "ls -la /usr/share/blesh/ble.sh /usr/share/blesh/.agy-version 2>&1 | sed 's/^/BLESH| /'; " +
@@ -476,6 +482,89 @@ class UbuntuManager private constructor(private val context: Context) {
         // POSIX counts the other way round: UTC+6 is written "-6"
         val rule = (if (east) "-" else "+") + h.toString() + (if (m > 0) ":" + two(m) else "")
         return "TZ=<$name>$rule"
+    }
+
+    // ------------------------------------------------------------------ folders (the picker)
+
+    /** "~/a", "/root/a/../b" → "/root/a", "/root/b" (links not followed); null if not a path. */
+    fun normalizeGuestPath(path: String): String? {
+        if (path.isEmpty() || path.length > 4096 || path.any { it == '\u0000' || it == '\n' || it == '\r' }) return null
+        val p = when {
+            path == "~" -> "/root"
+            path.startsWith("~/") -> "/root/" + path.substring(2)
+            path.startsWith("/") -> path
+            else -> return null
+        }
+        val out = ArrayList<String>()
+        for (part in p.split('/')) when (part) {
+            "", "." -> {}
+            ".." -> if (out.isNotEmpty()) out.removeAt(out.size - 1)
+            else -> out += part
+        }
+        return "/" + out.joinToString("/")
+    }
+
+    /** Folders bound into Ubuntu from the phone (see launch). */
+    private fun boundHost(guest: String): File? = when {
+        guest == "/sdcard" || guest.startsWith("/sdcard/") -> File(com.sabidyut.agyterm.Storage.root, guest.removePrefix("/sdcard").removePrefix("/"))
+        guest == "/storage" || guest.startsWith("/storage/") -> File(guest)
+        else -> null
+    }
+
+    /** Where a path inside Ubuntu is on the phone (Ubuntu's own links followed, e.g. ~/storage/shared). */
+    private fun hostPath(guest: String, depth: Int = 0): File? {
+        if (depth > 16) return null
+        val parts = guest.split('/').filter { it.isNotEmpty() }
+        var cur = ""
+        for ((i, part) in parts.withIndex()) {
+            val next = "$cur/$part"
+            if (boundHost(next) == null) {
+                val f = File(rootfs, next.removePrefix("/"))
+                if (isSymlink(f)) {
+                    val t = try { Os.readlink(f.absolutePath) } catch (_: Exception) { return null }
+                    val target = if (t.startsWith("/")) t else "$cur/$t"
+                    val rest = parts.drop(i + 1).joinToString("/")
+                    val n = normalizeGuestPath(if (rest.isEmpty()) target else "$target/$rest") ?: return null
+                    return hostPath(n, depth + 1)
+                }
+            }
+            cur = next
+        }
+        return boundHost(cur) ?: File(rootfs, cur.removePrefix("/"))
+    }
+
+    private fun child(dir: String, name: String) = if (dir == "/") "/$name" else "$dir/$name"
+
+    /** The folders in a folder inside Ubuntu, as JSON: {path, dirs} or {path, error: notfound|noaccess}. */
+    fun listDir(path: String): String {
+        val g = normalizeGuestPath(path) ?: return JSONObject().put("path", path).put("error", "notfound").toString()
+        val json = JSONObject().put("path", g)
+        val host = hostPath(g)
+        val names = host?.list()
+        if (host == null || names == null) {
+            val storage = com.sabidyut.agyterm.Storage.root.absolutePath
+            val onPhone = host != null && (host.absolutePath.startsWith(storage) || host.absolutePath.startsWith("/storage"))
+            val noAccess = (onPhone && !com.sabidyut.agyterm.Storage.hasAccess(context)) || host?.isDirectory == true
+            return json.put("error", if (noAccess) "noaccess" else "notfound").toString()
+        }
+        val dirs = names.asSequence()
+            .filter { !it.startsWith(".") }
+            .filter { hostPath(child(g, it))?.isDirectory == true }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+            .take(2000)
+            .toList()
+        return json.put("dirs", org.json.JSONArray(dirs)).toString()
+    }
+
+    /** Makes a folder inside Ubuntu (or the phone's storage); "" when done, else why not. */
+    fun makeDir(path: String): String {
+        val g = normalizeGuestPath(path) ?: return "That isn't a folder path."
+        val name = g.substringAfterLast('/')
+        if (name.isEmpty() || name.length > 255) return "That isn't a folder name."
+        val parent = hostPath(g.substringBeforeLast('/').ifEmpty { "/" }) ?: return "That place wasn't found."
+        val dir = File(parent, name)
+        if (dir.exists()) return if (dir.isDirectory) "" else "A file with that name is already there."
+        return if (dir.mkdir()) "" else "The folder couldn't be made here."
     }
 
     /** Plain Android shell (no Ubuntu) — handy for debugging. */

@@ -1,5 +1,5 @@
 import './polyfills';
-import { createBridge, type Bridge, type HostState, type SessionKind } from './bridge';
+import { createBridge, type Bridge, type DirListing, type HostState, type SessionKind } from './bridge';
 import { TerminalSession } from './term/session';
 import { BanglaRenderer, THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
@@ -327,7 +327,7 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
   return s;
 }
 
-async function newSession(kind: SessionKind) {
+async function newSession(kind: SessionKind, cwd = '') {
   if (kind !== 'android' && hostState.ubuntu !== 'ready') {
     toast('Install Ubuntu first');
     showHome();
@@ -339,7 +339,7 @@ async function newSession(kind: SessionKind) {
   const { cols, rows } = probe.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
   probe.dispose();
   console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px (+${TerminalSession.keyboardInset}px keyboard) → ${cols}x${rows}`);
-  const id = await bridge.createSession(kind, cols, rows);
+  const id = await bridge.createSession(kind, cols, rows, cwd);
   if (!id) {
     toast('Could not start the session');
     if (!sessions.size) showHome();
@@ -575,7 +575,7 @@ function renderHome() {
         agentTile('claude', 'claude', 'Claude Code', 'Anthropic'),
       ),
       h('div', { class: 'actions' },
-        btn('btn-secondary', 'terminal', 'Ubuntu shell', () => newSession('ubuntu')),
+        btn('btn-secondary', 'terminal', 'Ubuntu shell', () => askFolder('ubuntu')),
       ),
     ];
   } else if (st.ubuntu === 'installing') {
@@ -671,7 +671,7 @@ function agentTile(kind: SessionKind, ic: string, name: string, maker: string) {
   b.setAttribute('aria-label', `Launch ${name}`);
   b.onclick = () => {
     haptic();
-    newSession(kind);
+    askFolder(kind);
   };
   return b;
 }
@@ -1097,11 +1097,176 @@ function action(ic: string, title: string, sub: string, run: () => void, danger 
 
 function openNewSessionSheet() {
   openSheet('New session', h('div', { class: 'action-list' },
-    action('sparkle', 'Antigravity', 'Launch the Antigravity CLI', () => newSession('agy')),
-    action('claude', 'Claude Code', 'Launch Anthropic’s Claude Code', () => newSession('claude')),
-    action('terminal', 'Ubuntu shell', 'Bash in Ubuntu 24.04', () => newSession('ubuntu')),
+    action('sparkle', 'Antigravity', 'Launch the Antigravity CLI', () => askFolder('agy')),
+    action('claude', 'Claude Code', 'Launch Anthropic’s Claude Code', () => askFolder('claude')),
+    action('terminal', 'Ubuntu shell', 'Bash in Ubuntu 24.04', () => askFolder('ubuntu')),
     action('android', 'Android shell', 'The phone’s own /system/bin/sh', () => newSession('android')),
   ));
+}
+
+// ================================================================ folder picker
+// Antigravity, Claude Code and the shell start in a folder picked here: a recent one with one
+// tap, or one found by browsing (home, the phone's storage).
+const RECENT_DIRS = 'recentDirs';
+const KIND_NAME: Record<string, string> = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu shell' };
+
+function recentDirs(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_DIRS) ?? '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.startsWith('/')).slice(0, 6) : [];
+  } catch {
+    return [];
+  }
+}
+function saveRecentDirs(list: string[]) {
+  try {
+    localStorage.setItem(RECENT_DIRS, JSON.stringify(list.slice(0, 6)));
+  } catch { /* no storage */ }
+}
+
+const homeDir = () => hostState.home || '/root';
+/** /root/a/b → ~/a/b */
+function tildify(p: string) {
+  const home = homeDir();
+  return p === home ? '~' : p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+}
+function dirName(p: string) {
+  return p === homeDir() ? 'Home' : (p.split('/').filter(Boolean).pop() ?? '/');
+}
+/** A long path keeps its start and its end: ~/storage/…/project/src */
+function shortPath(p: string, max = 40) {
+  const t = tildify(p);
+  if (t.length <= max) return t;
+  const parts = t.split('/');
+  let tail = parts.pop()!;
+  while (parts.length > 1 && `${parts[0]}/…/${parts[parts.length - 1]}/${tail}`.length <= max) tail = `${parts.pop()}/${tail}`;
+  return `${parts[0]}/…/${tail}`;
+}
+const parentDir = (p: string) => (p === '/' ? '/' : p.slice(0, p.lastIndexOf('/')) || '/');
+const childDir = (p: string, name: string) => (p === '/' ? `/${name}` : `${p}/${name}`);
+
+function folderRow(icon: string, title: string, sub: string, onClick: () => void, cls = '') {
+  const b = h('button', { class: `action fp-row ${cls}` },
+    h('span', { class: 'a-icon' }, svg(icon)),
+    h('span', { class: 'a-main' }, h('span', { class: 'a-title' }, title), sub ? h('span', { class: 'a-sub' }, sub) : null),
+    cls.includes('browse') ? svg('chevron', 'chev') : null);
+  b.onclick = () => {
+    haptic();
+    onClick();
+  };
+  return b;
+}
+
+/** Antigravity / Claude Code / a shell: in which folder? */
+function askFolder(kind: SessionKind) {
+  if (kind === 'android' || hostState.ubuntu !== 'ready') {
+    newSession(kind); // (the Android shell has no folders to pick; no Ubuntu: it says so)
+    return;
+  }
+  const recent = recentDirs();
+  const start = recent.length ? recent : [homeDir()];
+  const places: [string, string, string][] = [['home', 'Home', homeDir()]];
+  if (hostState.host === 'android') {
+    places.push(
+      ['folder', 'Phone storage', `${homeDir()}/storage/shared`],
+      ['down', 'Downloads', `${homeDir()}/storage/downloads`],
+      ['folder', 'Documents', `${homeDir()}/storage/documents`],
+    );
+  }
+  const needsAccess = hostState.host === 'android' && !hostState.storage;
+  openSheet(`Open ${KIND_NAME[kind]} in…`,
+    h('div', { class: 'fp-label' }, 'Start in'),
+    h('div', { class: 'action-list' },
+      ...start.map((p, i) => folderRow(p === homeDir() ? 'home' : 'folder', dirName(p), i === 0 && recent.length ? `${shortPath(p)} · last used` : shortPath(p),
+        () => startIn(kind, p), 'recent'))),
+    h('div', { class: 'fp-label' }, 'Choose another folder'),
+    h('div', { class: 'action-list' },
+      ...places.map(([icon, title, p]) => folderRow(icon, title,
+        needsAccess && p !== homeDir() ? 'Needs storage access' : tildify(p), () => browseFolder(kind, p), 'browse'))),
+  );
+}
+
+async function startIn(kind: SessionKind, p: string) {
+  // a remembered folder that's gone: say so instead of starting somewhere else
+  const res = await bridge.listDir(p).catch(() => null);
+  if (res?.error === 'notfound') {
+    saveRecentDirs(recentDirs().filter((x) => x !== p));
+    toast(`${tildify(p)} isn’t there any more`);
+    askFolder(kind);
+    return;
+  }
+  saveRecentDirs([p, ...recentDirs().filter((x) => x !== p)]);
+  closeSheet();
+  newSession(kind, p);
+}
+
+let browseSeq = 0;
+async function browseFolder(kind: SessionKind, path: string) {
+  const seq = ++browseSeq;
+  const res = await bridge.listDir(path).catch((): DirListing => ({ path, error: 'notfound' }));
+  if (seq !== browseSeq || !sheetOpen()) return; // another tap came first / the sheet was closed
+  const p = res.path;
+  const up = h('button', { class: 'fp-up', 'aria-label': 'Up' }, svg('chevron'));
+  up.onclick = () => {
+    haptic();
+    if (p === '/') askFolder(kind);
+    else browseFolder(kind, parentDir(p));
+  };
+  const open = h('button', { class: 'btn btn-primary fp-open' }, svg('check'), h('span', {}, `Open here`));
+  open.onclick = () => {
+    haptic();
+    startIn(kind, p);
+  };
+  if (res.error) open.setAttribute('disabled', '');
+  const head = h('div', { class: 'fp-head' },
+    h('div', { class: 'fp-pathbar' }, up, h('span', { class: 'fp-where' }, tildify(p))),
+    open);
+
+  let body: Kid[];
+  if (res.error === 'noaccess') {
+    const allow = h('button', { class: 'btn btn-secondary' }, svg('shield'), h('span', {}, 'Allow storage access'));
+    allow.onclick = () => {
+      haptic();
+      bridge.requestStorage();
+    };
+    body = [h('p', { class: 'fp-empty' }, 'AntiCode can’t see your phone’s files yet.'), allow];
+  } else if (res.error) {
+    body = [h('p', { class: 'fp-empty' }, 'This folder isn’t there.')];
+  } else {
+    const dirs = res.dirs ?? [];
+    body = [
+      h('div', { class: 'action-list' },
+        ...dirs.map((d) => folderRow('folder', d, '', () => browseFolder(kind, childDir(p, d)), 'browse sub')),
+        newFolderRow(kind, p)),
+      dirs.length ? null : h('p', { class: 'fp-empty' }, 'No folders in here — open it, or make one.'),
+    ];
+  }
+  openSheet(`Open ${KIND_NAME[kind]} in…`, head, ...body);
+}
+
+/** "New folder": a name field in place of the row; the new folder is opened in the browser. */
+function newFolderRow(kind: SessionKind, parent: string) {
+  const row = folderRow('plus', 'New folder', '', () => {
+    const input = h('input', { class: 'text-input', type: 'text', maxlength: '120', spellcheck: 'false', placeholder: 'Folder name' }) as HTMLInputElement;
+    const make = h('button', { class: 'btn btn-primary' }, 'Create');
+    const create = async () => {
+      const name = input.value.trim();
+      if (!name || name === '.' || name === '..' || /[/\x00]/.test(name)) {
+        toast('Pick a name without “/”');
+        return;
+      }
+      const err = await bridge.makeDir(childDir(parent, name));
+      if (err) toast(err);
+      else browseFolder(kind, childDir(parent, name));
+    };
+    make.onclick = create;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') create();
+    });
+    row.replaceWith(h('div', { class: 'fp-new' }, input, make));
+    input.focus();
+  }, 'new');
+  return row;
 }
 
 function openMoreSheet() {

@@ -25,11 +25,13 @@ adb shell "mkdir -p /data/local/tmp/agylib && ln -sf $LIB/libtalloc.so /data/loc
 
 echo "--- self test (up to 30 min)"
 # Phase 1: Ubuntu install + agy/claude setup + `--version`s     (SELFTEST_OK)
+#          the shell starts in the folder picked in the app         (SELFTEST_CWD_OK)
 # Phase 2: `agy` opened through the real web UI draws its screen  (SELFTEST_AGY_OK)
 # Phase 3: keys typed on the keyboard reach the shell             (SELFTEST_TYPE_OK)
 #          …and still do after scrolling the terminal             (SELFTEST_TYPE_AFTER_SWIPE_OK)
 #          ble.sh autosuggestions are attached in the shell       (SELFTEST_BLE_OK)
 #          and the phone's storage is visible in /sdcard           (SELFTEST_STORAGE_OK)
+#          the folder picker lists ~ and ~/storage/shared          (SELFTEST_FOLDERS_OK)
 #          a program's OSC 9 → "task finished" notification        (checked here)
 #          zooming doesn't leave blank lines / prompt copies      (SELFTEST_ZOOM_OK)
 # Phase 4: Claude Code opened through the real web UI draws        (SELFTEST_CLAUDE_OK)
@@ -88,7 +90,7 @@ while [ $SECONDS -lt $deadline ]; do
   if grep -q "SELFTEST_PANEL_READY" <<<"$log" && [ ! -f "$SHOTS/5-panel.png" ]; then sleep 4; shot 5-panel; fi
   if grep -q "SELFTEST_PANEL_OK" <<<"$log"; then [ $notified -eq 1 ] && result=0; break; fi
   if [ $notified -eq 2 ]; then break; fi
-  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_BLE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|SELFTEST_PANEL_FAIL|SELFTEST_ZOOM_FAIL|SELFTEST_IME_FAIL|SELFTEST_KBCYCLE_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
+  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_BLE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|SELFTEST_PANEL_FAIL|SELFTEST_ZOOM_FAIL|SELFTEST_IME_FAIL|SELFTEST_KBCYCLE_FAIL|SELFTEST_CWD_FAIL|SELFTEST_FOLDERS_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
   if grep -q "session exited with code [^0]" <<<"$log"; then break; fi
   sleep 5
 done

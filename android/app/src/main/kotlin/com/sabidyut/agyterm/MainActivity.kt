@@ -563,6 +563,14 @@ class MainActivity : ComponentActivity() {
         selftestScreen { screen ->
             if (screen.contains("SD2OK")) {
                 Log.i(SELFTEST, "SELFTEST_STORAGE_OK")
+                // the folder picker sees home, and the phone's folders through ~/storage links
+                val ub = service?.ubuntu
+                val home = ub?.listDir("~") ?: "no service"
+                val shared = ub?.listDir("~/storage/shared") ?: "no service"
+                Log.i(SELFTEST, "folders| ~ → ${home.take(300)}")
+                Log.i(SELFTEST, "folders| ~/storage/shared → ${shared.take(300)}")
+                if (home.contains("\"storage\"") && shared.contains("\"Download\"")) Log.i(SELFTEST, "SELFTEST_FOLDERS_OK")
+                else Log.e(SELFTEST, "SELFTEST_FOLDERS_FAIL")
                 // Phase 3b: a program's notification escape (OSC 9) while nobody looks at
                 // the session → a "task finished" notification (the CI script checks it)
                 web.evaluateJavascript("__selftest.home(); __selftest.send(\"printf '\\\\033]9;SELFTEST-NOTIFY\\\\007'\")", null)
@@ -777,14 +785,30 @@ class MainActivity : ComponentActivity() {
         private fun svc() = service ?: throw IllegalStateException("service not bound")
 
         @JavascriptInterface
-        fun createSession(kind: String, cols: Int, rows: Int): String = try {
-            val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300))
+        fun createSession(kind: String, cols: Int, rows: Int, cwd: String): String = try {
+            val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300), cwd)
             // anything printed before we got here (a quick prompt) is in the ring: send it too
             s.attach(outputListener) { snap -> if (snap.isNotEmpty()) queue(s.id, snap, snap.size) }
             s.id
         } catch (e: Exception) {
             main.post { Toast.makeText(this@MainActivity, "Could not start the session: ${e.message}", Toast.LENGTH_LONG).show() }
             ""
+        }
+
+        /** The folder picker: the folders in a folder inside Ubuntu (JSON). */
+        @JavascriptInterface
+        fun listDir(path: String): String = try {
+            svc().ubuntu.listDir(path)
+        } catch (e: Exception) {
+            org.json.JSONObject().put("path", path).put("error", "notfound").toString()
+        }
+
+        /** The folder picker's "New folder": "" when made, else why not. */
+        @JavascriptInterface
+        fun makeDir(path: String): String = try {
+            svc().ubuntu.makeDir(path)
+        } catch (e: Exception) {
+            e.message ?: "The folder couldn't be made."
         }
 
         @JavascriptInterface

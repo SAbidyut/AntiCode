@@ -41,6 +41,10 @@ const waitFor = async (fn, ms = 4000) => {
 
 // 1. new Ubuntu session from the home screen
 await page.click('#hero .btn-secondary');
+// it asks which folder to start in: the first offer (the last one used, or home)
+await page.waitForSelector('#sheet:not([hidden]) .fp-row.recent', { timeout: 5000 }).catch(() => {});
+check('Ubuntu shell asks for a folder', await page.evaluate(() => /Open Ubuntu shell in/.test(document.querySelector('#sheet:not([hidden]) h3')?.textContent ?? '')));
+await page.click('#sheet:not([hidden]) .fp-row.recent');
 check('terminal screen opens', await waitFor(async () => (await page.getAttribute('body', 'data-screen')) === 'term'));
 // a line of input, as typed and sent with Enter (the self-test hook)
 const send = (text) => page.evaluate((t) => window.__selftest.send(t), text);

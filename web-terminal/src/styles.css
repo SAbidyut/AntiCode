@@ -600,6 +600,41 @@ body[data-screen='home']::before {
 .action.danger { color: var(--bad); }
 .action.danger .a-icon { color: var(--bad); }
 
+/* folder picker */
+.fp-label {
+  margin: 12px 10px 2px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--muted);
+}
+.fp-label:first-of-type { margin-top: 0; }
+.fp-row { padding: 9px 10px; }
+.fp-row .a-main { min-width: 0; }
+.fp-row .a-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fp-row .a-sub { font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.fp-row.recent .a-icon { color: var(--accent); }
+.fp-row.sub .a-icon { width: 34px; height: 34px; border-radius: 10px; color: var(--muted); }
+.fp-row.new .a-icon { color: var(--accent); background: transparent; border: 1.5px dashed var(--line-strong); }
+.fp-row.new { color: var(--accent); }
+.fp-row .chev { width: 18px; height: 18px; color: var(--muted); flex: none; }
+/* where you are + "Open here" stay on top while the list scrolls */
+.fp-head {
+  position: sticky; top: -8px; z-index: 2; margin: 0 -16px 6px; padding: 8px 16px 10px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.fp-pathbar { display: flex; align-items: center; gap: 10px; }
+.fp-up {
+  width: 38px; height: 38px; border-radius: 12px; flex: none; display: grid; place-items: center;
+  background: var(--surface-2); color: var(--text);
+}
+.fp-up:active { background: var(--surface-3); }
+.fp-up .ic { width: 18px; height: 18px; transform: rotate(180deg); }
+.fp-where { flex: 1; min-width: 0; font: 13.5px var(--mono); color: var(--text); overflow-wrap: anywhere; line-height: 1.4; }
+.fp-open { width: 100%; margin-top: 10px; }
+.fp-open[disabled] { opacity: 0.45; pointer-events: none; }
+.fp-empty { color: var(--muted); font-size: 14px; margin: 10px 10px 14px; line-height: 1.5; }
+.fp-new { display: flex; gap: 8px; align-items: center; padding: 6px 4px; }
+.fp-new .text-input { flex: 1; min-width: 0; margin: 0; }
+.fp-new .btn { flex: none; height: 46px; padding: 0 18px; }
+
 /* settings */
 .setting { padding: 12px 4px; border-bottom: 1px solid var(--line); }
 .setting:last-child { border-bottom: 0; }

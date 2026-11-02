@@ -25,6 +25,17 @@ export interface HostState {
   storage?: boolean;
   /** Allowed to run in the background without battery restrictions. */
   background?: boolean;
+  /** The home folder inside Ubuntu (shown as ~). */
+  home?: string;
+}
+
+/** A folder's sub-folders (the folder picker). */
+export interface DirListing {
+  /** the folder, as a full path */
+  path: string;
+  dirs?: string[];
+  /** notfound, or noaccess (e.g. the phone's storage before access is allowed) */
+  error?: 'notfound' | 'noaccess';
 }
 
 export interface BridgeEvents {
@@ -51,7 +62,12 @@ export interface BridgeEvents {
 
 export interface Bridge {
   readonly host: 'android' | 'dev';
-  createSession(kind: SessionKind, cols: number, rows: number): Promise<string>;
+  /** [cwd]: the folder to start in (empty: home) */
+  createSession(kind: SessionKind, cols: number, rows: number, cwd?: string): Promise<string>;
+  /** The folders in a folder (full path or ~/…). */
+  listDir(path: string): Promise<DirListing>;
+  /** Makes a folder; "" when done, else why not. */
+  makeDir(path: string): Promise<string>;
   write(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;
   close(id: string): void;
@@ -111,7 +127,9 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 interface AndroidBridgeApi {
-  createSession(kind: string, cols: number, rows: number): string;
+  createSession(kind: string, cols: number, rows: number, cwd: string): string;
+  listDir(path: string): string;
+  makeDir(path: string): string;
   write(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;
   closeSession(id: string): void;
@@ -155,9 +173,11 @@ declare global {
 class AndroidHostBridge implements Bridge {
   readonly host = 'android' as const;
   constructor(private api: AndroidBridgeApi) {}
-  async createSession(kind: SessionKind, cols: number, rows: number) {
-    return this.api.createSession(kind, cols, rows);
+  async createSession(kind: SessionKind, cols: number, rows: number, cwd = '') {
+    return this.api.createSession(kind, cols, rows, cwd);
   }
+  async listDir(path: string) { return JSON.parse(this.api.listDir(path)) as DirListing; }
+  async makeDir(path: string) { return this.api.makeDir(path); }
   write(id: string, data: string) { this.api.write(id, data); }
   resize(id: string, cols: number, rows: number) { this.api.resize(id, cols, rows); }
   close(id: string) { this.api.closeSession(id); }
@@ -246,7 +266,9 @@ class DevBridge implements Bridge {
   private send(method: string, ...args: unknown[]) {
     this.ready.then(() => this.ws.send(JSON.stringify({ method, args }))).catch(() => {});
   }
-  createSession(kind: SessionKind, cols: number, rows: number) { return this.call<string>('createSession', kind, cols, rows); }
+  createSession(kind: SessionKind, cols: number, rows: number, cwd = '') { return this.call<string>('createSession', kind, cols, rows, cwd); }
+  listDir(path: string) { return this.call<DirListing>('listDir', path); }
+  makeDir(path: string) { return this.call<string>('makeDir', path); }
   write(id: string, data: string) { this.send('write', id, data); }
   resize(id: string, cols: number, rows: number) { this.send('resize', id, cols, rows); }
   close(id: string) { this.send('close', id); }
