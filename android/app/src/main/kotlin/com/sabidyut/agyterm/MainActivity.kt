@@ -299,18 +299,22 @@ class MainActivity : ComponentActivity() {
                     insets: WindowInsetsCompat,
                     running: MutableList<WindowInsetsAnimationCompat>,
                 ): WindowInsetsCompat {
-                    sendInsets(insets, settled = false)
+                    // only the keyboard's slide is "moving" (it has an end that settles it);
+                    // the bars animating on their own are passed on as they are
+                    sendInsets(insets, settled = !imeAnimating)
                     return insets
                 }
 
                 override fun onEnd(animation: WindowInsetsAnimationCompat) {
-                    if (animation.typeMask and WindowInsetsCompat.Type.ime() == 0) return
-                    imeAnimating = false
+                    if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) imeAnimating = false
+                    if (imeAnimating) return
                     ViewCompat.getRootWindowInsets(root)?.let { sendInsets(it, settled = true) }
                 }
             },
         )
     }
+
+    private var lastFloating = false
 
     private fun sendInsets(insets: WindowInsetsCompat, settled: Boolean) {
         val d = resources.displayMetrics.density
@@ -325,9 +329,11 @@ class MainActivity : ComponentActivity() {
         val keyboard = ime.bottom > bars.bottom
         // A floating keyboard is shown but takes no room at the bottom (Android 11+ tells
         // whether the keyboard is visible): the page keeps the input line in its upper half.
-        val floating = !keyboard && Build.VERSION.SDK_INT >= 30 &&
-            insets.isVisible(WindowInsetsCompat.Type.ime()) && keys.hasFocus()
-        val key = "%.1f,%.1f,%b,%b,%.1f,%.1f,%b".format(top, bottom, keyboard, settled, left, right, floating)
+        // (decided once things settle: mid-slide, a docked keyboard is "visible" while still
+        // lower than the navigation bar, which would flash the floating layout)
+        val floating = if (!settled) lastFloating else (!keyboard && Build.VERSION.SDK_INT >= 30 &&
+            insets.isVisible(WindowInsetsCompat.Type.ime()) && keys.hasFocus()).also { lastFloating = it }
+        val key = "$top,$bottom,$keyboard,$settled,$left,$right,$floating"
         if (key == lastInsets) return
         lastInsets = key
         js("__native.onInsets($top, $bottom, $keyboard, $settled, $left, $right, $floating)")

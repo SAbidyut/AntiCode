@@ -82,6 +82,8 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         // Back, volume, media, camera … keep their usual meaning
         if (keyCode == KeyEvent.KEYCODE_BACK || event.isSystem) return super.onKeyDown(keyCode, event)
+        if (KeyEvent.isModifierKey(keyCode)) return true // Shift / Ctrl on their own: nothing to send
+        connection?.flush() // a word being composed goes first (not lost)
         handleKey(event)
         forgetLine()
         return true
@@ -149,7 +151,10 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         fun sync() {
             val e = editable ?: return
             val text = e.toString()
-            val comp = composingRange(e)
+            // the word being composed is held back (shown by the page at the cursor) only when
+            // it is at the end of the line; re-composing a word further back (the cursor moved
+            // there) counts as typed — the terminal follows by retyping from where it differs
+            val comp = composingRange(e)?.takeIf { it.last + 1 == text.length }
             val committed = if (comp == null) text else text.removeRange(comp)
             val composing = if (comp == null) "" else text.substring(comp)
             if (committed != sent) {
@@ -165,6 +170,12 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
             if (composing != shown) {
                 shown = composing
                 sink.onComposing(composing)
+            }
+            // raw keys (smart keyboard off): nothing is kept — text goes out as it comes and ⌫
+            // is a plain DEL to the program, exactly what was pressed
+            if (!smart && comp == null && e.isNotEmpty()) {
+                e.clear()
+                sent = ""
             }
         }
 
@@ -182,18 +193,26 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
             sync()
         }
 
+        /** A hardware key comes next: what's being composed goes first. */
+        fun flush() {
+            if (shown.isNotEmpty()) flushComposing()
+        }
+
         fun forget() {
             if (editable?.isNotEmpty() == true || sent.isNotEmpty()) reset()
         }
 
         /** The page sent the composing text itself (before a key-bar key): forget the line. */
         fun discard() {
+            // nothing to forget (e.g. a held arrow key on the key bar): don't restart the keyboard
+            val had = editable?.isNotEmpty() == true || sent.isNotEmpty() || shown.isNotEmpty()
             editable?.clear()
             sent = ""
             if (shown.isNotEmpty()) {
                 shown = ""
                 sink.onComposing("")
             }
+            if (!had) return
             (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                 .restartInput(this@KeyCaptureView)
         }
@@ -211,23 +230,16 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         }
 
         override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-            if (text.contains('\n')) {
-                // Enter typed as text: the line so far, then a fresh line
-                val parts = text.toString().split('\n')
-                super.commitText(parts.first(), newCursorPosition)
+            if (text.toString() == "\n") {
+                // Enter typed as text: the line so far, then Enter, then a fresh line
                 flushComposing()
-                for (part in parts.drop(1)) {
-                    sink.onKey(KeyEvent.KEYCODE_ENTER, false, false, false, "")
-                    reset()
-                    if (part.isNotEmpty()) {
-                        super.commitText(part, 1)
-                        sync()
-                    }
-                }
+                sink.onKey(KeyEvent.KEYCODE_ENTER, false, false, false, "")
+                reset()
                 return true
             }
             super.commitText(text, newCursorPosition)
-            sync()
+            sync() // (several lines — a pasted clip — go as one piece, newlines as Enter)
+            if (text.contains('\n')) reset() // the line has ended
             return true
         }
 
@@ -250,20 +262,45 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
             return true
         }
 
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+            if (editable?.isNotEmpty() == true) {
+                super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+                sync()
+                return true
+            }
+            repeat(beforeLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_DEL, false, false, false, "") }
+            repeat(afterLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_FORWARD_DEL, false, false, false, "") }
+            return true
+        }
+
         override fun sendKeyEvent(event: KeyEvent): Boolean {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) return super.sendKeyEvent(event)
+                // Shift / Ctrl pressed on their own (some keyboards send them before the key):
+                // nothing to send, and the line mustn't be reset under the key that follows
+                if (KeyEvent.isModifierKey(event.keyCode)) return true
                 flushComposing() // a word being typed goes first
                 val e = editable
                 if (event.keyCode == KeyEvent.KEYCODE_DEL && !event.isCtrlPressed && !event.isAltPressed &&
                     e != null && e.isNotEmpty()
                 ) {
-                    // ⌫ inside this line: take the last character back here, the terminal follows
-                    val end = e.length
+                    // ⌫ inside this line: take the character before the cursor back here, the
+                    // terminal follows
+                    val sel = android.text.Selection.getSelectionStart(e)
+                    val end = if (sel in 1..e.length) sel else e.length
                     val start = if (end >= 2 && Character.isLowSurrogate(e[end - 1])) end - 2 else end - 1
                     e.delete(start, end)
                     sync()
                     return true
+                }
+                // a letter or digit sent as a key (some keyboards do that for digits): typed
+                // into this line like any text, so the line carries on
+                if (smart && !event.isCtrlPressed && !event.isAltPressed) {
+                    val uc = event.getUnicodeChar(event.metaState and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK).inv())
+                    if (uc >= 0x20 && (uc and KeyCharacterMap.COMBINING_ACCENT) == 0) {
+                        commitText(String(Character.toChars(uc)), 1)
+                        return true
+                    }
                 }
                 // any other key (Enter, arrows, Tab …) changes the line in ways this editor
                 // can't follow: send it and start afresh
@@ -292,7 +329,7 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
          * consonant, Unicode's GB9c: "ক্ষ", "স্ত্রী").
          */
         fun clusters(s: String): List<String> {
-            val base = markClusters(s)
+            val base = graphemes(s)
             val out = ArrayList<String>()
             for (c in base) {
                 val prev = out.lastOrNull()
@@ -315,21 +352,26 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
             cp in 0x0995..0x09B9 || cp == 0x09DC || cp == 0x09DD || cp == 0x09DF || cp == 0x09F0 || cp == 0x09F1 ||
                 cp in 0x0915..0x0939 || cp in 0x0958..0x095F || cp in 0x0978..0x097F
 
-        private fun markClusters(s: String): List<String> {
+        private val breaks: android.icu.text.BreakIterator by lazy {
+            android.icu.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
+        }
+
+        /**
+         * User-perceived characters (Unicode grapheme clusters): a letter with its vowel signs
+         * and marks, a flag, an emoji with its skin tone or joined parts — what ⌫ removes.
+         * (Called on the main thread only.)
+         */
+        private fun graphemes(s: String): List<String> {
             val out = ArrayList<String>()
-            var i = 0
-            while (i < s.length) {
-                val start = i
-                i += Character.charCount(s.codePointAt(i))
-                while (i < s.length) {
-                    val cp = s.codePointAt(i)
-                    val t = Character.getType(cp)
-                    val mark = t == Character.NON_SPACING_MARK.toInt() || t == Character.COMBINING_SPACING_MARK.toInt() ||
-                        t == Character.ENCLOSING_MARK.toInt() || cp == 0x200C || cp == 0x200D || cp == 0xFE0F
-                    if (!mark) break
-                    i += Character.charCount(cp)
-                }
-                out += s.substring(start, i)
+            if (s.isEmpty()) return out
+            val it = breaks
+            it.setText(s)
+            var start = it.first()
+            var end = it.next()
+            while (end != android.icu.text.BreakIterator.DONE) {
+                out += s.substring(start, end)
+                start = end
+                end = it.next()
             }
             return out
         }

@@ -133,7 +133,7 @@ body[data-screen='boot'] #home, body[data-screen='boot'] #term { opacity: 0; vis
 #home.enter .home-side > section:nth-child(4) { animation-delay: 290ms; }
 @keyframes home-in { from { opacity: 0; transform: translateY(16px); } }
 @media (prefers-reduced-motion: reduce) {
-  #home.enter .appbar, #home.enter .hero, #home.enter .home-side > section { animation: none; }
+  #home.enter .appbar, #home.enter .hero, #home.enter .home-side > section:not([hidden]) { animation: none; }
 }
 
 /* ------------------------------------------------------------------ buttons */
@@ -681,6 +681,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   }
   .topbar::-webkit-scrollbar { display: none; }
   #tabs {
+    /* the full rail width: the active bar at the left edge and the status dot aren't clipped */
+    align-self: stretch;
     flex: 0 1 auto; flex-direction: column; align-items: center; gap: 7px;
     overflow-x: visible; overflow-y: auto; padding: 8px 0; min-height: 0;
     -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 8px), transparent);
@@ -725,11 +727,18 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   #extra-keys .key:nth-child(8) { grid-area: 4 / 5 / 5 / 7; }
   #extra-keys .key:nth-child(9) { grid-area: 5 / 1 / 6 / 7; }
 
-  /* a docked keyboard takes the bottom half: the keys fold into a 4 × 2 block, the rail
-     keeps only home, the sessions and ⋮ */
-  body[data-kb='docked'] #term { grid-template-columns: 54px minmax(0, 1fr) 200px; }
-  body[data-kb='docked'] #extra-keys { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
-  body[data-kb='docked'] #extra-keys .key { grid-area: auto; }
+  /* a docked keyboard takes the bottom half: the keys fold into a 2 × 4 block in the same
+     rail, the left rail keeps only home, the sessions and ⋮ — both rails keep their width,
+     so the terminal keeps its size (a resize would make the programs in it redraw) */
+  body[data-kb='docked'] #extra-keys {
+    grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(0, 1fr));
+    gap: 5px; padding: 6px 7px;
+  }
+  body[data-kb='docked'] #extra-keys .key { grid-area: auto; border-radius: 10px; }
+  body[data-kb='docked'] #extra-keys .key:nth-child(5) { grid-area: 3 / 1 / 4 / 2; }
+  body[data-kb='docked'] #extra-keys .key:nth-child(8) { grid-area: 3 / 2 / 4 / 3; }
+  body[data-kb='docked'] #extra-keys .key:nth-child(6) { grid-area: 4 / 1 / 5 / 2; }
+  body[data-kb='docked'] #extra-keys .key:nth-child(7) { grid-area: 4 / 2 / 5 / 3; }
   body[data-kb='docked'] #extra-keys .key:nth-child(9),
   body[data-kb='docked'] #plus-btn, body[data-kb='docked'] #remote-top-btn { display: none; }
   body[data-kb='docked'] #more-btn { margin-top: auto; }

@@ -88,6 +88,11 @@ class SessionService : Service() {
                 (shellDone && s.promptAt - s.enterAt > MIN_WORK_MS) ||
                 agentDone
             if (shellDone && !done) s.enterAt = 0 // a quick command: nothing to report
+            // the same for an agent's quick answer: written and quiet again within moments
+            // (else its idle "waiting for your input" a minute later would count as a reply)
+            val agentQuick = armed && !done && explicit == null && (s.kind == "claude" || s.kind == "agy") &&
+                s.outSinceEnter > 0 && now - s.lastOutputAt > QUIET_MS && s.lastOutputAt - s.enterAt <= MIN_WORK_MS
+            if (agentQuick) s.enterAt = 0
             if (!done) continue
             s.enterAt = 0
             val watched = uiVisible && activeSessionId == s.id
@@ -157,9 +162,15 @@ class SessionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            for (s in sessions.values) s.kill()
+            val all = sessions.values.toList()
             sessions.clear()
             saveLive() // stopped on purpose: nothing to report later
+            // the page is told now: once they're out of the list, their ends aren't reported
+            // (the tabs would look alive and swallow typing)
+            for (s in all) {
+                s.kill()
+                onSessionExit?.invoke(s)
+            }
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY

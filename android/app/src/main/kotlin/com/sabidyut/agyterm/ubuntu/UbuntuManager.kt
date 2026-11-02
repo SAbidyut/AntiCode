@@ -469,9 +469,12 @@ class UbuntuManager private constructor(private val context: Context) {
         val h = a / 60
         val m = a % 60
         val east = minutes >= 0
-        val name = (if (east) "+" else "-") + "%02d".format(h) + (if (m > 0) "%02d".format(m) else "")
+        // ASCII digits whatever the phone's language (Bengali would give "+০৬", which the
+        // C library rejects — the shell then falls back to UTC)
+        val two = { n: Int -> String.format(java.util.Locale.ROOT, "%02d", n) }
+        val name = (if (east) "+" else "-") + two(h) + (if (m > 0) two(m) else "")
         // POSIX counts the other way round: UTC+6 is written "-6"
-        val rule = (if (east) "-" else "+") + h + (if (m > 0) ":%02d".format(m) else "")
+        val rule = (if (east) "-" else "+") + h.toString() + (if (m > 0) ":" + two(m) else "")
         return "TZ=<$name>$rule"
     }
 

@@ -297,6 +297,8 @@ export class BanglaRenderer {
   private splitGap = 0;
   /** True while the keyboard slides: follow it exactly, no easing. */
   insetsMoving = false;
+  /** Lift the input line above a floating keyboard (not for the Settings preview). */
+  floatPan = true;
   /**
    * Smart keyboard: the word being composed (not in the terminal yet), drawn at the cursor
    * like the keyboard's own underlined text in a chat app.
@@ -942,8 +944,9 @@ export class BanglaRenderer {
       let pan = 0;
       if (splitLine >= 0) {
         pan = 0; // the chat layout already fits the screen
-      } else if (BanglaRenderer.floatingKeyboard) {
-        // the input line (and what's drawn under it) in the upper half of the screen
+      } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal') {
+        // the input line (and what's drawn under it) in the upper half of the screen (not in
+        // full-screen programs — vim, less: their top half couldn't be scrolled back to)
         pan = Math.max(0, Math.min((lastY + 1) * lh - visible * 0.5, buf.cursorY * lh));
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
@@ -966,7 +969,10 @@ export class BanglaRenderer {
     this.preeditEl.style.display = composing ? 'block' : 'none';
     if (composing) {
       if (this.preeditEl.textContent !== this.preedit) this.preeditEl.textContent = this.preedit;
-      this.preeditEl.style.transform = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;
+      // near the right edge it moves left so the whole word stays on screen
+      const x0 = Math.min(buf.cursorX, cols - 1) * this.cellWidth;
+      const x = Math.max(0, Math.min(x0, cols * this.cellWidth - this.preeditEl.offsetWidth));
+      this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${rowY(cursorLine)}px)`;
     }
     if (showCursor) {
       // cursorX == cols while a line wrap is pending: keep it on the grid

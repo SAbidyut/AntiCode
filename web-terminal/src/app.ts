@@ -116,6 +116,10 @@ let screen: 'home' | 'term' = 'home';
 let keyboardShown = false;
 let fitTimer = 0;
 let navBottom = 0;
+/** The keyboard is sliding (the app-wide state; the active session's renderer follows it). */
+let insetsMoving = false;
+/** The session showing the smart keyboard's word being composed. */
+let preeditOwner: TerminalSession | null = null;
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -142,14 +146,30 @@ const bridge: Bridge = createBridge({
   },
   onImeComposing(text) {
     const s = typingTarget();
-    if (!s) return;
-    // Ctrl / Alt latched on the key bar: the next letter is a shortcut (Ctrl+C), not a word
-    if (text && (latch.ctrl || latch.alt)) {
-      s.renderer.setPreedit('');
-      bridge.discardComposing();
-      s.input(applyMods([...text][0], consumeLatch()));
+    if (!text) {
+      // the word ended (sent, or taken back): wherever it was drawn, it goes
+      preeditOwner?.renderer.setPreedit('');
+      preeditOwner = null;
       return;
     }
+    if (!s) return;
+    // Ctrl / Alt latched on the key bar: the letter just typed is a shortcut (Ctrl+C), not
+    // part of a word
+    if (latch.ctrl || latch.alt) {
+      const prev = preeditOwner === s ? s.renderer.preedit : '';
+      const added = text.startsWith(prev) ? text.slice(prev.length) : text;
+      const letter = [...(added || text)].pop()!;
+      if (prev) s.input(prev); // the word before it was typed for real
+      s.renderer.setPreedit('');
+      preeditOwner = null;
+      bridge.discardComposing();
+      s.input(applyMods(letter, consumeLatch()));
+      return;
+    }
+    if (preeditOwner && preeditOwner !== s) preeditOwner.renderer.setPreedit('');
+    preeditOwner = s;
+    // typing while reading the history: back to the prompt, where the word shows
+    if (s.renderer.scrollPx > 0) s.scrollToBottom();
     s.renderer.setPreedit(text);
   },
   onImeText(text) {
@@ -177,12 +197,15 @@ const bridge: Bridge = createBridge({
     // landscape folds the key rail when a docked keyboard takes the bottom of the screen
     document.body.dataset.kb = floating ? 'floating' : keyboard ? 'docked' : '';
     BanglaRenderer.floatingKeyboard = floating;
-    if (active) active.renderer.insetsMoving = !settled;
+    insetsMoving = !settled;
+    if (active) active.renderer.insetsMoving = insetsMoving;
     active?.renderer.schedule();
     if (settled) {
       keyboardShown = keyboard || floating;
       clearTimeout(fitTimer);
       active?.fit();
+      // (landscape: the tab rail got shorter or longer — keep the current tab in it)
+      if (screen === 'term') $('#tabs').querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       // a field in a sheet (Settings, rename) that the keyboard now covers
       const f = document.activeElement;
       if (keyboard && f instanceof HTMLInputElement && f.closest('.sheet')) f.scrollIntoView({ block: 'nearest' });
@@ -213,6 +236,23 @@ const bridge: Bridge = createBridge({
     return false;
   },
 });
+
+/**
+ * Typing is about to go somewhere else (another tab, home, a sheet, a key-bar key, a text
+ * field): a word still being composed is typed into its session now, and the keyboard
+ * forgets its copy of the line — the line in the terminal is about to change under it
+ * (otherwise its next ⌫ would delete by a stale copy, or the word would be typed later
+ * into the wrong place).
+ */
+function settleComposing() {
+  const s = preeditOwner;
+  preeditOwner = null;
+  if (s && s.renderer.preedit) {
+    if (sessions.get(s.id) === s && s.alive) s.input(s.renderer.preedit);
+    s.renderer.setPreedit('');
+  }
+  if (bridge.host === 'android') bridge.discardComposing();
+}
 
 /** The session typing goes to: none while the home screen or a sheet covers it. */
 function typingTarget(): TerminalSession | null {
@@ -338,9 +378,11 @@ async function reportLostSessions() {
 }
 
 function activate(s: TerminalSession | null) {
+  if (s !== active) settleComposing();
   for (const x of sessions.values()) {
     x.el.hidden = x !== s;
     x.setFocused(false);
+    x.renderer.insetsMoving = x === s && insetsMoving;
   }
   active = s;
   bridge.setActiveSession(s?.id ?? '');
@@ -416,7 +458,11 @@ function renderTabs(scrollToActive = false) {
     renderHomeSessions();
   }
   // switching tabs only moves the highlight (existing tabs, so it eases)
-  for (const el of tabs.children) (el as HTMLElement).classList.toggle('active', (el as HTMLElement).dataset.id === active?.id);
+  for (const el of tabs.children) {
+    const on = (el as HTMLElement).dataset.id === active?.id;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-selected', String(on));
+  }
   if (scrollToActive) tabs.querySelector('.tab.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
 
@@ -429,6 +475,7 @@ function syncTabs(tabs: HTMLElement) {
     const tab = existing.get(s.id) ?? makeTab(s);
     tab.classList.toggle('dead', !s.alive);
     tab.title = s.label;
+    tab.setAttribute('aria-label', s.alive ? s.label : `${s.label} (finished)`);
     const tt = tab.querySelector('.tt')!;
     if (tt.textContent !== s.label) tt.textContent = s.label;
     order.push(tab);
@@ -437,7 +484,7 @@ function syncTabs(tabs: HTMLElement) {
 }
 
 function makeTab(s: TerminalSession): HTMLElement {
-  const tab = h('div', { class: `tab kind-${s.kind}`, 'data-id': s.id },
+  const tab = h('div', { class: `tab kind-${s.kind}`, 'data-id': s.id, role: 'tab' },
     svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.label));
   const x = h('button', { class: 'tx', 'aria-label': 'Close' }, svg('x'));
   x.onclick = (e) => {
@@ -463,6 +510,7 @@ function saveUiState() {
 }
 
 function showHome() {
+  settleComposing(); // (before the keyboard goes: hiding it would commit the word nowhere)
   screen = 'home';
   saveUiState();
   bridge.setActiveSession(''); // looking at no session: all of them may notify
@@ -880,8 +928,10 @@ function bindTerminalGestures(s: TerminalSession) {
  */
 function fitSoon() {
   clearTimeout(fitTimer);
+  const t0 = performance.now();
   fitTimer = window.setTimeout(function settle() {
-    if (active?.renderer.insetsMoving) {
+    // (a slide that never reports its end doesn't hold it off for more than a second)
+    if (insetsMoving && performance.now() - t0 < 1000) {
       fitTimer = window.setTimeout(settle, 120);
       return;
     }
@@ -939,16 +989,13 @@ function buildKeyBar() {
           return;
         }
         if (!active) return;
+        // a word still being composed on the smart keyboard goes first, and the keyboard's
+        // copy of the line is dropped (^C, ↑, Tab … change the line under it)
+        settleComposing();
         if (k.latch) {
           latch[k.latch] = !latch[k.latch];
           b.classList.toggle('on', !!latch[k.latch]);
           return;
-        }
-        // a word still being composed on the smart keyboard goes first
-        if (active.renderer.preedit) {
-          active.input(active.renderer.preedit);
-          active.renderer.setPreedit('');
-          bridge.discardComposing();
         }
         const m = consumeLatch();
         active.input(k.key ? namedKeySeq(k.key, m, active.appCursor) : applyMods(k.text!, m));
@@ -998,6 +1045,7 @@ function openSheet(title: string, ...content: Kid[]) {
   // content and the content fades in, instead of a jump
   const swap = !sheet.hidden;
   const h0 = swap ? sheet.offsetHeight : 0;
+  settleComposing();
   clearTimeout(sheetHideTimer);
   sheet.classList.remove('closing');
   backdrop.classList.remove('closing');
@@ -1093,6 +1141,7 @@ function samplePreview(): HTMLElement {
   sample?.dispose();
   sample = new TerminalSession({ write() {}, resize() {} } as unknown as Bridge, '_sample', 'ubuntu', rendererOpts());
   sample.renderer.el.dataset.cursor = prefs.cursor;
+  sample.renderer.floatPan = false;
   sample.term.resize(38, 4);
   sample.term.write(
     '\x1b[38;2;166;227;161m~\x1b[0m \x1b[38;2;137;180;250m❯\x1b[0m agy "বাংলায় লিখুন"\r\n' +
@@ -1225,6 +1274,7 @@ function openSettingsSheet() {
     toggle('Smart keyboard', 'Suggestions and Bangla typing, like in a chat app. Off: raw keys.', prefs.kbSmart, (v) => {
       prefs.kbSmart = v;
       savePrefs();
+      settleComposing();
       bridge.setKeyboardSmart(v);
     }),
     // rarely needed: folded away
@@ -1298,6 +1348,7 @@ function bindChrome() {
     const t = e.target as HTMLElement;
     // text fields only (a switch or a slider in Settings doesn't need the keyboard)
     if (t.matches('textarea:not(#kbd), input:not([type=checkbox]):not([type=range]):not([type=radio])')) {
+      settleComposing();
       active?.setFocused(false);
       bridge.setTerminalKeyboard(false);
     }
@@ -1358,14 +1409,15 @@ async function boot() {
   try {
     savedUi = { ...savedUi, ...JSON.parse(localStorage.getItem('ui') ?? '{}') };
   } catch { /* none saved */ }
-  const [, first] = await Promise.all([state, listed]);
-  // nothing to restore: the home screen right away (with sessions, after they're listed —
-  // so its "Open sessions" don't pop in later and push everything down)
-  if (first.length === 0) enterHome();
-  // a terminal to come back to: it appears once restored (the home screen if that stalls)
+  // a terminal to come back to: it appears once restored (the home screen if that stalls —
+  // or if the app doesn't answer at all)
   window.setTimeout(() => {
     if (document.body.dataset.screen === 'boot') enterHome();
   }, 2500);
+  const [, first] = await Promise.all([state, listed]);
+  // nothing to restore: the home screen right away (with sessions, after they're listed —
+  // so its "Open sessions" don't pop in later and push everything down)
+  if (first.length === 0 && document.body.dataset.screen === 'boot') enterHome();
 
   // Measure the cell size only after the fonts are really there
   // (bounded: a font that never finishes loading must not stall the whole UI).
@@ -1387,10 +1439,13 @@ async function boot() {
 
   // Re-attach to sessions that kept running while the UI was gone.
   try {
-    const list = first;
+    // (the fonts took a while: the list may have changed — and a session opened from the
+    // home screen meanwhile is already here)
+    const userOpened = sessions.size > 0;
+    const list = (await bridge.listSessions().catch(() => first)).filter((i) => !sessions.has(i.id));
     // forget saved terminal modes of sessions that no longer exist
     try {
-      const ids = new Set(list.map((i) => i.id));
+      const ids = new Set([...list.map((i) => i.id), ...sessions.keys()]);
       for (const k of Object.keys(localStorage)) {
         const m = /^(modes|meta):(.*)$/.exec(k);
         if (m && !ids.has(m[2])) localStorage.removeItem(k);
@@ -1405,14 +1460,18 @@ async function boot() {
       s.beginReplay();
       bridge.attach(info.id); // its saved output, then onReplayed → restoreModes()
     }
-    if (list.length) {
+    if (list.length && !userOpened) {
       // a tapped notification first; else the tab (and screen) that was open
       activate((pendingOpen && sessions.get(pendingOpen)) || sessions.get(savedUi.active) || [...sessions.values()].pop()!);
       if (!pendingOpen && savedUi.screen === 'home') enterHome();
+    } else if (list.length) {
+      // the user is already somewhere: the old sessions join as tabs behind it
+      for (const x of sessions.values()) x.el.hidden = x !== active;
+      renderTabs();
     }
     pendingOpen = '';
     restored = true;
-    if (!list.length) await reportLostSessions();
+    if (!sessions.size) await reportLostSessions();
   } catch { /* nothing to restore */ }
   if (document.body.dataset.screen === 'boot') enterHome();
 
