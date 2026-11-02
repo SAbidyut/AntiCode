@@ -37,7 +37,8 @@ export interface BridgeEvents {
   onImeKey(keyCode: number, ctrl: boolean, alt: boolean, shift: boolean, ch?: string): void;
   onBack(): boolean;
   /** System bar / keyboard insets in CSS px; called every frame while the keyboard slides. */
-  onInsets(top: number, bottom: number, keyboard: boolean, settled: boolean, left?: number, right?: number): void;
+  /** [floating]: a floating keyboard is open (it takes no room, its place is unknown). */
+  onInsets(top: number, bottom: number, keyboard: boolean, settled: boolean, left?: number, right?: number, floating?: boolean): void;
   /** The app went to the background and dropped the terminal keyboard. */
   onKeyboardReleased(): void;
   /** Show this session (e.g. its "task finished" notification was tapped). */
@@ -256,7 +257,7 @@ export function createBridge(events: BridgeEvents): Bridge {
     onImeText: (text: string) => events.onImeText(text),
     onImeKey: (k: number, c: boolean, a: boolean, s: boolean, ch?: string) => events.onImeKey(k, c, a, s, ch),
     onBack: () => events.onBack(),
-    onInsets: (t: number, b: number, k: boolean, s: boolean, l?: number, r?: number) => events.onInsets(t, b, k, s, l, r),
+    onInsets: (t: number, b: number, k: boolean, s: boolean, l?: number, r?: number, f?: boolean) => events.onInsets(t, b, k, s, l, r, f),
     onKeyboardReleased: () => events.onKeyboardReleased(),
     onOpenSession: (id: string) => events.onOpenSession(id),
   };

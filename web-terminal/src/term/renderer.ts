@@ -184,6 +184,11 @@ interface Row {
 const OVERSCAN = 3;
 
 export class BanglaRenderer {
+  /**
+   * A floating keyboard is open: Android doesn't say where it is (it takes no room at the
+   * bottom), so the line being typed is kept in the upper half, where it usually isn't.
+   */
+  static floatingKeyboard = false;
   readonly el: HTMLDivElement;
   /** Moves as a whole when scrolling; rows sit at `line × lineHeight` inside it. */
   private viewport: HTMLDivElement;
@@ -814,7 +819,7 @@ export class BanglaRenderer {
     // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
     let splitLine = -1;
     let splitGap = 0;
-    if (this.anchorBottom && buf.type === 'normal' && buf.baseY === 0 && this.scrollPx === 0 && visible > 0) {
+    if (this.anchorBottom && !BanglaRenderer.floatingKeyboard && buf.type === 'normal' && buf.baseY === 0 && this.scrollPx === 0 && visible > 0) {
       const free = visible - (lastY + 1) * lh;
       if (free >= lh) {
         for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
@@ -895,6 +900,9 @@ export class BanglaRenderer {
       let pan = 0;
       if (splitLine >= 0) {
         pan = 0; // the chat layout already fits the screen
+      } else if (BanglaRenderer.floatingKeyboard) {
+        // the input line (and what's drawn under it) in the upper half of the screen
+        pan = Math.max(0, Math.min((lastY + 1) * lh - visible * 0.5, buf.cursorY * lh));
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
         pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));

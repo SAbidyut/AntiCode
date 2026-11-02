@@ -1,7 +1,7 @@
 import './polyfills';
 import { createBridge, type Bridge, type HostState, type SessionKind } from './bridge';
 import { TerminalSession } from './term/session';
-import { THEMES } from './term/renderer';
+import { BanglaRenderer, THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
 import { hydrateIcons, icon } from './icons';
 
@@ -143,7 +143,7 @@ const bridge: Bridge = createBridge({
     consumeLatch();
     active!.input(seq);
   },
-  onInsets(top, bottom, keyboard, settled, left = 0, right = 0) {
+  onInsets(top, bottom, keyboard, settled, left = 0, right = 0, floating = false) {
     // The page draws edge-to-edge; padding follows the bars and the keyboard frame by frame,
     // and the bottom-anchored terminal glides with it. Resize the terminal once it settles.
     const root = document.documentElement.style;
@@ -154,10 +154,13 @@ const bridge: Bridge = createBridge({
     // The keyboard's height doesn't resize the terminal (see TerminalSession.fit).
     if (!keyboard) navBottom = bottom;
     TerminalSession.keyboardInset = keyboard ? Math.max(0, bottom - navBottom) : 0;
+    // landscape folds the key rail when a docked keyboard takes the bottom of the screen
+    document.body.dataset.kb = floating ? 'floating' : keyboard ? 'docked' : '';
+    BanglaRenderer.floatingKeyboard = floating;
     if (active) active.renderer.insetsMoving = !settled;
     active?.renderer.schedule();
     if (settled) {
-      keyboardShown = keyboard;
+      keyboardShown = keyboard || floating;
       clearTimeout(fitTimer);
       active?.fit();
       // a field in a sheet (Settings, rename) that the keyboard now covers
@@ -296,6 +299,21 @@ function activate(s: TerminalSession | null) {
   }
   renderTabs(true);
   saveUiState();
+  if (s) showSessionPill(s);
+}
+
+let pillTimer = 0;
+/**
+ * Landscape has no tab titles (the sessions are icons in the side rail): say which session
+ * this is for a moment, at the top right, then get out of the way.
+ */
+function showSessionPill(s: TerminalSession) {
+  const pill = $('#session-pill');
+  pill.replaceChildren(h('i', { class: s.alive ? 'on' : '' }), s.customName || s.kindLabel);
+  if (s.about && !s.customName) pill.append(h('span', {}, ` · ${s.about}`));
+  pill.classList.add('show');
+  clearTimeout(pillTimer);
+  pillTimer = window.setTimeout(() => pill.classList.remove('show'), 2600);
 }
 
 function closeSession(s: TerminalSession) {
@@ -351,7 +369,7 @@ function renderTabs(scrollToActive = false) {
 function buildTabs(tabs: HTMLElement) {
   tabs.replaceChildren(
     ...[...sessions.values()].map((s) => {
-      const tab = h('div', { class: 'tab' + (s === active ? ' active' : '') + (s.alive ? '' : ' dead') },
+      const tab = h('div', { class: `tab kind-${s.kind}` + (s === active ? ' active' : '') + (s.alive ? '' : ' dead'), title: s.label },
         svg(KIND_ICON[s.kind] ?? 'terminal'), h('span', { class: 'tt' }, s.label));
       const x = h('button', { class: 'tx', 'aria-label': 'Close' }, svg('x'));
       x.onclick = (e) => {

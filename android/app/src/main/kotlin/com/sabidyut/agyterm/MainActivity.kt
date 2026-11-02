@@ -314,10 +314,14 @@ class MainActivity : ComponentActivity() {
         val left = bars.left / d
         val right = bars.right / d
         val keyboard = ime.bottom > bars.bottom
-        val key = "%.1f,%.1f,%b,%b,%.1f,%.1f".format(top, bottom, keyboard, settled, left, right)
+        // A floating keyboard is shown but takes no room at the bottom (Android 11+ tells
+        // whether the keyboard is visible): the page keeps the input line in its upper half.
+        val floating = !keyboard && Build.VERSION.SDK_INT >= 30 &&
+            insets.isVisible(WindowInsetsCompat.Type.ime()) && keys.hasFocus()
+        val key = "%.1f,%.1f,%b,%b,%.1f,%.1f,%b".format(top, bottom, keyboard, settled, left, right, floating)
         if (key == lastInsets) return
         lastInsets = key
-        js("__native.onInsets($top, $bottom, $keyboard, $settled, $left, $right)")
+        js("__native.onInsets($top, $bottom, $keyboard, $settled, $left, $right, $floating)")
     }
 
     // ---------------------------------------------------------------- keyboard focus
