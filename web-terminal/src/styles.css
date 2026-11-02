@@ -457,6 +457,12 @@ body[data-screen='home']::before {
   background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
 }
 .term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
+.term-preedit {
+  position: absolute; left: 0; top: 0; z-index: 2; height: var(--lh); line-height: var(--lh);
+  white-space: pre; pointer-events: none; padding-right: 1px;
+  background: inherit; text-decoration: underline; text-underline-offset: 3px;
+  border-right: 2px solid var(--accent);
+}
 .term-cursor {
   position: absolute; left: 0; top: 0;
   width: var(--cw); height: var(--lh);

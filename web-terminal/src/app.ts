@@ -18,6 +18,8 @@ interface Prefs {
   cursor: CursorStyle;
   /** Keyboard compatibility mode (keyboards that misbehave with raw keys). */
   kbCompat: boolean;
+  /** Smart keyboard: suggestions and Bangla transliteration, like in a chat app. */
+  kbSmart: boolean;
   /** Fade-in output, gliding cursor, sliding scroll. */
   animations: boolean;
   /** Asked once (on the first session) to run without battery restrictions. */
@@ -33,6 +35,7 @@ const DEFAULT_PREFS: Prefs = {
   claudeUrl: 'https://claude.ai/code',
   cursor: 'block',
   kbCompat: false,
+  kbSmart: true,
   animations: true,
   askedBackground: false,
 };
@@ -137,7 +140,20 @@ const bridge: Bridge = createBridge({
     stateKnown = true;
     renderHome();
   },
+  onImeComposing(text) {
+    const s = typingTarget();
+    if (!s) return;
+    // Ctrl / Alt latched on the key bar: the next letter is a shortcut (Ctrl+C), not a word
+    if (text && (latch.ctrl || latch.alt)) {
+      s.renderer.setPreedit('');
+      bridge.discardComposing();
+      s.input(applyMods([...text][0], consumeLatch()));
+      return;
+    }
+    s.renderer.setPreedit(text);
+  },
   onImeText(text) {
+    active?.renderer.setPreedit('');
     if (!typingTarget()) return;
     active!.input(applyMods(text, consumeLatch()));
   },
@@ -830,6 +846,12 @@ function buildKeyBar() {
           b.classList.toggle('on', !!latch[k.latch]);
           return;
         }
+        // a word still being composed on the smart keyboard goes first
+        if (active.renderer.preedit) {
+          active.input(active.renderer.preedit);
+          active.renderer.setPreedit('');
+          bridge.discardComposing();
+        }
         const m = consumeLatch();
         active.input(k.key ? namedKeySeq(k.key, m, active.appCursor) : applyMods(k.text!, m));
       };
@@ -1082,7 +1104,12 @@ function openSettingsSheet() {
       savePrefs();
       for (const s of sessions.values()) s.renderer.setOptions({ animate: v });
     }),
-    toggle('Keyboard compatibility mode', 'Turn on if your keyboard types nothing or wrong characters in the terminal.', prefs.kbCompat, (v) => {
+    toggle('Smart keyboard', 'Suggestions and Bangla typing (amon → এমন), like in a chat app. A word goes to the terminal when you press space or pick a suggestion. Off: raw keys with a number row.', prefs.kbSmart, (v) => {
+      prefs.kbSmart = v;
+      savePrefs();
+      bridge.setKeyboardSmart(v);
+    }),
+    toggle('Keyboard compatibility mode', 'Only without the smart keyboard: turn on if your keyboard types nothing or wrong characters.', prefs.kbCompat, (v) => {
       prefs.kbCompat = v;
       savePrefs();
       bridge.setKeyboardCompat(v);
@@ -1182,6 +1209,7 @@ async function boot() {
   applyTheme();
   document.body.dataset.host = bridge.host;
   if (prefs.kbCompat) bridge.setKeyboardCompat(true);
+  bridge.setKeyboardSmart(prefs.kbSmart);
   showHome();
   // the home screen's state doesn't need the fonts: ask right away
   const state = bridge.getState().then(

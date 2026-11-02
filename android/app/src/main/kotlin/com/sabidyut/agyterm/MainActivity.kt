@@ -154,10 +154,12 @@ class MainActivity : ComponentActivity() {
         // Owns the keyboard while typing into the terminal (see KeyCaptureView).
         keys = KeyCaptureView(this, object : KeyCaptureView.Sink {
             override fun onText(text: String) = js("__native.onImeText(${JSONObject.quote(text)})")
+            override fun onComposing(text: String) = js("__native.onImeComposing(${JSONObject.quote(text)})")
             override fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean, char: String) =
                 js("__native.onImeKey($keyCode, $ctrl, $alt, $shift, ${JSONObject.quote(char)})")
         })
         keys.compatMode = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_COMPAT, false)
+        keys.smart = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_SMART, true)
         val root = FrameLayout(this).apply {
             addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(keys, FrameLayout.LayoutParams(1, 1))
@@ -894,6 +896,23 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        /** Smart keyboard (suggestions, Bangla) or raw keys. */
+        @JavascriptInterface
+        fun setKeyboardSmart(on: Boolean) {
+            main.post {
+                if (keys.smart == on) return@post
+                keys.smart = on
+                getPreferences(Context.MODE_PRIVATE).edit().putBoolean(PREF_KEYBOARD_SMART, on).apply()
+                if (keys.hasFocus()) imm.restartInput(keys)
+            }
+        }
+
+        /** The page sent the word being composed itself (before a key-bar key): drop it here. */
+        @JavascriptInterface
+        fun discardComposing() {
+            main.post { keys.discardComposing() }
+        }
+
         @JavascriptInterface
         fun requestStorage() {
             main.post { requestStorageAccess() }
@@ -911,6 +930,7 @@ class MainActivity : ComponentActivity() {
         private const val CHUNK = 192 * 1024
         private const val BG = "#0b0d12"
         private const val PREF_KEYBOARD_COMPAT = "keyboard_compat"
+        private const val PREF_KEYBOARD_SMART = "keyboard_smart"
         private const val SELFTEST = "AgySelfTest"
     }
 }

@@ -24,15 +24,32 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
 
     interface Sink {
         fun onText(text: String)
+        /** Smart keyboard: the word being typed (not sent yet), "" when there's none. */
+        fun onComposing(text: String)
         /** [char]: what the key types on this layout (with Shift, without Ctrl/Alt), or "". */
         fun onKey(keyCode: Int, ctrl: Boolean, alt: Boolean, shift: Boolean, char: String)
     }
 
     /**
-     * false: TYPE_NULL (raw keys, like Termux's default).
+     * Smart keyboard (default): an ordinary text field to the keyboard, so it shows its
+     * suggestions and Bangla transliteration (amon → এমন) like in a chat app — no number row,
+     * no autocorrect, no capitals. The word being typed is shown at the cursor by the page and
+     * reaches the terminal when the keyboard commits it (space, a suggestion, Enter).
+     */
+    var smart = true
+
+    /**
+     * Not smart — false: TYPE_NULL (raw keys, like Termux's default).
      * true: "visible password" text — for keyboards that misbehave with TYPE_NULL.
      */
     var compatMode = false
+
+    private var connection: Connection? = null
+
+    /** Drop the word being composed (the page already sent it, e.g. before a key-bar key). */
+    fun discardComposing() {
+        connection?.discard()
+    }
 
     init {
         isFocusable = true
@@ -42,15 +59,18 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = if (compatMode) {
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+        outAttrs.inputType = when {
+            // plain text: suggestions on; no AUTO_CORRECT / CAP_* flags → no autocorrect, no capitals
+            smart -> InputType.TYPE_CLASS_TEXT
+            compatMode -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        } else {
-            InputType.TYPE_NULL
+            else -> InputType.TYPE_NULL
         }
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-            EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
-        return Connection()
+            EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_NONE
+        outAttrs.initialSelStart = 0
+        outAttrs.initialSelEnd = 0
+        return Connection().also { connection = it }
     }
 
     // Hardware keyboards (and IMEs that send key events) end up here.
@@ -100,11 +120,43 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
      */
     private inner class Connection : BaseInputConnection(this@KeyCaptureView, true) {
 
+        private var shown = ""
+
+        /** Tell the page what is being composed (only when it changed). */
+        fun preedit() {
+            val t = editable?.toString() ?: ""
+            if (t != shown) {
+                shown = t
+                sink.onComposing(t)
+            }
+        }
+
         private fun flushEditable() {
             val e = editable ?: return
-            if (e.isEmpty()) return
-            sink.onText(e.toString().replace('\n', '\r'))
-            e.clear()
+            if (e.isNotEmpty()) {
+                sink.onText(e.toString().replace('\n', '\r'))
+                e.clear()
+            }
+            preedit()
+        }
+
+        fun discard() {
+            editable?.clear()
+            preedit()
+            (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                .restartInput(this@KeyCaptureView)
+        }
+
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
+            super.setComposingText(text, newCursorPosition)
+            preedit()
+            return true
+        }
+
+        override fun setComposingRegion(start: Int, end: Int): Boolean {
+            super.setComposingRegion(start, end)
+            preedit()
+            return true
         }
 
         override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
@@ -120,7 +172,13 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         }
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            // Our editor is always empty, so a delete means "backspace in the terminal".
+            // inside the word being composed: the keyboard edits it
+            if (editable?.isNotEmpty() == true) {
+                super.deleteSurroundingText(beforeLength, afterLength)
+                preedit()
+                return true
+            }
+            // Our editor is otherwise empty, so a delete means "backspace in the terminal".
             repeat(beforeLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_DEL, false, false, false, "") }
             repeat(afterLength.coerceIn(0, 64)) { sink.onKey(KeyEvent.KEYCODE_FORWARD_DEL, false, false, false, "") }
             return true
@@ -129,6 +187,7 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         override fun sendKeyEvent(event: KeyEvent): Boolean {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) return super.sendKeyEvent(event)
+                flushEditable() // a word being composed goes first (then Enter, ⌫ …)
                 handleKey(event)
             } else if (event.action == KeyEvent.ACTION_MULTIPLE && event.keyCode == KeyEvent.KEYCODE_UNKNOWN) {
                 event.characters?.let { sink.onText(it) }
@@ -137,6 +196,7 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
         }
 
         override fun performEditorAction(actionCode: Int): Boolean {
+            flushEditable()
             sink.onKey(KeyEvent.KEYCODE_ENTER, false, false, false, "")
             return true
         }

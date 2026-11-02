@@ -296,6 +296,17 @@ export class BanglaRenderer {
   private splitGap = 0;
   /** True while the keyboard slides: follow it exactly, no easing. */
   insetsMoving = false;
+  /**
+   * Smart keyboard: the word being composed (not in the terminal yet), drawn at the cursor
+   * like the keyboard's own underlined text in a chat app.
+   */
+  preedit = '';
+  private preeditEl: HTMLSpanElement;
+  setPreedit(text: string) {
+    if (text === this.preedit) return;
+    this.preedit = text;
+    this.schedule();
+  }
   /** Called when the view leaves / returns to the bottom of the output. */
   onScrolled?: (scrolledUp: boolean) => void;
   private wasScrolled = false;
@@ -310,7 +321,10 @@ export class BanglaRenderer {
     this.el.dataset.cursor = 'block';
     this.zoomLayer = document.createElement('div');
     this.zoomLayer.className = 'term-zoom';
-    this.viewport.append(this.cursorEl);
+    this.preeditEl = document.createElement('span');
+    this.preeditEl.className = 'term-preedit';
+    this.preeditEl.style.display = 'none';
+    this.viewport.append(this.cursorEl, this.preeditEl);
     this.zoomLayer.append(this.viewport);
     this.el.append(this.zoomLayer);
     this.palette = build256(opts.theme);
@@ -930,7 +944,13 @@ export class BanglaRenderer {
 
     const showCursor = this.cursorVisible && this.scrollPx < lh;
     const wasShown = this.cursorEl.style.display !== 'none';
-    this.cursorEl.style.display = showCursor ? 'block' : 'none';
+    const composing = !!this.preedit && this.scrollPx < lh;
+    this.cursorEl.style.display = showCursor && !composing ? 'block' : 'none';
+    this.preeditEl.style.display = composing ? 'block' : 'none';
+    if (composing) {
+      if (this.preeditEl.textContent !== this.preedit) this.preeditEl.textContent = this.preedit;
+      this.preeditEl.style.transform = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;
+    }
     if (showCursor) {
       // cursorX == cols while a line wrap is pending: keep it on the grid
       const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;

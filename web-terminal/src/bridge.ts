@@ -35,6 +35,8 @@ export interface BridgeEvents {
   onState(state: HostState): void;
   /** Raw text from the native "terminal keyboard" (Android InputConnection). */
   onImeText(text: string): void;
+  /** Smart keyboard: the word being composed, not sent yet ("" = none). */
+  onImeComposing(text: string): void;
   /** Raw key from the native terminal keyboard: Android KeyEvent keyCode + modifiers. */
   onImeKey(keyCode: number, ctrl: boolean, alt: boolean, shift: boolean, ch?: string): void;
   onBack(): boolean;
@@ -87,6 +89,10 @@ export interface Bridge {
   hideKeyboard(): void;
   /** Keyboard compatibility mode (for keyboards that misbehave with raw key input). */
   setKeyboardCompat(on: boolean): void;
+  /** Smart keyboard: suggestions and Bangla transliteration (words are sent when committed). */
+  setKeyboardSmart(on: boolean): void;
+  /** The page sent the composing word itself: the keyboard should forget it. */
+  discardComposing(): void;
   /** Ask for access to the phone's storage (like termux-setup-storage). */
   requestStorage(): void;
   /** Ask to run without battery restrictions (so Android doesn't stop the sessions). */
@@ -130,6 +136,8 @@ interface AndroidBridgeApi {
   showKeyboard(): void;
   hideKeyboard(): void;
   setKeyboardCompat(on: boolean): void;
+  setKeyboardSmart?(on: boolean): void;
+  discardComposing?(): void;
   requestStorage(): void;
   allowBackground?(): void;
   getLostSessions?(): string;
@@ -181,6 +189,8 @@ class AndroidHostBridge implements Bridge {
   showKeyboard() { this.api.showKeyboard(); }
   hideKeyboard() { this.api.hideKeyboard(); }
   setKeyboardCompat(on: boolean) { this.api.setKeyboardCompat(on); }
+  setKeyboardSmart(on: boolean) { this.api.setKeyboardSmart?.(on); }
+  discardComposing() { this.api.discardComposing?.(); }
   requestStorage() { this.api.requestStorage(); }
   allowBackground() { this.api.allowBackground?.(); }
   async getLostSessions() {
@@ -262,6 +272,8 @@ class DevBridge implements Bridge {
   showKeyboard() {}
   hideKeyboard() {}
   setKeyboardCompat() {}
+  setKeyboardSmart() {}
+  discardComposing() {}
   requestStorage() {}
   allowBackground() {}
   /** tests: ?lost=ubuntu,claude */
@@ -281,6 +293,7 @@ export function createBridge(events: BridgeEvents): Bridge {
     onReplayed: (id: string) => events.onReplayed(id),
     onState: (json: string) => events.onState(JSON.parse(json)),
     onImeText: (text: string) => events.onImeText(text),
+    onImeComposing: (text: string) => events.onImeComposing(text),
     onImeKey: (k: number, c: boolean, a: boolean, s: boolean, ch?: string) => events.onImeKey(k, c, a, s, ch),
     onBack: () => events.onBack(),
     onInsets: (t: number, b: number, k: boolean, s: boolean, l?: number, r?: number, f?: boolean) => events.onInsets(t, b, k, s, l, r, f),
