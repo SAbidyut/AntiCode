@@ -23,6 +23,8 @@ interface Prefs {
   /** Asked once (on the first session) to run without battery restrictions. */
   askedBackground: boolean;
 }
+/** Driven by the emulator self test (no system dialogs over the terminal then). */
+const SELFTEST = new URLSearchParams(location.search).has('selftest');
 const DEFAULT_PREFS: Prefs = {
   fontSize: 14,
   theme: 'midnight',
@@ -288,7 +290,7 @@ async function newSession(kind: SessionKind) {
   activate(s);
   // The first session: ask (once) to be left alone by battery optimisation — otherwise
   // Android may stop the app, and every session with it, while it's in the background.
-  if (hostState.host === 'android' && hostState.background === false && !prefs.askedBackground) {
+  if (hostState.host === 'android' && hostState.background === false && !prefs.askedBackground && !SELFTEST) {
     prefs.askedBackground = true;
     savePrefs();
     toast('Allow AntiCode to keep running in the background');

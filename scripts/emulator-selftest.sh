@@ -12,6 +12,8 @@ adb install -r "$APK"
 # storage access, as if the user tapped "Allow" (the self test checks /sdcard inside Ubuntu)
 adb shell pm grant "$PKG" android.permission.READ_EXTERNAL_STORAGE || true
 adb shell pm grant "$PKG" android.permission.WRITE_EXTERNAL_STORAGE || true
+# as if "run in the background" was allowed (the app asks for it on the first session)
+adb shell dumpsys deviceidle whitelist +"$PKG" || true
 adb logcat -c
 adb shell am start -W -n "$PKG/.MainActivity" --ez selftest true
 sleep 5
