@@ -793,9 +793,20 @@ function bindTerminalGestures(s: TerminalSession) {
 }
 
 /** Resize after the layout has settled (keyboard animations fire many resizes). */
+/**
+ * Re-measure the terminal once the layout has been still for a moment — never in the middle
+ * of a change (the keyboard sliding, a rotation): a passing in-between size would resize the
+ * terminal and make the shell redraw (the screen jumps), only to resize it back.
+ */
 function fitSoon() {
   clearTimeout(fitTimer);
-  fitTimer = window.setTimeout(() => active?.fit(), 110);
+  fitTimer = window.setTimeout(function settle() {
+    if (active?.renderer.insetsMoving) {
+      fitTimer = window.setTimeout(settle, 120);
+      return;
+    }
+    active?.fit();
+  }, 250);
 }
 
 function setFontSize(size: number, persist: boolean) {
@@ -1199,6 +1210,8 @@ async function boot() {
       focusKeys: () => focusTerminalKeyboard(),
       send: (line: string) => active?.sendLine(line),
       home: () => showHome(),
+      /** close the keyboard like the key bar's keyboard key */
+      hideKeys: () => hideKeyboard(),
       /** change the text size like a pinch does */
       zoom: (px: number) => setFontSize(px, true),
       /** the active session, for tests */

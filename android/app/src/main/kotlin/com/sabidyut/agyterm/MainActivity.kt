@@ -648,10 +648,38 @@ class MainActivity : ComponentActivity() {
                     } else {
                         Log.e(SELFTEST, "SELFTEST_IME_FAIL")
                     }
-                    selftestClaudeInUi()
+                    selftestKeyboardCycle()
                 }
             }, 3000)
         }, 2000)
+    }
+
+    /**
+     * Phase 3e: opening and closing the keyboard must not change the terminal's size (that
+     * makes the shell redraw and the screen jump).
+     */
+    private fun selftestKeyboardCycle() {
+        Log.i(SELFTEST, "phase 3e: keyboard open / close")
+        web.evaluateJavascript(
+            "(() => { const s = __selftest.session(); window.__rz = []; const o = s.bridge.resize.bind(s.bridge);" +
+                " s.bridge.resize = (...a) => { window.__rz.push(a.slice(1).join('x')); return o(...a); };" +
+                " __selftest.focusKeys(); return s.term.cols + 'x' + s.term.rows; })()",
+        ) { before ->
+            main.postDelayed({
+                web.evaluateJavascript("__selftest.hideKeys()", null)
+                main.postDelayed({
+                    web.evaluateJavascript(
+                        "(() => { const s = __selftest.session(); return window.__rz.join(',') + '|' + s.term.cols + 'x' + s.term.rows; })()",
+                    ) { after ->
+                        val (resizes, size) = after.trim('"').split('|').let { (it.getOrNull(0) ?: "?") to (it.getOrNull(1) ?: "?") }
+                        Log.i(SELFTEST, "kbcycle| before=$before after=$size resizes=[$resizes]")
+                        if (resizes.isEmpty() && size == before.trim('"')) Log.i(SELFTEST, "SELFTEST_KBCYCLE_OK")
+                        else Log.e(SELFTEST, "SELFTEST_KBCYCLE_FAIL")
+                        selftestClaudeInUi()
+                    }
+                }, 3000)
+            }, 3000)
+        }
     }
 
     /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */
