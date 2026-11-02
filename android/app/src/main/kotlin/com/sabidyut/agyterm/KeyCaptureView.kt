@@ -286,10 +286,36 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
 
     companion object {
         /**
-         * Splits text into letter clusters: a character with the marks that follow it
-         * (vowel signs, virama, nukta, joiners) — what one ⌫ removes in a shell.
+         * Splits text into letter clusters — what one ⌫ removes in Claude Code and (with the
+         * app's binding) in the shell: a character with the marks that follow it (vowel
+         * signs, virama, nukta, joiners), and conjuncts kept whole (consonant + virama +
+         * consonant, Unicode's GB9c: "ক্ষ", "স্ত্রী").
          */
         fun clusters(s: String): List<String> {
+            val base = markClusters(s)
+            val out = ArrayList<String>()
+            for (c in base) {
+                val prev = out.lastOrNull()
+                if (prev != null && endsWithLinker(prev) && isConsonant(c.codePointAt(0))) {
+                    out[out.size - 1] = prev + c
+                } else {
+                    out += c
+                }
+            }
+            return out
+        }
+
+        /** Bengali / Devanagari virama, possibly followed by a joiner. */
+        private fun endsWithLinker(c: String): Boolean {
+            val t = c.trimEnd('\u200D')
+            return t.endsWith('\u09CD') || t.endsWith('\u094D')
+        }
+
+        private fun isConsonant(cp: Int) =
+            cp in 0x0995..0x09B9 || cp == 0x09DC || cp == 0x09DD || cp == 0x09DF || cp == 0x09F0 || cp == 0x09F1 ||
+                cp in 0x0915..0x0939 || cp in 0x0958..0x095F || cp in 0x0978..0x097F
+
+        private fun markClusters(s: String): List<String> {
             val out = ArrayList<String>()
             var i = 0
             while (i < s.length) {

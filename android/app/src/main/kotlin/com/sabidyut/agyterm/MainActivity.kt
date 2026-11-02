@@ -632,12 +632,16 @@ class MainActivity : ComponentActivity() {
             ic.commitText("ভালো", 1) // … and type the suggestion
             ic.deleteSurroundingText(1, 0) // ⌫ takes the vowel sign "ো" back …
             ic.commitText("ো", 1) // … and it's typed again
+            ic.commitText(" ক্ষমা", 1) // a conjunct: ⌫ ⌫ ⌫ down to "ক্", then typed again
+            ic.deleteSurroundingText(2, 0)
+            ic.deleteSurroundingText(1, 0)
+            ic.commitText("ষমা", 1)
             ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NONE)
             main.postDelayed({
                 selftestScreen { screen ->
                     val lines = screen.lines().map { it.trim() }.filter { it.isNotEmpty() }
                     for (line in lines.takeLast(4)) Log.i(SELFTEST, "ime| $line")
-                    if (lines.any { it == "আমি সেখানে ভালো" } &&
+                    if (lines.any { it == "আমি সেখানে ভালো ক্ষমা" } &&
                         lines.none { it.contains("ami") || it.contains("valo") || it.contains("seস") }
                     ) {
                         Log.i(SELFTEST, "SELFTEST_IME_OK")

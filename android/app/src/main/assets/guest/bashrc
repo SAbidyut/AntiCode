@@ -162,5 +162,27 @@ if [[ ${BLE_VERSION-} ]]; then
   ble-face command_alias='fg=#89dceb' command_keyword='fg=#89b4fa'
   ble-face syntax_quoted='fg=#a6e3a1' syntax_comment='fg=#6c7086' syntax_error='fg=#1e1e2e,bg=#f38ba8'
   ble-face filename_directory='underline,fg=#89b4fa' region='bg=#45475a'
+  # ⌫ removes a whole letter cluster — a letter with its vowel signs, a conjunct (ক্ষ) —
+  # like Claude Code and the app's Bangla keyboard do (ble.sh itself removes one code point).
+  function ble/widget/anticode-delete-backward-cluster {
+    local s=$_ble_edit_str i=$_ble_edit_ind b ret c
+    ((i>0)) || { ble/widget/.bell; return 1; }
+    ble/unicode/GraphemeCluster/find-previous-boundary "$s" "$i"; b=$ret
+    # conjuncts: consonant + virama + consonant stay together (Unicode GB9c)
+    while ((b>=2)); do
+      ble/util/s2c "${s:b-1:1}"; ((ret==0x9CD||ret==0x94D)) || break
+      ble/util/s2c "${s:b:1}"; c=$ret
+      ((0x995<=c&&c<=0x9B9||c==0x9DC||c==0x9DD||c==0x9DF||c==0x9F0||c==0x9F1||0x915<=c&&c<=0x939||0x958<=c&&c<=0x95F)) || break
+      ble/unicode/GraphemeCluster/find-previous-boundary "$s" "$b"; b=$ret
+    done
+    ((b<i)) || b=$((i-1))
+    ble/widget/.delete-char "$((b-i))" || ble/widget/.bell
+  }
+  function anticode/ble-keys {
+    ble-bind -m emacs -f 'DEL' 'delete-region-or anticode-delete-backward-cluster'
+    ble-bind -m emacs -f 'C-?' 'delete-region-or anticode-delete-backward-cluster'
+    ble-bind -m emacs -f 'C-h' 'delete-region-or anticode-delete-backward-cluster'
+  }
+  blehook/eval-after-load keymap_emacs anticode/ble-keys 2>/dev/null || anticode/ble-keys
   ble-attach
 fi
