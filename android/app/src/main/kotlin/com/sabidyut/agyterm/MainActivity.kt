@@ -533,23 +533,29 @@ class MainActivity : ComponentActivity() {
         web.evaluateJavascript("__selftest.open('ubuntu')", null)
         main.postDelayed({ web.evaluateJavascript("__selftest.send('clear')", null) }, 6000)
         main.postDelayed({ web.evaluateJavascript("__selftest.send('echo ZOOM-A1')", null) }, 8000)
-        val sizes = listOf(20, 11, 17, 14)
+        val sizes = listOf(20, 10, 17, 14)
         for ((i, px) in sizes.withIndex()) {
             main.postDelayed({ web.evaluateJavascript("__selftest.zoom($px)", null) }, 10_000L + i * 2500L)
         }
         main.postDelayed({
+          // the prompt clocks (drawn by the app) must sit on prompt lines only
+          web.evaluateJavascript(
+            "[...document.querySelectorAll('.session:not([hidden]) .term-row')].filter(r => r.querySelector('.rlabel') && !r.textContent.includes('root')).length",
+          ) { strayClocks ->
             selftestScreen { screen ->
                 val lines = screen.lines().dropLastWhile { it.isBlank() }
                 val bars = lines.count { it.contains("root") }
                 for (line in lines) Log.i(SELFTEST, "zoom| $line")
+                Log.i(SELFTEST, "zoom stray clocks: $strayClocks")
                 // bar, ❯ echo ZOOM-A1, ZOOM-A1, gap, bar, ❯
-                if (bars == 2 && lines.size == 6 && lines.any { it.trim() == "ZOOM-A1" }) {
+                if (bars == 2 && lines.size == 6 && lines.any { it.trim() == "ZOOM-A1" } && strayClocks == "0") {
                     Log.i(SELFTEST, "SELFTEST_ZOOM_OK")
                 } else {
-                    Log.e(SELFTEST, "SELFTEST_ZOOM_FAIL bars=$bars lines=${lines.size}")
+                    Log.e(SELFTEST, "SELFTEST_ZOOM_FAIL bars=$bars lines=${lines.size} strayClocks=$strayClocks")
                 }
                 selftestClaudeInUi()
             }
+          }
         }, 10_000L + sizes.size * 2500L + 2500L)
     }
 

@@ -210,7 +210,9 @@ export class BanglaRenderer {
   private animBaseY = 0;
   // ---- right-aligned labels (the prompt's clock): drawn by us at the right edge of a
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
-  private rightLabels: { marker: IMarker; text: string }[] = [];
+  // `sig` is the line's text once the prompt was drawn on it: when the line no longer
+  // reads the same (cleared, redrawn elsewhere after a zoom, overwritten) the label goes.
+  private rightLabels: { marker: IMarker; text: string; sig: string; born: number }[] = [];
 
   /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
   setRightLabel(text: string) {
@@ -223,16 +225,35 @@ export class BanglaRenderer {
       if (same) l.marker.dispose();
       return !same;
     });
-    this.rightLabels.push({ marker, text: text.slice(0, 24) });
+    this.rightLabels.push({ marker, text: text.slice(0, 24), sig: '', born: performance.now() });
     while (this.rightLabels.length > 300) this.rightLabels.shift()!.marker.dispose();
     this.schedule();
   }
 
-  private labelsByLine(): Map<number, string> {
+  /** Labels of the lines first..last that still belong to their prompt. */
+  private labelsByLine(first: number, last: number): Map<number, string> {
     const m = new Map<number, string>();
-    if (this.term.buffer.active.type !== 'normal') return m;
-    this.rightLabels = this.rightLabels.filter((l) => !l.marker.isDisposed);
-    for (const l of this.rightLabels) m.set(l.marker.line, l.text);
+    const buf = this.term.buffer.active;
+    if (buf.type !== 'normal') return m;
+    const now = performance.now();
+    this.rightLabels = this.rightLabels.filter((l) => {
+      if (l.marker.isDisposed) return false;
+      const line = l.marker.line;
+      if (line < first || line > last) return true; // checked when it's on screen
+      const text = buf.getLine(line)?.translateToString(true) ?? '';
+      if (!l.sig) {
+        if (text.trim()) l.sig = text; // the prompt has been drawn: remember it
+        else if (now - l.born > 1500) {
+          l.marker.dispose(); // its line stayed empty: the prompt went elsewhere
+          return false;
+        } else return true;
+      } else if (text !== l.sig) {
+        l.marker.dispose(); // cleared, overwritten, or the prompt was redrawn elsewhere
+        return false;
+      }
+      m.set(line, l.text);
+      return true;
+    });
     return m;
   }
 
@@ -746,7 +767,7 @@ export class BanglaRenderer {
     }
     const canReveal = motion && !this.suppressReveal && this.scrollPx === 0;
     const revealed: HTMLDivElement[] = [];
-    const labels = this.labelsByLine();
+    const labels = this.labelsByLine(first, last);
     for (let i = first; i <= last; i++) {
       let r = this.rows.get(i);
       const live = i >= buf.baseY; // the live screen can still change; scrollback can't
