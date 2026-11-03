@@ -122,6 +122,8 @@ let navBottom = 0;
 let insetsMoving = false;
 /** The session showing the smart keyboard's word being composed. */
 let preeditOwner: TerminalSession | null = null;
+/** When the keyboard last sent ⌫ (it does before re-composing or replacing a word). */
+let imeDeletedAt = -1e9;
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -172,19 +174,31 @@ const bridge: Bridge = createBridge({
     preeditOwner = s;
     // typing while reading the history: back to the prompt, where the word shows
     if (s.renderer.scrollPx > 0) s.scrollToBottom();
+    // the keyboard took letters back to compose them again (⌫ into a word): the word shows
+    // once the program has removed them — drawn now, it stood next to itself ("amiami")
+    if (performance.now() - imeDeletedAt < 40) s.renderer.awaitEcho('deletes');
     s.renderer.setPreedit(text);
   },
   onImeText(text) {
-    if (!typingTarget()) return;
+    const s = typingTarget();
+    if (!s) return;
     // several lines at once (the keyboard's clipboard): a paste, not lines typed and run
     if (text.length > 1 && /[\r\n]/.test(text) && !latch.ctrl && !latch.alt) {
-      active!.paste(text);
+      s.paste(text);
       return;
     }
-    active!.input(applyMods(text, consumeLatch()));
+    // the word on screen was finished (space, a suggestion): it stays where it is until the
+    // program echoes it, instead of vanishing for a moment (not after ⌫s: that text goes
+    // where the program's cursor will be once they're done)
+    if (preeditOwner === s && s.renderer.preedit && !latch.ctrl && !latch.alt &&
+      performance.now() - imeDeletedAt > 40 && !/[\x00-\x1f]/.test(text)) {
+      s.renderer.awaitEcho('text', text);
+    }
+    s.input(applyMods(text, consumeLatch()));
   },
   onImeKey(keyCode, ctrl, alt, shift, ch) {
     if (!typingTarget()) return;
+    if (keyCode === 67 && !ctrl && !alt) imeDeletedAt = performance.now(); // ⌫ (KEYCODE_DEL)
     const seq = androidKeySeq(keyCode, { ctrl: ctrl || latch.ctrl, alt: alt || latch.alt, shift }, active!.appCursor, ch ?? '');
     if (!seq) return; // e.g. Shift on its own: keep the Ctrl/Alt latch for the next key
     consumeLatch();

@@ -130,8 +130,7 @@ __agy_prompt() {
   __agy_in_prompt=
 }
 PROMPT_COMMAND=__agy_prompt
-# a command starts: the app counts Bangla conjuncts the way programs do (one character) until
-# the prompt is back (the shell itself counts them by letters)
+# a command starts (the app's "task finished" notification waits for the prompt again)
 PS0=$'\e]7770;exec\a'
 
 # ---------------------------------------------------------------- agents on demand
@@ -145,6 +144,10 @@ command_not_found_handle() {
   printf '%s: command not found\n' "$1" >&2
   return 127
 }
+# Antigravity counts a Bangla conjunct (ক্ষ) as one character, as Unicode 15.1 does; the shell
+# and other programs (Claude Code too) count its letters. The terminal draws it the program's
+# way, so the program's tables and input line come out right (back to letters at the prompt).
+agy() { printf '\e]7770;widths;joined\a'; command agy "$@"; }
 
 # ---------------------------------------------------------------- ble.sh look & attach
 if [[ ${BLE_VERSION-} ]]; then

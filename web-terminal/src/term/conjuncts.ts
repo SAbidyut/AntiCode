@@ -4,13 +4,15 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 /**
  * How many cells a Bangla (or Devanagari) conjunct takes: the program drawing decides.
  *
- * - The shell (bash, ble.sh) counts a conjunct by its letters: "ক্ষ" = ক্ + ষ = 2 cells.
- * - Newer programs (the Antigravity CLI, Claude Code) follow Unicode 15.1, where a conjunct is
- *   one character (GB9c: consonant + virama + consonant): "ক্ষ" = 1 cell. Counted the shell's
- *   way, their tables came apart — every conjunct pushed the column lines one cell further.
+ * - The shell (bash, ble.sh) and Claude Code count a conjunct by its letters: "ক্ষ" = ক্ + ষ =
+ *   2 cells. Counted any other way, Claude's input line kept stale letters behind as it was
+ *   typed (it redraws only the cells it thinks changed).
+ * - The Antigravity CLI follows Unicode 15.1, where a conjunct is one character (GB9c:
+ *   consonant + virama + consonant): "ক্ষ" = 1 cell. Counted by letters, its tables came
+ *   apart — every conjunct pushed the column lines one cell further.
  *
- * So the terminal counts the shell's way at the prompt and the newer way while a program
- * runs (the shell says when one starts and when its prompt is back).
+ * So the terminal counts by letters, and the joined way while agy runs (the shell's `agy`
+ * says so when it starts; the prompt coming back ends it).
  */
 
 type Provider = {
@@ -68,7 +70,7 @@ class ConjunctProvider implements Provider {
 }
 
 /** Loads grapheme handling into [term]; the returned function switches conjunct counting. */
-export function installWidths(term: Terminal): (programRunning: boolean) => void {
+export function installWidths(term: Terminal): (joined: boolean) => void {
   const addon = new UnicodeGraphemesAddon();
   term.loadAddon(addon as never);
   // the add-on's grapheme provider, taken from a stand-in (it isn't exported)
@@ -78,8 +80,8 @@ export function installWidths(term: Terminal): (programRunning: boolean) => void
   if (!graphemes) return () => {};
   const conjuncts = new ConjunctProvider(graphemes);
   term.unicode.register(conjuncts as never);
-  return (programRunning) => {
-    const v = programRunning ? conjuncts.version : '15-graphemes';
+  return (joined) => {
+    const v = joined ? conjuncts.version : '15-graphemes';
     if (term.unicode.activeVersion !== v) term.unicode.activeVersion = v;
   };
 }

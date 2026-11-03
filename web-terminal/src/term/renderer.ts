@@ -305,9 +305,28 @@ export class BanglaRenderer {
    */
   preedit = '';
   private preeditEl: HTMLSpanElement;
+  private preeditHtml = '';
   setPreedit(text: string) {
     if (text === this.preedit) return;
     this.preedit = text;
+    this.schedule();
+  }
+  /**
+   * Text the keyboard just sent, drawn (plainly) where it goes until the program echoes it
+   * — otherwise a finished word vanished for a moment on every space or suggestion tap.
+   */
+  private ghost = '';
+  /** Where the cursor was when the ghost / the hold began: either ends when it moves. */
+  private waitAt: { line: number; x: number; until: number } | null = null;
+  /** The keyboard took letters back (⌫ sent): the word being composed waits for them to go. */
+  private holdPreedit = false;
+  /** (call before setPreedit) */
+  awaitEcho(kind: 'text' | 'deletes', text = '') {
+    const buf = this.term.buffer.active;
+    this.ghost = kind === 'text' ? text : '';
+    this.holdPreedit = kind === 'deletes';
+    this.waitAt = { line: buf.baseY + buf.cursorY, x: buf.cursorX, until: performance.now() + 280 };
+    window.setTimeout(() => this.schedule(), 300);
     this.schedule();
   }
   /** Called when the view leaves / returns to the bottom of the output. */
@@ -611,8 +630,8 @@ export class BanglaRenderer {
     return null;
   }
 
-  /** Build the HTML for one buffer line. */
-  rowToHtml(line: IBufferLine | undefined, cols: number): string {
+  /** Build the HTML for one buffer line (from cell [from] on). */
+  rowToHtml(line: IBufferLine | undefined, cols: number, from = 0): string {
     if (!line) return '';
     const cw = this.cellWidth;
     const cell = (this.cell = line.getCell(0, this.cell) ?? this.cell);
@@ -689,7 +708,7 @@ export class BanglaRenderer {
       bnCells += w;
     };
 
-    for (let x = 0; x < cols; x++) {
+    for (let x = from; x < cols; x++) {
       const c = line.getCell(x, cell);
       if (!c) break;
       const w = c.getWidth();
@@ -787,6 +806,14 @@ export class BanglaRenderer {
     this.trimMarker = buf.baseY > 0 ? this.term.registerMarker(-(buf.cursorY + 1)) ?? null : null;
     this.trimLine = this.trimMarker?.line ?? 0;
     return trimmed;
+  }
+
+  /** A suggestion's or placeholder's look: dim, or the shell's suggestion grey. */
+  private isDimCell(line: IBufferLine, x: number): boolean {
+    const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
+    if (!c) return false;
+    if (c.getChars() === '' || c.getChars() === ' ') return true; // (spaces go with it)
+    return !!c.isDim() || (c.isFgRGB() && c.getFgColor() === 0x6c7086);
   }
 
   /** Cells up to the last one with text (wide characters count as two). */
@@ -933,13 +960,18 @@ export class BanglaRenderer {
     // erased and drawn again below each new piece of a reply — always on fresh lines. It is
     // not new output: it must not fade in (it flickered), and its lines stay "unrevealed" so
     // the reply that takes their place still fades in.
-    let boxTop = cursorLine;
+    let boxTop = -1;
     for (let y = cursorLine - 1; y >= Math.max(buf.baseY, cursorLine - 8); y--) {
       if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
         boxTop = y;
         break;
       }
     }
+    // No box (a shell, a command's output): the line being typed — all of it, when it wraps
+    // — is seen as it's written; it never fades in (not even its first row, once the cursor
+    // wraps below it, nor "Done" finishing "Reading package lists... ").
+    let inputTop = cursorLine;
+    if (boxTop < 0) while (inputTop > buf.baseY && buf.getLine(inputTop)?.isWrapped) inputTop--;
     const revealed: HTMLDivElement[] = [];
     const labels = this.labelsByLine(first, last);
     for (let i = first; i <= last; i++) {
@@ -968,9 +1000,9 @@ export class BanglaRenderer {
       }
       // A line getting content for the first time is new output: let it fade in. Not the
       // line being typed on (that would make typing feel slow).
-      if (el && i > this.revealedUpTo && i < boxTop && live && line?.translateToString(true)) {
+      if (el && i > this.revealedUpTo && (boxTop < 0 || i < boxTop) && live && line?.translateToString(true)) {
         this.revealedUpTo = i;
-        if (canReveal) revealed.push(el);
+        if (canReveal && i < inputTop) revealed.push(el);
       }
     }
     this.suppressReveal = false;
@@ -1022,15 +1054,52 @@ export class BanglaRenderer {
 
     const showCursor = this.cursorVisible && this.scrollPx < lh;
     const wasShown = this.cursorEl.style.display !== 'none';
-    const composing = !!this.preedit && this.scrollPx < lh;
+    // the keyboard's text that the program hasn't echoed yet: shown until the cursor moves
+    let pre = this.preedit;
+    const w = this.waitAt;
+    if (w) {
+      const still = w.line === cursorLine && w.x === buf.cursorX && performance.now() < w.until;
+      if (!still) {
+        this.waitAt = null;
+        this.ghost = '';
+        this.holdPreedit = false;
+      } else if (this.holdPreedit) pre = ''; // ⌫ first: the word would show twice
+    }
+    const ghost = this.ghost;
+    const composing = !!(pre || ghost) && this.scrollPx < lh;
     this.cursorEl.style.display = showCursor && !composing ? 'block' : 'none';
     this.preeditEl.style.display = composing ? 'block' : 'none';
     if (composing) {
-      if (this.preeditEl.textContent !== this.preedit) this.preeditEl.textContent = this.preedit;
-      // near the right edge it moves left so the whole word stays on screen
-      const x0 = Math.min(buf.cursorX, cols - 1) * this.cellWidth;
-      const x = Math.max(0, Math.min(x0, cols * this.cellWidth - this.preeditEl.offsetWidth));
-      this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${rowY(cursorLine)}px)`;
+      const cw = this.cellWidth;
+      const cx = Math.min(buf.cursorX, cols);
+      const line = buf.getLine(cursorLine);
+      // What follows the cursor on its row moves aside, as the word is inserted there (else
+      // the word covered only part of it: "e" + "ami" over "echo hello" read "eami hello").
+      // A dim tail — a suggestion or placeholder that typing replaces — is just hidden.
+      const used = line ? this.usedCells(line, cols) : 0;
+      let end = used;
+      while (end > cx && line && this.isDimCell(line, end - 1)) end--;
+      const tail = end > cx ? this.rowToHtml(line, end, cx) : '';
+      const word = `<span class="pw">${esc(ghost)}${pre ? `<u>${esc(pre)}</u>` : ''}</span>`;
+      const set = (html: string) => {
+        if (html === this.preeditHtml) return;
+        this.preeditHtml = html;
+        this.preeditEl.innerHTML = html;
+      };
+      set(word + tail);
+      // (covers the row's own text after the cursor)
+      this.preeditEl.style.minWidth = `${(Math.max(0, used - cx) * cw).toFixed(2)}px`;
+      // a word that doesn't fit on the row goes to the start of the next one, as it will
+      // when typed (moving it left covered what was typed before it)
+      const wordPx = (this.preeditEl.firstElementChild as HTMLElement).offsetWidth;
+      const wraps = cx * cw + wordPx > cols * cw + 0.5 && cx > 0;
+      if (wraps) {
+        set(word);
+        this.preeditEl.style.minWidth = '';
+      }
+      const x = wraps ? 0 : cx * cw;
+      const y = rowY(wraps ? cursorLine + 1 : cursorLine);
+      this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${y}px)`;
     }
     if (showCursor) {
       // cursorX == cols while a line wrap is pending: keep it on the grid
@@ -1041,9 +1110,13 @@ export class BanglaRenderer {
         // Typing moves it along its line: there it jumps at once (a glide trails behind the
         // letters and makes typing feel slow). It glides only to another line (after Enter).
         const sameLine = cursorLine === this.lastCursorLine;
+        // typing on past the end of the row (or ⌫ back over it): the line wraps — no slide
+        // diagonally across the text
+        const lower = Math.max(cursorLine, this.lastCursorLine);
+        const wrapped = Math.abs(cursorLine - this.lastCursorLine) === 1 && !!buf.getLine(lower)?.isWrapped;
         // … and when the screen itself slides (new line at the bottom, keyboard pan): the
         // cursor rides along inside it instead of a second, out-of-step glide (it dipped)
-        const far = !wasShown || sameLine || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved ||
+        const far = !wasShown || sameLine || wrapped || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved ||
           this.insetsMoving || slide || panEased;
         this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
         this.cursorEl.style.transform = t;

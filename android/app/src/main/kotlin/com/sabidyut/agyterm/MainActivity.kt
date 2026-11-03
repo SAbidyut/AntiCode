@@ -758,22 +758,25 @@ class MainActivity : ComponentActivity() {
 
     /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */
     /**
-     * Phase 3f: while a command runs, a conjunct takes one cell (as programs count it — their
-     * tables line up); the shell's "command starts" signal (PS0 / ble.sh) must arrive for that.
+     * Phase 3f: conjunct widths. A command's output counts a conjunct by its letters (as the
+     * shell and Claude Code do); while `agy` runs — its marker, sent by the shell's `agy` —
+     * one cell, as the Antigravity CLI counts it (its tables line up).
      */
     private fun selftestConjuncts() {
-        Log.i(SELFTEST, "phase 3f: conjunct widths while a program runs")
-        web.evaluateJavascript("__selftest.send(\"clear; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'\")", null)
+        Log.i(SELFTEST, "phase 3f: conjunct widths for commands and for agy")
+        web.evaluateJavascript("__selftest.send(\"clear; printf 'CL:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'; " +
+            "printf '\\\\e]7770;widths;joined\\\\a'; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'\")", null)
         main.postDelayed({
             web.evaluateJavascript(
-                "(() => { const b = __selftest.session().term.buffer.active; for (let i = 0; i < b.length; i++) {" +
-                    " const l = b.getLine(i); const t = l.translateToString(true); if (!t.startsWith('CJ:x')) continue;" +
-                    " let r = ''; for (let x = 0; x < 14; x++) { const c = l.getCell(x).getChars(); if (c === 'y' || c === 'z') r += c + '@' + x; } return r; } return 'none'; })()",
+                "(() => { const b = __selftest.session().term.buffer.active;" +
+                    " let r = ''; for (const p of ['CL:x', 'CJ:x']) { for (let i = 0; i < b.length; i++) {" +
+                    " const l = b.getLine(i); if (!l.translateToString(true).startsWith(p)) continue;" +
+                    " r += p.slice(0, 2); for (let x = 0; x < 14; x++) { const c = l.getCell(x).getChars(); if (c === 'y' || c === 'z') r += c + '@' + x; } break; } } return r; })()",
             ) { r ->
                 Log.i(SELFTEST, "conjunct| $r")
-                // C J : x ক্ষ y অ্ যা z → y in cell 5 (the conjunct one cell; 6 = counted by
-                // letters), z in 8 (অ্যা starts with a vowel: two characters, not a conjunct)
-                if (r.trim('"') == "y@5z@8") Log.i(SELFTEST, "SELFTEST_CONJUNCT_OK") else Log.e(SELFTEST, "SELFTEST_CONJUNCT_FAIL")
+                // C L : x ক ্ ষ y অ্ যা z → by letters y in cell 6, z in 9; joined (agy) ক্ষ is one
+                // cell: y in 5, z in 8 (অ্যা starts with a vowel: two characters, not a conjunct)
+                if (r.trim('"') == "CLy@6z@9CJy@5z@8") Log.i(SELFTEST, "SELFTEST_CONJUNCT_OK") else Log.e(SELFTEST, "SELFTEST_CONJUNCT_FAIL")
                 selftestClaudeInUi()
             }
         }, 2500)

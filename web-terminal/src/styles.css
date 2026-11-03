@@ -447,30 +447,30 @@ body[data-screen='home']::before {
   height: var(--lh); white-space: pre; overflow: visible;
   contain: layout style;
 }
-.term-row span { display: inline-block; height: var(--lh); vertical-align: top; }
-.term-row .bn { white-space: pre; overflow: visible; }
-.term-row .bn > .bi {
+.term-row span, .term-preedit span { display: inline-block; height: var(--lh); vertical-align: top; }
+.term-row .bn, .term-preedit .bn { white-space: pre; overflow: visible; }
+.term-row .bn > .bi, .term-preedit .bn > .bi {
   font-family: 'Kalpurush', sans-serif;
   font-size: var(--bn-fs);
   line-height: var(--lh);
   transform-origin: 0 50%;
   white-space: pre;
 }
-.term-row .bx { text-align: center; overflow: hidden; }
+.term-row .bx, .term-preedit .bx { text-align: center; overflow: hidden; }
 /* symbols from the fallback fonts are a bit wider than a cell: let them breathe, centred */
-.term-row .bx.sym { position: relative; z-index: 1; overflow: visible; display: inline-flex; justify-content: center; }
+.term-row .bx.sym, .term-preedit .bx.sym { position: relative; z-index: 1; overflow: visible; display: inline-flex; justify-content: center; }
 /* colour pieces inside one Bangla run must stay inline, or shaping breaks between them */
-.term-row .bi span { display: inline; height: auto; }
-.term-row .bx.pua { position: relative; z-index: 1; overflow: visible; text-align: left; font-family: 'AgySymbols', var(--mono); font-size: calc(var(--fs) * 0.92); }
+.term-row .bi span, .term-preedit .bi span { display: inline; height: auto; }
+.term-row .bx.pua, .term-preedit .bx.pua { position: relative; z-index: 1; overflow: visible; text-align: left; font-family: 'AgySymbols', var(--mono); font-size: calc(var(--fs) * 0.92); }
 /* glyphs drawn with CSS/SVG so they fill the whole cell (box drawing, blocks, powerline) */
-.term-row .dg { position: relative; z-index: 1; overflow: visible; }
-.term-row .dg svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.term-row .dg i { position: absolute; border: 0 solid currentColor; box-sizing: border-box; }
-.term-row .dg i.sh { left: 0; top: 0; right: 0; bottom: 0; background: currentColor; }
-.term-row .dg i.r-dr { left: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); right: 0; bottom: 0; border-top-width: var(--bw); border-left-width: var(--bw); border-top-left-radius: calc(var(--cw) * 0.75); }
-.term-row .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
-.term-row .dg i.r-ul { right: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); left: 0; top: 0; border-bottom-width: var(--bw); border-right-width: var(--bw); border-bottom-right-radius: calc(var(--cw) * 0.75); }
-.term-row .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
+.term-row .dg, .term-preedit .dg { position: relative; z-index: 1; overflow: visible; }
+.term-row .dg svg, .term-preedit .dg svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.term-row .dg i, .term-preedit .dg i { position: absolute; border: 0 solid currentColor; box-sizing: border-box; }
+.term-row .dg i.sh, .term-preedit .dg i.sh { left: 0; top: 0; right: 0; bottom: 0; background: currentColor; }
+.term-row .dg i.r-dr, .term-preedit .dg i.r-dr { left: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); right: 0; bottom: 0; border-top-width: var(--bw); border-left-width: var(--bw); border-top-left-radius: calc(var(--cw) * 0.75); }
+.term-row .dg i.r-dl, .term-preedit .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
+.term-row .dg i.r-ul, .term-preedit .dg i.r-ul { right: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); left: 0; top: 0; border-bottom-width: var(--bw); border-right-width: var(--bw); border-bottom-right-radius: calc(var(--cw) * 0.75); }
+.term-row .dg i.r-ur, .term-preedit .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
 /* the prompt's clock, always at the right edge of its line */
 .term-row .rlabel {
   position: absolute; right: 0; top: 0; z-index: 1;
@@ -479,12 +479,14 @@ body[data-screen='home']::before {
   background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
 }
 .term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
+/* the smart keyboard's word, inserted at the cursor (what follows on the row moves aside) */
 .term-preedit {
   position: absolute; left: 0; top: 0; z-index: 2; height: var(--lh); line-height: var(--lh);
-  white-space: pre; pointer-events: none; padding-right: 1px;
-  background: var(--tbg, #000); text-decoration: underline; text-underline-offset: 3px;
-  border-right: 2px solid var(--accent);
+  white-space: pre; pointer-events: none;
+  background: var(--tbg, #000);
 }
+.term-preedit .pw { border-right: 2px solid var(--accent); padding-right: 1px; }
+.term-preedit u { text-decoration: underline; text-underline-offset: 3px; }
 .term-cursor {
   position: absolute; left: 0; top: 0;
   width: var(--cw); height: var(--lh);

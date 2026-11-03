@@ -48,7 +48,7 @@ export class TerminalSession {
   /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
   onLink?: (url: string, trusted: boolean) => void;
   /** Count conjuncts the way a running program does (true) or the shell does (false). */
-  private setProgramWidths: (programRunning: boolean) => void;
+  private setProgramWidths: (joined: boolean) => void;
   /** Where the shell is (OSC 7 from its prompt): a tapped file name is looked for there. */
   cwd = '';
   /** The folder the session was started in. */
@@ -62,10 +62,10 @@ export class TerminalSession {
   ) {
     this.title = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
-    // conjuncts: the shell counts them by letters, newer programs as one (see conjuncts.ts);
-    // an agent session starts with its program running
+    // conjuncts: the shell (and Claude Code) count them by letters, the Antigravity CLI as one
+    // character (see conjuncts.ts); its session starts with it running
     this.setProgramWidths = installWidths(this.term);
-    this.setProgramWidths(kind === 'agy' || kind === 'claude');
+    this.setProgramWidths(kind === 'agy');
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
     this.loadMeta();
@@ -152,7 +152,8 @@ export class TerminalSession {
       else if (cmd === 'done') {
         this.renderer.anchorBottom = false;
         this.setProgramWidths(false); // the shell's prompt: its way of counting
-      } else if (cmd === 'exec') this.setProgramWidths(true); // a command starts
+      } else if (cmd === 'exec') this.setProgramWidths(false); // a command starts (by letters…)
+      else if (cmd === 'widths') this.setProgramWidths(rest[0] === 'joined'); // …unless it's agy
       else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
