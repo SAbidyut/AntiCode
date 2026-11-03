@@ -74,15 +74,27 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk AntiCode.apk
           cp android/app/build/outputs/apk/debug/app-debug.apk AntiCode-debug.apk
 
+      # The emulator jobs get the debug APK through the cache (its own space, old entries
+      # dropped by GitHub on their own) — the artifact storage quota can fill up.
+      - uses: actions/cache/save@v4
+        with:
+          path: AntiCode-debug.apk
+          key: debug-apk-${{ github.sha }}-${{ github.run_attempt }}
+
+      # also as artifacts for a few days — a full storage quota mustn't fail the build
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: AntiCode-apk
           path: AntiCode.apk
+          retention-days: 3
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: AntiCode-debug-apk
           path: AntiCode-debug.apk
+          retention-days: 3
 
       # Easiest way to get the APK on a phone: the "latest" release on the repo page.
       # Needs Settings → Actions → General → Workflow permissions → "Read and write".
@@ -117,9 +129,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/cache/restore@v4
         with:
-          name: AntiCode-debug-apk
+          path: AntiCode-debug.apk
+          key: debug-apk-${{ github.sha }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
 
       - name: Enable KVM
         run: |
@@ -138,7 +152,9 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: selftest-screenshots-${{ matrix.api }}
           path: selftest-shots/
           if-no-files-found: ignore
+          retention-days: 3
