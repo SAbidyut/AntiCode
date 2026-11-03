@@ -763,16 +763,17 @@ class MainActivity : ComponentActivity() {
      */
     private fun selftestConjuncts() {
         Log.i(SELFTEST, "phase 3f: conjunct widths while a program runs")
-        web.evaluateJavascript("__selftest.send(\"clear; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\\\n'\")", null)
+        web.evaluateJavascript("__selftest.send(\"clear; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'\")", null)
         main.postDelayed({
             web.evaluateJavascript(
                 "(() => { const b = __selftest.session().term.buffer.active; for (let i = 0; i < b.length; i++) {" +
                     " const l = b.getLine(i); const t = l.translateToString(true); if (!t.startsWith('CJ:x')) continue;" +
-                    " for (let x = 0; x < 12; x++) if (l.getCell(x).getChars() === 'y') return 'y@' + x; } return 'none'; })()",
+                    " let r = ''; for (let x = 0; x < 14; x++) { const c = l.getCell(x).getChars(); if (c === 'y' || c === 'z') r += c + '@' + x; } return r; } return 'none'; })()",
             ) { r ->
                 Log.i(SELFTEST, "conjunct| $r")
-                // C J : x ক্ষ y → y in cell 5 (the conjunct one cell); 6 = counted by letters
-                if (r.trim('"') == "y@5") Log.i(SELFTEST, "SELFTEST_CONJUNCT_OK") else Log.e(SELFTEST, "SELFTEST_CONJUNCT_FAIL")
+                // C J : x ক্ষ y অ্ যা z → y in cell 5 (the conjunct one cell; 6 = counted by
+                // letters), z in 8 (অ্যা starts with a vowel: two characters, not a conjunct)
+                if (r.trim('"') == "y@5z@8") Log.i(SELFTEST, "SELFTEST_CONJUNCT_OK") else Log.e(SELFTEST, "SELFTEST_CONJUNCT_FAIL")
                 selftestClaudeInUi()
             }
         }, 2500)

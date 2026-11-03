@@ -24,6 +24,12 @@ type Provider = {
  * uses all of: "the cluster so far ends with a virama (+ ZWJ)".
  */
 const LINK = 1 << 28;
+/**
+ * Another: "this cluster starts with a consonant". Only such a chain joins the next consonant
+ * (Unicode's rule: consonant + virama + consonant) — "অ্যা" (a vowel, a virama, a consonant)
+ * is two characters, অ্ and যা; joined, every line after it in a table moved one cell left.
+ */
+const BASE = 1 << 27;
 
 const isVirama = (cp: number) => cp === 0x09cd || cp === 0x094d;
 const isConsonant = (cp: number) =>
@@ -37,16 +43,22 @@ class ConjunctProvider implements Provider {
 
   charProperties(codepoint: number, preceding: number): number {
     const linked = (preceding & LINK) !== 0;
-    const pre = preceding & ~LINK;
+    const based = (preceding & BASE) !== 0;
+    const pre = preceding & ~(LINK | BASE);
     if (linked && isConsonant(codepoint)) {
       // joins the cluster before it, which keeps its width; the state is the consonant's own
       // (its vowel signs and the next virama join as usual)
       const own = this.inner.charProperties(codepoint, 0);
       const width = (pre >> 1) & 3;
-      return ((own >> 3) << 3) | (width << 1) | 1;
+      return ((own >> 3) << 3) | (width << 1) | 1 | BASE;
     }
     let v = this.inner.charProperties(codepoint, pre);
-    if (isVirama(codepoint) || (linked && codepoint === 0x200d)) v |= LINK;
+    // a character joining the cluster keeps what the cluster started with; a new one starts it
+    const base = (v & 1) === 1 ? based : isConsonant(codepoint);
+    if (base) {
+      v |= BASE;
+      if (isVirama(codepoint) || (linked && codepoint === 0x200d)) v |= LINK;
+    }
     return v;
   }
 

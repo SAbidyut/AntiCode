@@ -181,7 +181,11 @@ if [[ ${BLE_VERSION-} ]]; then
       ((ret==0x9CD||ret==0x94D)) || break
       ble/util/s2c "${s:b:1}"; c=$ret
       ((0x995<=c&&c<=0x9B9||c==0x9DC||c==0x9DD||c==0x9DF||c==0x9F0||c==0x9F1||0x915<=c&&c<=0x939||0x958<=c&&c<=0x95F||0x978<=c&&c<=0x97F)) || break
-      ble/unicode/GraphemeCluster/find-previous-boundary "$s" "$b"; b=$ret
+      ble/unicode/GraphemeCluster/find-previous-boundary "$s" "$b"; k=$ret
+      # only a chain that starts with a consonant ("অ্যা" is অ্ + যা)
+      ble/util/s2c "${s:k:1}"; c=$ret
+      ((0x995<=c&&c<=0x9B9||c==0x9DC||c==0x9DD||c==0x9DF||c==0x9F0||c==0x9F1||0x915<=c&&c<=0x939||0x958<=c&&c<=0x95F||0x978<=c&&c<=0x97F)) || break
+      b=$k
     done
     ((b<i)) || b=$((i-1))
     ble/widget/.delete-char "$((b-i))" || ble/widget/.bell

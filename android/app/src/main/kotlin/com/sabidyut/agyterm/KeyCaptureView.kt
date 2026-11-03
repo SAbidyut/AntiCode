@@ -395,7 +395,9 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
             val out = ArrayList<String>()
             for (c in base) {
                 val prev = out.lastOrNull()
-                if (prev != null && endsWithLinker(prev) && isConsonant(c.codePointAt(0))) {
+                // (only a chain that starts with a consonant: "অ্যা" is অ্ + যা, as Unicode and
+                // Claude Code count it)
+                if (prev != null && endsWithLinker(prev) && isConsonant(prev.codePointAt(0)) && isConsonant(c.codePointAt(0))) {
                     out[out.size - 1] = prev + c
                 } else {
                     out += c
