@@ -564,7 +564,9 @@ body[data-screen='home']::before {
 }
 .reader .rl { white-space: pre-wrap; word-break: break-word; }
 .reader a { color: var(--accent-2); }
+.reader-badge[hidden] { display: none; }
 .reader-badge {
+  color: var(--text);
   position: absolute; top: 10px; right: 12px; z-index: 2;
   display: inline-flex; align-items: center; gap: 6px; font: 600 12.5px var(--ui-font);
   padding: 6px 12px; border-radius: 99px; background: var(--surface-3); border: 1px solid var(--line-strong);

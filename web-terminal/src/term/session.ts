@@ -74,11 +74,17 @@ export class TerminalSession {
     this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput);
     this.edit.onSelection = (sel, area) => {
       this.edit.onChanged?.(sel);
-      if (!sel || !area) return this.renderer.setSelection(null);
+      if (!sel || (sel.kind === 'input' && !area)) return this.renderer.setSelection(null);
       const ranges = [];
       for (let line = sel.a.line; line <= sel.b.line; line++) {
-        const i = line - area.top;
-        ranges.push({ line, x0: line === sel.a.line ? sel.a.x : area.start[i], x1: line === sel.b.line ? sel.b.x : area.end[i] });
+        if (sel.kind === 'screen') {
+          // (rows the renderer draws: it skips those far from the screen)
+          const many = sel.b.line - sel.a.line > 300; // (all of a long history: whole rows)
+          ranges.push({ line, x0: line === sel.a.line ? sel.a.x : 0, x1: line === sel.b.line ? sel.b.x : many ? this.term.cols : Math.max(1, this.edit.rowEnd(line)) });
+          continue;
+        }
+        const i = line - area!.top;
+        ranges.push({ line, x0: line === sel.a.line ? sel.a.x : area!.start[i], x1: line === sel.b.line ? sel.b.x : area!.end[i] });
       }
       this.renderer.setSelection({ ranges, a: sel.a, b: sel.b });
     };
@@ -96,7 +102,13 @@ export class TerminalSession {
     fab.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>';
     fab.addEventListener('click', () => this.scrollToBottom());
     this.renderer.onScrolled = (up) => fab.classList.toggle('hidden', !up);
-    this.el.append(this.renderer.el, this.readerEl, fab);
+    // the reader view says what it is, and how to leave it
+    this.readerBadge = document.createElement('button');
+    this.readerBadge.className = 'reader-badge';
+    this.readerBadge.hidden = true;
+    this.readerBadge.textContent = 'Reader view  ✕';
+    this.readerBadge.addEventListener('click', () => this.toggleReader(false));
+    this.el.append(this.renderer.el, this.readerEl, fab, this.readerBadge);
 
     // Replies the terminal generates itself (cursor position reports, device attributes…)
     this.term.onData((d) => this.reply(d));
@@ -382,6 +394,12 @@ export class TerminalSession {
    * The spot in the line being typed under a client point (null: not there; [loose]: the
    * nearest row of it — a selection handle dragged past its first or last row).
    */
+  /** The spot anywhere on the screen under a client point (selecting the output). */
+  screenSpot(clientX: number, clientY: number): Pos {
+    const { line } = this.renderer.cellAt(clientX, clientY);
+    return this.edit.screenSpot(line, this.renderer.colAt(clientX));
+  }
+
   editSpot(clientX: number, clientY: number, loose = false): Pos | null {
     const { line } = this.renderer.cellAt(clientX, clientY);
     const area = this.edit.area();
@@ -539,9 +557,11 @@ export class TerminalSession {
     return this.readerOpen;
   }
 
+  private readerBadge: HTMLButtonElement;
   toggleReader(open = !this.readerOpen) {
     this.readerOpen = open;
     this.readerEl.hidden = !open;
+    this.readerBadge.hidden = !open;
     this.renderer.el.hidden = open;
     if (open) this.renderReader(true);
   }

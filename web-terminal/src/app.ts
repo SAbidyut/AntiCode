@@ -831,13 +831,16 @@ kbd.addEventListener('paste', (e) => {
 kbd.addEventListener('blur', () => active?.setFocused(false));
 
 // ================================================================ the line being typed: select, cut, copy, paste
-// Long-press a word in the line being typed (an agent's input box, the shell's command line):
-// it's selected, with handles to drag and a bar — Cut, Copy, Paste, Select all — like any
-// text field. (Long-press anywhere else still opens the reader view.)
+// Long-press a word: it's selected where it is, with handles to drag and a bar, like any text
+// field — in the line being typed (an agent's input box, the shell's command line) Cut, Copy,
+// Paste, Select all; anywhere else Copy, Paste, Select all. (The reader view, all the text as
+// a page, is in the ⋮ menu.)
 let selBar: HTMLDivElement | null = null;
 let selOwner: TerminalSession | null = null;
 /** Where a bar without a selection (just Paste) was asked for. */
 let selBarAt: { x: number; y: number } | null = null;
+/** The bar is for the line being typed, or for the output (copy only). */
+let selBarKind: 'input' | 'screen' = 'input';
 
 function selectionBar(): HTMLDivElement {
   if (selBar) return selBar;
@@ -856,17 +859,18 @@ function selectionBar(): HTMLDivElement {
   return (selBar = bar);
 }
 
-function showSelectionBar(s: TerminalSession, at: { x: number; y: number } | null = null) {
+function showSelectionBar(s: TerminalSession, at: { x: number; y: number } | null = null, kind = selBarKind) {
   selOwner = s;
   selBarAt = at;
+  selBarKind = kind;
   const bar = selectionBar();
   const picked = !!s.edit.sel;
   const show = (act: string, on: boolean) => {
     (bar.querySelector(`[data-act=${act}]`) as HTMLElement).hidden = !on;
   };
-  show('cut', picked);
+  show('cut', picked && kind === 'input');
   show('copy', picked);
-  show('all', s.edit.hasText());
+  show('all', kind === 'screen' || s.edit.hasText());
   bar.hidden = false;
   placeSelectionBar();
 }
@@ -904,7 +908,8 @@ async function selectionAction(act: string) {
   const s = selOwner;
   if (!s || !s.alive) return endSelection();
   if (act === 'all') {
-    s.edit.selectAll();
+    if (selBarKind === 'screen') s.edit.selectAllScreen();
+    else s.edit.selectAll();
     showSelectionBar(s);
     return;
   }
@@ -932,7 +937,10 @@ async function selectionAction(act: string) {
       toast('Nothing to paste');
       return;
     }
-    if (s.edit.sel) await s.edit.deleteSelection(); // pasting over a selection replaces it
+    // pasting over a selection in the line being typed replaces it (the output's isn't
+    // touched: the clip goes where the cursor is)
+    if (s.edit.sel?.kind === 'input') await s.edit.deleteSelection();
+    else s.edit.clearSelection();
     s.paste(clip);
   }
 }
@@ -962,7 +970,13 @@ function bindTerminalGestures(s: TerminalSession) {
       showSelectionBar(s);
       return;
     }
-    const spot = s.editSpot(x, y - s.renderer.lineHeight * 0.9 - 8, true);
+    const ay = y - s.renderer.lineHeight * 0.9 - 8;
+    if (sel.kind === 'screen') {
+      const spot = s.screenSpot(x, ay);
+      s.edit.setScreenSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
+      return;
+    }
+    const spot = s.editSpot(x, ay, true);
     if (spot) s.edit.setSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
   };
   let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0;
@@ -1087,21 +1101,17 @@ function bindTerminalGestures(s: TerminalSession) {
     longTimer = window.setTimeout(() => {
       if (!moved) {
         haptic();
+        if (selOwner && selOwner !== s) endSelection();
+        // the word under the finger is selected where it is, like in any app: in the line
+        // being typed (cut, paste over it too), anywhere else to copy
         const spot = s.editSpot(startX, startY);
         if (spot) {
-          if (selOwner && selOwner !== s) endSelection();
           if (!s.edit.selectWord(spot)) s.edit.clearSelection();
-          showSelectionBar(s, { x: startX, y: startY });
-          return;
+          showSelectionBar(s, { x: startX, y: startY }, 'input');
+        } else {
+          if (!s.edit.selectScreenWord(s.screenSpot(startX, startY))) s.edit.clearSelection();
+          showSelectionBar(s, { x: startX, y: startY }, 'screen');
         }
-        s.toggleReader(true);
-        // the hint once; after that the gesture speaks for itself
-        let seen = false;
-        try {
-          seen = localStorage.getItem('readerHint') === '1';
-          localStorage.setItem('readerHint', '1');
-        } catch { /* no storage: show it */ }
-        if (!seen) toast('Reader view — select text to copy. Back to return.');
       }
     }, 650);
   });
@@ -1152,7 +1162,10 @@ function bindTerminalGestures(s: TerminalSession) {
     }
     if (caughtFling) return;
     if (Date.now() - t0 < 600) {
-      if (selOwner) endSelection(); // a tap anywhere ends a selection
+      if (selOwner) {
+        endSelection(); // a tap anywhere ends a selection (and does nothing else)
+        return;
+      }
       // Programs that take taps themselves (mouse mode) or fill the screen get the tap as it
       // is (not as a file to open — every row of a file manager has a file name on it).
       const own = s.mouseTracking || s.term.buffer.active.type === 'alternate';

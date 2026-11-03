@@ -363,7 +363,7 @@ export class BanglaRenderer {
     return Math.max(0, Math.min(this.term.cols, (clientX - rect.left) / (this.cellWidth * this.zoom)));
   }
 
-  private drawSelection(rowY: (i: number) => number) {
+  private drawSelection(rowY: (i: number) => number, first: number, last: number) {
     const sel = this.selection;
     if (!sel) {
       if (this.selEl && !this.selEl.hidden) {
@@ -402,11 +402,12 @@ export class BanglaRenderer {
     this.selEl.hidden = false;
     const cw = this.cellWidth;
     const lh = this.lineHeight;
-    const key = `${JSON.stringify(sel)}|${cw}|${lh}|${rowY(sel.a.line)}|${rowY(sel.b.line)}`;
+    // (only the rows being drawn: a selection of a whole long history has thousands)
+    const key = `${sel.ranges.length > 60 ? sel.ranges.length : JSON.stringify(sel.ranges)}|${JSON.stringify(sel.a)}|${JSON.stringify(sel.b)}|${first}|${last}|${cw}|${lh}|${rowY(sel.a.line)}|${rowY(sel.b.line)}`;
     if (key !== this.selKey) {
       this.selKey = key;
       this.selBoxes!.innerHTML = sel.ranges
-        .filter((r) => r.x1 > r.x0)
+        .filter((r) => r.x1 > r.x0 && r.line >= first && r.line <= last)
         .map((r) => `<i style="transform:translate(${(r.x0 * cw).toFixed(2)}px,${rowY(r.line)}px);width:${((r.x1 - r.x0) * cw).toFixed(2)}px"></i>`)
         .join('');
       const [ha, hb] = this.selHandles;
@@ -1216,7 +1217,7 @@ export class BanglaRenderer {
       }
       this.cursorEl.classList.toggle('focused', this.focused);
     }
-    this.drawSelection(rowY);
+    this.drawSelection(rowY, first, last);
     const scrolled = this.scrollPx >= lh;
     if (scrolled !== this.wasScrolled) {
       this.wasScrolled = scrolled;

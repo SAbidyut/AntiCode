@@ -36,6 +36,11 @@ export interface Selection {
   b: Pos;
   /** The area's top when made: the box moving (a reply came in) drops the selection. */
   top: number;
+  /**
+   * In the line being typed (it can be cut, pasted over) or anywhere on the screen (output:
+   * copy only).
+   */
+  kind: 'input' | 'screen';
 }
 
 export const cmp = (p: Pos, q: Pos) => (p.line - q.line) || (p.x - q.x);
@@ -271,8 +276,68 @@ export class LineEditor {
   setSelection(a: Pos, b: Pos, area = this.area()) {
     if (!area) return this.clearSelection();
     if (cmp(a, b) > 0) [a, b] = [b, a];
-    this.sel = { a, b, top: area.top };
+    this.sel = { a, b, top: area.top, kind: 'input' };
     this.onSelection?.(this.sel, area);
+  }
+
+  /** Text selected anywhere on the screen (the output): from [a] to [b]. */
+  setScreenSelection(a: Pos, b: Pos) {
+    if (cmp(a, b) > 0) [a, b] = [b, a];
+    this.sel = { a, b, top: this.buf.type === 'alternate' ? -2 : -1, kind: 'screen' };
+    this.onSelection?.(this.sel, null);
+  }
+
+  /** A spot anywhere on the screen (between two cells). */
+  screenSpot(line: number, col: number): Pos {
+    const buf = this.buf;
+    const l = Math.max(0, Math.min(buf.length - 1, line));
+    return { line: l, x: Math.max(0, Math.min(this.term.cols, Math.round(col))) };
+  }
+
+  /** After a row's last character (anything not blank). */
+  rowEnd(y: number): number {
+    const line = this.buf.getLine(y);
+    if (!line) return 0;
+    for (let x = Math.min(this.term.cols, line.length) - 1; x >= 0; x--) {
+      const c = (this.cell = line.getCell(x, this.cell));
+      if (!c || c.getWidth() === 0) continue;
+      const ch = c.getChars();
+      if (ch && ch !== ' ') return x + c.getWidth();
+    }
+    return 0;
+  }
+
+  /** Select the word (the run of non-spaces) at a spot on the screen. False on a blank. */
+  selectScreenWord(p: Pos): boolean {
+    const line = this.buf.getLine(p.line);
+    if (!line) return false;
+    const end = this.rowEnd(p.line);
+    const blank = (x: number) => {
+      const c = line.getCell(x, this.cell);
+      const ch = c?.getChars() ?? '';
+      return c?.getWidth() !== 0 && (!ch || ch === ' ');
+    };
+    let x = Math.min(p.x, end - 1);
+    if (x < 0 || blank(x)) x = p.x - 1;
+    if (x < 0 || x >= end || blank(x)) return false;
+    let a = x;
+    let b = x + 1;
+    while (a > 0 && !blank(a - 1)) a--;
+    while (b < end && !blank(b)) b++;
+    this.setScreenSelection({ line: p.line, x: a }, { line: p.line, x: b });
+    return true;
+  }
+
+  /** All of the screen's text (the whole history in a shell). */
+  selectAllScreen(): boolean {
+    const buf = this.buf;
+    let last = buf.length - 1;
+    while (last > 0 && this.rowEnd(last) === 0) last--;
+    let first = 0;
+    while (first < last && this.rowEnd(first) === 0) first++;
+    if (this.rowEnd(last) === 0) return false;
+    this.setScreenSelection({ line: first, x: 0 }, { line: last, x: this.rowEnd(last) });
+    return true;
   }
 
   clearSelection() {
@@ -284,6 +349,11 @@ export class LineEditor {
   /** The program redrew: a selection whose text moved away (Enter, the box moving) goes. */
   check() {
     if (!this.sel) return;
+    if (this.sel.kind === 'screen') {
+      // (another screen now — a full-screen program started or ended: it's gone)
+      if (this.sel.top !== (this.buf.type === 'alternate' ? -2 : -1)) this.clearSelection();
+      return;
+    }
     const area = this.area();
     if (!area || area.top !== this.sel.top || this.sel.b.line > area.bottom) this.clearSelection();
     else this.onSelection?.(this.sel, area);
@@ -341,6 +411,17 @@ export class LineEditor {
 
   selectedText(): string {
     const sel = this.sel;
+    if (sel?.kind === 'screen') {
+      // rows as they were printed: a wrapped row continues the one before it
+      let out = '';
+      for (let line = sel.a.line; line <= sel.b.line; line++) {
+        const s = line === sel.a.line ? sel.a.x : 0;
+        const e = line === sel.b.line ? sel.b.x : this.term.cols;
+        out += this.buf.getLine(line)?.translateToString(true, s, Math.max(s, e)) ?? '';
+        if (line < sel.b.line && !this.buf.getLine(line + 1)?.isWrapped) out += '\n';
+      }
+      return out;
+    }
     const area = this.area();
     if (!sel || !area) return '';
     let out = '';
@@ -362,7 +443,7 @@ export class LineEditor {
   /** Remove the selected text from the program's line (cursor to its end, ⌫ back to its start). */
   async deleteSelection(): Promise<void> {
     const sel = this.sel;
-    if (!sel) return;
+    if (!sel || sel.kind !== 'input') return;
     this.clearSelection();
     await this.moveCaret(sel.b);
     const gen = ++this.gen;
