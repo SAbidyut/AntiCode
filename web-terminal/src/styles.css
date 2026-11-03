@@ -487,6 +487,35 @@ body[data-screen='home']::before {
 }
 .term-preedit .pw { border-right: 2px solid var(--accent); padding-right: 1px; }
 .term-preedit u { text-decoration: underline; text-underline-offset: 3px; }
+/* text selected in the line being typed, and its two handles */
+.term-sel { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; }
+.term-sel[hidden] { display: none; }
+.term-sel i {
+  position: absolute; left: 0; top: 0; height: var(--lh);
+  background: var(--accent-2); opacity: 0.34; border-radius: 2px;
+}
+.sel-h {
+  position: absolute; left: 0; top: 0; width: 20px; height: 20px;
+  background: var(--accent-2); pointer-events: auto; touch-action: none;
+}
+.sel-h.a { margin-left: -20px; border-radius: 50% 0 50% 50%; }
+.sel-h.b { border-radius: 0 50% 50% 50%; }
+/* a finger-sized grip around the drop */
+.sel-h::before { content: ''; position: absolute; left: -14px; top: -8px; right: -14px; bottom: -16px; }
+.sel-bar {
+  position: fixed; left: 0; top: 0; z-index: 55; display: flex; padding: 4px;
+  background: var(--surface-3); border: 1px solid var(--line-strong); border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: sel-bar-in 0.14s var(--ease);
+}
+.sel-bar[hidden] { display: none; }
+.sel-bar button {
+  background: none; border: 0; color: var(--text); font: 500 14px var(--ui-font);
+  padding: 9px 13px; border-radius: 10px; white-space: nowrap;
+}
+.sel-bar button[hidden] { display: none; }
+.sel-bar button:active { background: var(--line-strong); }
+@keyframes sel-bar-in { from { opacity: 0; } to { opacity: 1; } }
 .term-cursor {
   position: absolute; left: 0; top: 0;
   width: var(--cw); height: var(--lh);

@@ -16,6 +16,7 @@
 // seamlessly at any zoom level.
 
 import type { Terminal, IBufferCell, IBufferLine, IMarker } from '@xterm/headless';
+import { isRule } from './lineedit';
 
 export interface TermTheme {
   background: string;
@@ -329,6 +330,92 @@ export class BanglaRenderer {
     window.setTimeout(() => this.schedule(), 300);
     this.schedule();
   }
+  /**
+   * Text selected in the line being typed: a highlight per row, and a handle at each end to
+   * drag (see LineEditor).
+   */
+  private selection: { ranges: { line: number; x0: number; x1: number }[]; a: { line: number; x: number }; b: { line: number; x: number } } | null = null;
+  private selEl: HTMLDivElement | null = null;
+  private selBoxes: HTMLDivElement | null = null;
+  private selHandles: HTMLDivElement[] = [];
+  private selKey = '';
+  /** A selection handle is dragged (a = start, b = end). */
+  onHandle?: (end: 'a' | 'b', phase: 'down' | 'move' | 'up', clientX: number, clientY: number) => void;
+  /** Drawn (or moved with the screen): the app keeps its Copy / Paste bar next to it. */
+  onSelectionDrawn?: () => void;
+  setSelection(sel: BanglaRenderer['selection']) {
+    this.selection = sel;
+    this.schedule();
+  }
+  /** Where the selection is on the screen (client px), or null. */
+  selectionRect(): { left: number; top: number; right: number; bottom: number } | null {
+    if (!this.selection || !this.selBoxes || this.selEl?.hidden) return null;
+    let r: { left: number; top: number; right: number; bottom: number } | null = null;
+    for (const el of [...this.selBoxes.children, ...this.selHandles]) {
+      const b = el.getBoundingClientRect();
+      r = r ? { left: Math.min(r.left, b.left), top: Math.min(r.top, b.top), right: Math.max(r.right, b.right), bottom: Math.max(r.bottom, b.bottom) } : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+    }
+    return r;
+  }
+  /** Fractional cell column under a client x (a tap between two letters picks the nearer gap). */
+  colAt(clientX: number): number {
+    const rect = this.viewport.getBoundingClientRect();
+    return Math.max(0, Math.min(this.term.cols, (clientX - rect.left) / (this.cellWidth * this.zoom)));
+  }
+
+  private drawSelection(rowY: (i: number) => number) {
+    const sel = this.selection;
+    if (!sel) {
+      if (this.selEl && !this.selEl.hidden) {
+        this.selEl.hidden = true;
+        this.selKey = '';
+      }
+      return;
+    }
+    if (!this.selEl) {
+      const el = (this.selEl = document.createElement('div'));
+      el.className = 'term-sel';
+      this.selBoxes = document.createElement('div');
+      el.append(this.selBoxes);
+      for (const end of ['a', 'b'] as const) {
+        const h = document.createElement('div');
+        h.className = `sel-h ${end}`;
+        const report = (phase: 'down' | 'move' | 'up') => (e: PointerEvent) => {
+          // the screen's own gestures (scroll, tap) must not see a handle being dragged
+          e.stopPropagation();
+          if (phase === 'down') {
+            e.preventDefault();
+            h.setPointerCapture(e.pointerId);
+          } else if (!h.hasPointerCapture(e.pointerId)) return;
+          if (phase === 'up') h.releasePointerCapture(e.pointerId);
+          this.onHandle?.(end, phase, e.clientX, e.clientY);
+        };
+        h.addEventListener('pointerdown', report('down'));
+        h.addEventListener('pointermove', report('move'));
+        h.addEventListener('pointerup', report('up'));
+        h.addEventListener('pointercancel', report('up'));
+        this.selHandles.push(h);
+        el.append(h);
+      }
+      this.viewport.append(el);
+    }
+    this.selEl.hidden = false;
+    const cw = this.cellWidth;
+    const lh = this.lineHeight;
+    const key = `${JSON.stringify(sel)}|${cw}|${lh}|${rowY(sel.a.line)}|${rowY(sel.b.line)}`;
+    if (key !== this.selKey) {
+      this.selKey = key;
+      this.selBoxes!.innerHTML = sel.ranges
+        .filter((r) => r.x1 > r.x0)
+        .map((r) => `<i style="transform:translate(${(r.x0 * cw).toFixed(2)}px,${rowY(r.line)}px);width:${((r.x1 - r.x0) * cw).toFixed(2)}px"></i>`)
+        .join('');
+      const [ha, hb] = this.selHandles;
+      ha.style.transform = `translate(${(sel.a.x * cw).toFixed(2)}px, ${rowY(sel.a.line) + lh}px)`;
+      hb.style.transform = `translate(${(sel.b.x * cw).toFixed(2)}px, ${rowY(sel.b.line) + lh}px)`;
+    }
+    this.onSelectionDrawn?.();
+  }
+
   /** Called when the view leaves / returns to the bottom of the output. */
   onScrolled?: (scrolledUp: boolean) => void;
   private wasScrolled = false;
@@ -1129,6 +1216,7 @@ export class BanglaRenderer {
       }
       this.cursorEl.classList.toggle('focused', this.focused);
     }
+    this.drawSelection(rowY);
     const scrolled = this.scrollPx >= lh;
     if (scrolled !== this.wasScrolled) {
       this.wasScrolled = scrolled;
@@ -1152,15 +1240,6 @@ export class BanglaRenderer {
     const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY + this.scrollOffset));
     return { x, y, line };
   }
-}
-
-/** A horizontal rule drawn with box characters (the border of a TUI's input box). */
-function isRule(text: string): boolean {
-  const t = text.trim();
-  if (t.length < 8) return false;
-  let n = 0;
-  for (const ch of t) if ('─━╌╍┄┅═'.includes(ch)) n++;
-  return n / t.length >= 0.8;
 }
 
 /** Bengali vowel signs, virama, candrabindu/anusvara/visarga, nukta, au length mark. */

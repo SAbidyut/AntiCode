@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/headless';
 import { installWidths } from './conjuncts';
 import type { Bridge, SessionKind } from '../bridge';
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
+import { LineEditor, type Pos } from './lineedit';
 
 const RAW_KEEP = 64 * 1024;
 
@@ -53,6 +54,8 @@ export class TerminalSession {
   cwd = '';
   /** The folder the session was started in. */
   startDir = '';
+  /** The line being typed as a text field: tap to move the cursor, select, copy, cut. */
+  readonly edit: LineEditor;
 
   constructor(
     private bridge: Bridge,
@@ -68,6 +71,17 @@ export class TerminalSession {
     this.setProgramWidths(kind === 'agy');
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
+    this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput);
+    this.edit.onSelection = (sel, area) => {
+      this.edit.onChanged?.(sel);
+      if (!sel || !area) return this.renderer.setSelection(null);
+      const ranges = [];
+      for (let line = sel.a.line; line <= sel.b.line; line++) {
+        const i = line - area.top;
+        ranges.push({ line, x0: line === sel.a.line ? sel.a.x : area.start[i], x1: line === sel.b.line ? sel.b.x : area.end[i] });
+      }
+      this.renderer.setSelection({ ranges, a: sel.a, b: sel.b });
+    };
     this.loadMeta();
 
     this.el = document.createElement('div');
@@ -91,6 +105,7 @@ export class TerminalSession {
       this.saveModes();
       this.renderer.lastOutput = performance.now();
       this.renderer.scheduleEager();
+      this.edit.check();
       if (this.readerOpen) this.scheduleReader();
       this.onActivity?.();
     });
@@ -152,7 +167,11 @@ export class TerminalSession {
       else if (cmd === 'done') {
         this.renderer.anchorBottom = false;
         this.setProgramWidths(false); // the shell's prompt: its way of counting
-      } else if (cmd === 'exec') this.setProgramWidths(false); // a command starts (by letters…)
+        this.edit.atPrompt = true;
+      } else if (cmd === 'exec') {
+        this.setProgramWidths(false); // a command starts (by letters…)
+        this.edit.atPrompt = false;
+      }
       else if (cmd === 'widths') this.setProgramWidths(rest[0] === 'joined'); // …unless it's agy
       else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
@@ -334,12 +353,41 @@ export class TerminalSession {
   /** User input → PTY. Jumps back to the live view. */
   input(data: string) {
     if (!this.alive) return;
+    // typing: a cursor walk stops, a selection goes (the line changes under it)
+    this.edit.cancel();
+    this.edit.clearSelection();
+    this.onTyped?.();
     this.trackInput(data);
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
       this.renderer.schedule();
     }
     this.bridge.write(this.id, data);
+  }
+
+  /** The user typed (or pasted) something. */
+  onTyped?: () => void;
+
+  /** Keys the app sends for the user (moving the cursor to a tap, a cut). */
+  private sendKeys(data: string) {
+    if (!this.alive) return;
+    if (this.renderer.scrollPx) {
+      this.renderer.scrollPx = 0;
+      this.renderer.schedule();
+    }
+    this.bridge.write(this.id, data);
+  }
+
+  /**
+   * The spot in the line being typed under a client point (null: not there; [loose]: the
+   * nearest row of it — a selection handle dragged past its first or last row).
+   */
+  editSpot(clientX: number, clientY: number, loose = false): Pos | null {
+    const { line } = this.renderer.cellAt(clientX, clientY);
+    const area = this.edit.area();
+    if (!area) return null;
+    const l = loose ? Math.max(area.top, Math.min(area.bottom, line)) : line;
+    return this.edit.clamp(l, this.renderer.colAt(clientX), area);
   }
 
   /** Text from the compose box: bracketed paste for multi-line text, then Enter. */
