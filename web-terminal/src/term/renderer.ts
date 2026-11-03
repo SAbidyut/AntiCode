@@ -391,12 +391,14 @@ export class BanglaRenderer {
   /** A fling ran into an end at [v] px/ms: a short bounce. */
   bounce(v: number) {
     if (!this.opts.animate || !BanglaRenderer.canStretch) return;
-    const amp = Math.max(-this.maxOverscroll, Math.min(this.maxOverscroll, v * 45));
-    if (Math.abs(amp) < 6) return;
+    // gentle: a hint that the end is here, not a jump
+    const lim = this.maxOverscroll * 0.45;
+    const amp = Math.max(-lim, Math.min(lim, v * 14));
+    if (Math.abs(amp) < 4) return;
     this.setOverscroll(0);
     this.overscrollAnim = this.zoomLayer.animate(
       [{ translate: '0 0' }, { translate: `0 ${amp.toFixed(1)}px`, offset: 0.28 }, { translate: '0 0' }],
-      { duration: 520, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+      { duration: 460, easing: 'cubic-bezier(0.25, 0.8, 0.35, 1)' },
     );
     this.overscrollAnim.id = 'overscroll';
   }

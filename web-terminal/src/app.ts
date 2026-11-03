@@ -804,7 +804,22 @@ kbd.addEventListener('blur', () => active?.setFocused(false));
 // ================================================================ touch: tap, scroll (with inertia), pinch, long-press
 function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
-  let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0, vel = 0;
+  let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0;
+  /** The finger's recent positions: a fling's speed is measured over them, not two events. */
+  let track: [number, number][] = [];
+  /**
+   * Fling speed (px/ms) from the last ~100 ms of the drag — touch events can come 1 ms apart
+   * (two in one frame), and the speed between just those two was huge: the text flew across
+   * everything and slammed into the end. Capped like a phone's lists.
+   */
+  const flingSpeed = (now: number) => {
+    const recent = track.filter(([t]) => now - t <= 100);
+    if (recent.length < 2) return 0;
+    const [t1, y1] = recent[0];
+    const [t2, y2] = recent[recent.length - 1];
+    if (now - t2 > 60 || t2 - t1 < 20) return 0; // the finger stopped before letting go
+    return Math.max(-3.5, Math.min(3.5, (y2 - y1) / (t2 - t1)));
+  };
   let longTimer = 0, inertia = 0, caughtFling = false;
   /** Pulled past the top or bottom of the scrollback (px, the rubber band). */
   let stretch = 0;
@@ -878,7 +893,7 @@ function bindTerminalGestures(s: TerminalSession) {
         inertia = 0;
         return;
       }
-      v *= Math.pow(0.95, dt / 16);
+      v *= Math.pow(0.945, dt / 16);
       inertia = moving && Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
     };
     inertia = requestAnimationFrame(step);
@@ -899,7 +914,7 @@ function bindTerminalGestures(s: TerminalSession) {
     startY = lastY = e.clientY;
     lastT = performance.now();
     acc = 0;
-    vel = 0;
+    track = [[lastT, e.clientY]];
     moved = false;
     t0 = Date.now();
     clearTimeout(longTimer);
@@ -935,8 +950,8 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!moved) return;
     const now = performance.now();
     const dy = e.clientY - lastY;
-    const dt = Math.max(1, now - lastT);
-    vel = 0.7 * (dy / dt) + 0.3 * vel;
+    track.push([now, e.clientY]);
+    if (track.length > 24) track.shift();
     lastY = e.clientY;
     lastT = now;
     dragScroll(dy, e.clientX, e.clientY);
@@ -958,7 +973,8 @@ function bindTerminalGestures(s: TerminalSession) {
     }
     if (moved) {
       if (letGo()) return; // springs back instead of flinging on
-      if (performance.now() - lastT < 80 && Math.abs(vel) > 0.2) startInertia(vel, e.clientX, e.clientY);
+      const v = flingSpeed(performance.now());
+      if (Math.abs(v) > 0.2) startInertia(v, e.clientX, e.clientY);
       return;
     }
     if (caughtFling) return;
