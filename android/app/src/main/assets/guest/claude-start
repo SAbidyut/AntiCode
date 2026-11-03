@@ -1,0 +1,10 @@
+#!/bin/bash
+# Started by the app's "Claude Code" button: install if needed, run claude, then stay in a shell.
+export PATH="$HOME/.local/bin:$PATH"
+command -v claude >/dev/null 2>&1 || /usr/local/bin/claude-setup --auto
+if command -v claude >/dev/null 2>&1; then
+  claude
+else
+  echo "claude was not found — run 'claude-setup' and try again."
+fi
+exec bash -l

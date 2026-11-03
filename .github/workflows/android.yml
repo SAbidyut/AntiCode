@@ -1,0 +1,160 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The terminal UI against real bash in Chromium (includes the startup queries the
+  # Antigravity CLI sends — a minifier bug once froze the screen on them).
+  web-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-terminal/package-lock.json
+      - name: Build and test
+        working-directory: web-terminal
+        run: |
+          npm ci
+          npm run build
+          npm i --no-save playwright@1
+          npx playwright install --with-deps chromium
+          node dev/bridge-server.mjs > bridge.log 2>&1 &
+          npx vite preview --port 4173 --strictPort > preview.log 2>&1 &
+          sleep 4
+          node dev/e2e.mjs
+
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-terminal/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build terminal UI
+        working-directory: web-terminal
+        run: |
+          npm ci
+          npm run build
+
+      - name: Fetch proot (Termux builds)
+        run: scripts/fetch-proot.sh
+
+      - name: Fetch ble.sh (bash autosuggestions)
+        run: scripts/fetch-blesh.sh
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease assembleDebug
+
+      - name: Rename
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk AntiCode.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk AntiCode-debug.apk
+
+      # The emulator jobs get the debug APK through the cache (its own space, old entries
+      # dropped by GitHub on their own) — the artifact storage quota can fill up.
+      - uses: actions/cache/save@v4
+        with:
+          path: AntiCode-debug.apk
+          key: debug-apk-${{ github.sha }}-${{ github.run_attempt }}
+
+      # also as artifacts for a few days — a full storage quota mustn't fail the build
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: AntiCode-apk
+          path: AntiCode.apk
+          retention-days: 3
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: AntiCode-debug-apk
+          path: AntiCode-debug.apk
+          retention-days: 3
+
+      # Easiest way to get the APK on a phone: the "latest" release on the repo page.
+      # Needs Settings → Actions → General → Workflow permissions → "Read and write".
+      # Without it the APK is still available as the run's artifact.
+      - name: Publish "latest" release
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest AntiCode.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "AntiCode — সর্বশেষ বিল্ড" \
+            --notes "ফোনে এই পেজ খুলে **AntiCode.apk** নামিয়ে ইনস্টল করুন। (commit ${GITHUB_SHA::7}, branch ${GITHUB_REF_NAME})"
+
+  # Boots an emulator and runs the app's self test: download + install Ubuntu, start it
+  # with proot, run the first-time setup (apt + official Antigravity installer) and
+  # `agy --version`. Everything is logged under the logcat tag AgySelfTest.
+  smoke-test:
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # 34 = Android 14: keyboards there use newer calls (replaceText for a suggestion).
+        # Watched, but not blocking until it has proven stable in CI.
+        api: [30, 34]
+    continue-on-error: ${{ matrix.api == 34 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: AntiCode-debug.apk
+          key: debug-apk-${{ github.sha }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -partition-size 4096
+          script: bash scripts/emulator-selftest.sh AntiCode-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: selftest-screenshots-${{ matrix.api }}
+          path: selftest-shots/
+          if-no-files-found: ignore
+          retention-days: 3

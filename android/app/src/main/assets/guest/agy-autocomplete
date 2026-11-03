@@ -1,0 +1,8 @@
+#!/bin/sh
+# Turn the shell's autosuggestions / completion menu (ble.sh) on or off.
+f="$HOME/.config/agy-terminal/no-autocomplete"
+case "$1" in
+  on)  rm -f "$f"; echo "Autosuggestions on (new shells)." ;;
+  off) mkdir -p "${f%/*}"; touch "$f"; echo "Autosuggestions off (new shells)." ;;
+  *)   [ -f "$f" ] && s=off || s=on; echo "usage: agy-autocomplete on | off   (now: $s)" ;;
+esac

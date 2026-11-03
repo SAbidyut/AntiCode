@@ -1,0 +1,9 @@
+#!/bin/sh
+# Opens a URL on the phone (handled by the AntiCode app). The token tells the app this
+# request really comes from here; without it the app asks before opening anything.
+url="$1"
+[ -z "$url" ] && exit 1
+url=$(printf '%s' "$url" | tr -d '\000-\037\177')
+seq=$(printf '\033]7770;open;%s;%s\007' "${ANTICODE_LINK_TOKEN:-}" "$url")
+printf '%s' "$seq" > /dev/tty 2>/dev/null || printf '%s' "$seq"
+echo "Opening: $url" >&2

@@ -1,0 +1,193 @@
+# Agy Terminal shell look — sourced from ~/.bashrc (rewritten when the app updates).
+# Prompt styles:  agy-prompt powerline   (default, Oh-My-Posh-like segments)
+#                 agy-prompt simple      (one short line)
+
+# ---------------------------------------------------------------- ble.sh (autosuggestions)
+# Fish-like grey suggestions from history (→ or End accepts), Tab completion menu and
+# syntax colours. Off with:  agy-autocomplete off
+if [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && [ -z "$CLAUDECODE" ] && [ "$TERM" != dumb ] \
+   && [ -f /usr/share/blesh/ble.sh ] && [ ! -f "$HOME/.config/agy-terminal/no-autocomplete" ]; then
+  source /usr/share/blesh/ble.sh --noattach
+fi
+# bash's own completions for apt, git, systemctl … (package: bash-completion)
+if [ -z "$BASH_COMPLETION_VERSINFO" ] && [ -f /usr/share/bash-completion/bash_completion ] && [[ $- == *i* ]]; then
+  . /usr/share/bash-completion/bash_completion
+fi
+
+alias ls='ls --color=auto'
+alias ll='ls -alh --color=auto'
+alias la='ls -A --color=auto'
+alias grep='grep --color=auto'
+# after clearing the screen the prompt starts at the very top, without the blank line
+clear() { command clear "$@"; __agy_prompted=; }
+reset() { command reset "$@"; __agy_prompted=; }
+
+__agy_style_file="$HOME/.config/agy-terminal/prompt"
+
+# ---------------------------------------------------------------- git branch (no subprocess)
+__agy_git_branch() {
+  __agy_branch=
+  local d=$PWD head
+  while :; do
+    if [ -f "$d/.git/HEAD" ]; then
+      read -r head < "$d/.git/HEAD"
+      case $head in
+        ref:\ refs/heads/*) __agy_branch=${head#ref: refs/heads/} ;;
+        *) __agy_branch=${head:0:7} ;;
+      esac
+      __agy_branch=${__agy_branch//[[:cntrl:]]/?}
+      return
+    fi
+    [ -z "$d" ] || [ "$d" = / ] && return
+    d=${d%/*}
+  done
+}
+
+# ---------------------------------------------------------------- prompt
+__agy_prompt() {
+  local status=$?
+  __agy_in_prompt=1
+  # tell the app the command is done (its "task finished" notification), and where the
+  # shell is (OSC 7: a file name tapped in the terminal is looked for here)
+  printf '\e]7770;done\a\e]7;file://android%s\a' "${PWD//[[:cntrl:]]/}"
+
+  local style=powerline
+  [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
+
+  local path=${PWD/#$HOME/\~}
+  # a folder name can't smuggle escape sequences into the title or the bar
+  path=${path//[[:cntrl:]]/?}
+  # Text that comes from outside (folder names, git branches) is never put into PS1
+  # itself — bash would expand $(…) in it — but referenced as ${__agy_txt[i]}.
+  __agy_txt=()
+  __agy_path=$path
+  # a blank line between the last output and the prompt bar (not on the first prompt)
+  local gap=
+  [ -n "$__agy_prompted" ] && gap='\n'
+  __agy_prompted=1
+  local ok='166;227;161' bad='243;139;168'
+  local mark=$ok
+  (( status != 0 )) && mark=$bad
+  # The clock sits at the right edge of the screen. The app draws it there (it's not
+  # text in the terminal), so it stays at the edge through zooming and resizing. Only
+  # when the bar leaves room for it (decided after fitting the bar, below).
+  local cols=${COLUMNS:-80} clock= rclock=
+  (( cols >= 30 )) && printf -v clock '%(%I:%M %p)T' -1
+
+  if [ "$style" = simple ]; then
+    PS1="${gap}\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+    __agy_in_prompt=
+    return
+  fi
+
+  __agy_git_branch
+
+  # segments: "r;g;b|icon text" — dark text on pastel backgrounds
+  local dir_icon=$''
+  [ "$PWD" = "$HOME" ] && dir_icon=$''
+  local -a segs=()
+  segs+=("245;169;127|"$''" ${USER:-root}")
+  segs+=("243;139;168|${dir_icon} ${path}")
+  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$''" ${__agy_branch}")
+  (( status != 0 )) && segs+=("235;111;146|"$''" ${status}")
+
+  # Fit the phone's width (leaving room for the clock): shorten the path.
+  local width i room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
+  __agy_width() {
+    local t
+    width=2
+    for i in "${segs[@]}"; do t=${i#*|}; width=$(( width + ${#t} + 3 )); done
+  }
+  __agy_width
+  if (( width > room )); then
+    local short=${path##*/}
+    local parent=${path%/*}; parent=${parent##*/}
+    [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
+    segs[1]="243;139;168|${dir_icon} ${short}"
+    __agy_width
+    (( width > room )) && segs[1]="243;139;168|${dir_icon} ${path##*/}"
+  fi
+
+  # the clock only if it won't cover the bar
+  [ -n "$clock" ] && (( width <= room )) && rclock="\[\e]7770;rprompt;${clock}\a\]"
+
+  local fg='30;30;46' line= n=${#segs[@]} bg next
+  for (( i = 0; i < n; i++ )); do
+    bg=${segs[i]%%|*}
+    (( i == 0 )) && line+="\[\e[0m\e[38;2;${bg}m\]"$''
+    __agy_txt[i]=${segs[i]#*|}
+    line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\] \${__agy_txt[$i]} "
+    if (( i + 1 < n )); then
+      next=${segs[i + 1]%%|*}
+      line+="\[\e[48;2;${next}m\e[38;2;${bg}m\]"$''
+    else
+      line+="\[\e[0m\e[38;2;${bg}m\]"$''"\[\e[0m\]"
+    fi
+  done
+
+  # window title (shown on the app's tab) + segments + input line
+  PS1="${gap}${rclock}\[\e]0;\${__agy_path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  __agy_in_prompt=
+}
+PROMPT_COMMAND=__agy_prompt
+
+# ---------------------------------------------------------------- agents on demand
+# Typing 'agy' or 'claude' before they are installed installs them first.
+command_not_found_handle() {
+  case "$1" in
+    agy) /usr/local/bin/agy-setup --auto && hash -r && command agy "${@:2}"; return ;;
+    claude) /usr/local/bin/claude-setup --auto && hash -r && command claude "${@:2}"; return ;;
+  esac
+  if [ -x /usr/lib/command-not-found ]; then /usr/lib/command-not-found -- "$1"; return $?; fi
+  printf '%s: command not found\n' "$1" >&2
+  return 127
+}
+
+# ---------------------------------------------------------------- ble.sh look & attach
+if [[ ${BLE_VERSION-} ]]; then
+  bleopt char_width_mode=west          # same widths as the app's renderer, no terminal probing
+  # suggestions after a short pause, not on every key (each key costs more under proot)
+  bleopt complete_auto_delay=120
+  bleopt highlight_timeout_sync=20 complete_timeout_auto=800 2>/dev/null
+  bleopt complete_menu_style=align-nowrap
+  bleopt edit_abell= edit_vbell=       # no beeps or flashes
+  bleopt exec_errexit_mark=            # the prompt already shows a failed command's status
+  bleopt exec_elapsed_mark=            # no "[ble: elapsed …]" lines
+  # After a resize (zooming changes the width), redraw the prompt where it was. The
+  # default guesses how the terminal re-wrapped it and gets it wrong for a two-line
+  # prompt: every zoom left an extra blank line or a copy of the prompt bar behind.
+  bleopt canvas_winch_action=redraw-prev
+  bleopt prompt_eol_mark=$'\e[38;2;108;112;134m⏎\e[m'
+  ble-face auto_complete='fg=#6c7086'
+  ble-face command_builtin='fg=#f38ba8' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'
+  ble-face command_alias='fg=#89dceb' command_keyword='fg=#89b4fa'
+  ble-face syntax_quoted='fg=#a6e3a1' syntax_comment='fg=#6c7086' syntax_error='fg=#1e1e2e,bg=#f38ba8'
+  ble-face filename_directory='underline,fg=#89b4fa' region='bg=#45475a'
+  # ⌫ removes a whole letter cluster — a letter with its vowel signs, a conjunct (ক্ষ) —
+  # like Claude Code and the app's Bangla keyboard do (ble.sh itself removes one code point).
+  function ble/widget/anticode-delete-backward-cluster {
+    local s=$_ble_edit_str i=$_ble_edit_ind b ret c k
+    ((i>0)) || { ble/widget/.bell; return 1; }
+    ble/unicode/GraphemeCluster/find-previous-boundary "$s" "$i"; b=$ret
+    # conjuncts: consonant + virama (+ ZWJ) + consonant stay together (Unicode GB9c) — the
+    # same rule the app's keyboard counts with
+    while ((b>=2)); do
+      k=$((b-1))
+      ble/util/s2c "${s:k:1}"
+      if ((ret==0x200D)); then ((k>=1)) || break; ((k--)); ble/util/s2c "${s:k:1}"; fi
+      ((ret==0x9CD||ret==0x94D)) || break
+      ble/util/s2c "${s:b:1}"; c=$ret
+      ((0x995<=c&&c<=0x9B9||c==0x9DC||c==0x9DD||c==0x9DF||c==0x9F0||c==0x9F1||0x915<=c&&c<=0x939||0x958<=c&&c<=0x95F||0x978<=c&&c<=0x97F)) || break
+      ble/unicode/GraphemeCluster/find-previous-boundary "$s" "$b"; b=$ret
+    done
+    ((b<i)) || b=$((i-1))
+    ble/widget/.delete-char "$((b-i))" || ble/widget/.bell
+  }
+  function anticode/ble-keys {
+    ble-bind -m emacs -f 'DEL' 'delete-region-or anticode-delete-backward-cluster'
+    ble-bind -m emacs -f 'C-?' 'delete-region-or anticode-delete-backward-cluster'
+    ble-bind -m emacs -f 'C-h' 'delete-region-or anticode-delete-backward-cluster'
+  }
+  blehook/eval-after-load keymap_emacs anticode/ble-keys 2>/dev/null || anticode/ble-keys
+  ble-attach
+fi

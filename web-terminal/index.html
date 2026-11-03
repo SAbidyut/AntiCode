@@ -1,98 +1,116 @@
 <!doctype html>
-<html lang="bn">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#14161f" />
-    <title>Agy টার্মিনাল</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=overlays-content" />
+    <meta name="theme-color" content="#0b0d12" />
+    <title>AntiCode</title>
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
-  <body data-screen="home" data-theme="night">
-    <!-- ============ HOME ============ -->
+  <body data-screen="boot" data-theme="midnight">
+    <!-- ================= HOME ================= -->
     <main id="home">
-      <header class="hero">
-        <div class="logo">✦</div>
-        <div>
-          <h1>Agy টার্মিনাল</h1>
-          <p class="muted">ফোনে Ubuntu + Antigravity CLI, সুন্দর বাংলায়</p>
+      <header class="appbar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 108 108"><defs><linearGradient id="logo-g" x1="54" y1="30" x2="54" y2="78" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F5A97F"/><stop offset=".5" stop-color="#F38BA8"/><stop offset="1" stop-color="#8AADF4"/></linearGradient></defs><path fill="url(#logo-g)" d="M54,30 C56.2,30 57.6,31.1 58.6,33.2 L76.4,72.6 C77.6,75.3 75.8,78 72.9,78 L71.2,78 C69.4,78 68.1,77 67.3,75.4 L54,46.2 L40.7,75.4 C39.9,77 38.6,78 36.8,78 L35.1,78 C32.2,78 30.4,75.3 31.6,72.6 L49.4,33.2 C50.4,31.1 51.8,30 54,30 Z"/><path fill="#A6E3A1" d="M47,60.5 h14 a2.5,2.5 0 0 1 2.5,2.5 v1 a2.5,2.5 0 0 1 -2.5,2.5 h-14 a2.5,2.5 0 0 1 -2.5,-2.5 v-1 a2.5,2.5 0 0 1 2.5,-2.5 Z"/></svg>
+          </div>
+          <div>
+            <h1>AntiCode</h1>
+            <p>AI coding agents in your pocket</p>
+          </div>
         </div>
+        <button class="icon-btn" id="settings-btn" aria-label="Settings"><i data-icon="settings"></i></button>
       </header>
 
-      <section class="card" id="home-sessions" hidden>
-        <h2>চলমান সেশন</h2>
+      <!-- portrait: one column; landscape: the agents on the left, the rest beside them -->
+      <div class="home-main">
+        <section class="hero" id="hero"></section>
+      </div>
+
+      <div class="home-side">
+      <section class="group" id="home-sessions" hidden>
+        <h2 class="group-title">Open sessions</h2>
         <div class="list"></div>
       </section>
 
-      <section class="card" id="ubuntu-card">
-        <h2>◉ এই ফোনে Ubuntu</h2>
-        <div class="card-body"></div>
+      <section class="group">
+        <h2 class="group-title">Remote control</h2>
+        <div class="list">
+          <div class="remote-row">
+            <span class="li-icon tint-blue"><i data-icon="sparkle"></i></span>
+            <span class="li-main">
+              <span class="li-title">Antigravity</span>
+              <button class="cmd-chip" id="copy-remote-cmd" aria-label="Copy command"><code>agy --remote-control</code><i data-icon="copy"></i></button>
+            </span>
+            <button class="open-btn" id="remote-btn">Open</button>
+          </div>
+          <div class="remote-row">
+            <span class="li-icon tint-clay"><i data-icon="claude"></i></span>
+            <span class="li-main">
+              <span class="li-title">Claude Code</span>
+              <button class="cmd-chip" id="copy-claude-cmd" aria-label="Copy command"><code>claude --remote-control</code><i data-icon="copy"></i></button>
+            </span>
+            <button class="open-btn" id="claude-remote-btn">Open</button>
+          </div>
+        </div>
       </section>
 
-      <section class="card">
-        <h2>⇄ রিমোট কন্ট্রোল (Mac / PC)</h2>
-        <ol class="steps">
-          <li>Mac এর টার্মিনালে চালান:
-            <div class="cmd"><code>agy --remote-control</code><button id="copy-remote-cmd" class="chip">কপি</button></div>
-            অথবা চলমান agy এর ভিতরে লিখুন <code>/remote-control</code>
-          </li>
-          <li>নিচের বাটনে চাপ দিয়ে একই Google অ্যাকাউন্টে লগইন করুন — সেখানে Mac এ চলা সব কাজ দেখা যাবে, চাপ দিলে কন্ট্রোল করা যাবে, agy কিছু চাইলে নোটিফিকেশন আসবে।</li>
-        </ol>
-        <button id="remote-btn" class="btn primary big">রিমোট ড্যাশবোর্ড খুলুন</button>
-        <details>
-          <summary>ড্যাশবোর্ডের ঠিকানা</summary>
-          <input id="remote-url" type="url" spellcheck="false" />
-          <p class="muted small">agy যে লিংক দেখায়, সেটা এখানে বসাতে পারেন।</p>
-        </details>
+      <section class="card" id="bg-card" hidden>
+        <div class="card-head">
+          <div class="card-icon tint-green"><i data-icon="power"></i></div>
+          <div>
+            <h3>Keep sessions running</h3>
+            <p>Android may stop AntiCode in the background.</p>
+          </div>
+        </div>
+        <p class="note">
+          Let AntiCode run without battery limits, so agents and shells keep working while you use other apps.
+          On Xiaomi, Oppo, Vivo, Realme or Samsung phones, also lock AntiCode in Recents (long-press its card → Lock).
+        </p>
+        <button class="btn btn-secondary" id="bg-btn"><i data-icon="shield"></i><span>Allow</span></button>
       </section>
 
-      <section class="card">
-        <h2>Aa দেখতে কেমন</h2>
-        <div id="sample"></div>
-        <label class="field">ফন্ট সাইজ <input id="font-size" type="range" min="9" max="28" step="1" /></label>
-        <label class="field">বাংলা অক্ষরের আকার <input id="bn-scale" type="range" min="0.8" max="1.3" step="0.05" /></label>
-        <label class="field">থিম
-          <select id="theme">
-            <option value="night">রাত (ডার্ক)</option>
-            <option value="light">দিন (লাইট)</option>
-          </select>
-        </label>
+      <section class="card" id="storage-card">
+        <div class="card-head">
+          <div class="card-icon tint-amber"><i data-icon="folder"></i></div>
+          <div>
+            <h3>Phone storage</h3>
+            <p id="storage-status">Checking…</p>
+          </div>
+        </div>
+        <p class="note">
+          Your phone's files show up in <code>/sdcard</code> and <code>~/storage</code>
+          (<code>downloads</code>, <code>dcim</code>, <code>pictures</code>…). Inside Ubuntu you can also run <code>setup-storage</code>.
+        </p>
+        <button class="btn btn-secondary" id="storage-btn"><i data-icon="shield"></i><span>Allow access</span></button>
       </section>
-      <p class="muted small center">ফন্ট: Kalpurush (OmicronLab) ও JetBrains Mono — SIL Open Font License</p>
+      </div>
+
     </main>
 
-    <!-- ============ TERMINAL ============ -->
+    <!-- ================= TERMINAL ================= -->
     <section id="term">
       <nav class="topbar">
-        <button id="home-btn" class="icon" aria-label="হোম">⌂</button>
-        <div id="tabs"></div>
-        <button id="plus-btn" class="icon" aria-label="নতুন">＋</button>
-        <button id="reader-btn" class="icon text" aria-label="পাঠ মোড">পাঠ</button>
-        <button id="more-btn" class="icon" aria-label="আরও">⋮</button>
-        <div id="new-menu" class="menu" hidden>
-          <button data-kind="agy">✦ Antigravity</button>
-          <button data-kind="ubuntu">◉ Ubuntu টার্মিনাল</button>
-          <button data-kind="android">▣ Android শেল</button>
-        </div>
-        <div id="more-menu" class="menu right" hidden>
-          <button data-act="copy">সব লেখা কপি</button>
-          <button data-act="paste">পেস্ট</button>
-          <button data-act="bigger">ফন্ট বড়</button>
-          <button data-act="smaller">ফন্ট ছোট</button>
-          <button data-act="bottom">একদম নিচে যান</button>
-          <button data-act="clear">স্ক্রিন পরিষ্কার</button>
-        </div>
+        <button class="icon-btn" id="home-btn" aria-label="Home"><i data-icon="home"></i></button>
+        <div id="tabs" role="tablist" aria-label="Sessions"></div>
+        <button class="icon-btn" id="plus-btn" aria-label="New session"><i data-icon="plus"></i></button>
+        <button class="icon-btn" id="remote-top-btn" aria-label="Remote dashboard"><i data-icon="remote"></i></button>
+        <button class="icon-btn" id="more-btn" aria-label="More"><i data-icon="more"></i></button>
       </nav>
-      <div id="sessions"></div>
-      <div id="keybar"></div>
-      <div class="compose">
-        <button id="kbd-btn" class="icon" aria-label="টার্মিনাল কীবোর্ড">⌨</button>
-        <textarea id="compose" rows="1" placeholder="এখানে বাংলা / English লিখে পাঠান…" autocomplete="off" spellcheck="false"></textarea>
-        <button id="send" class="send" aria-label="পাঠান">➤</button>
-      </div>
+      <div id="sessions"><div id="session-pill" aria-hidden="true"></div></div>
+      <div id="extra-keys"></div>
       <textarea id="kbd" aria-hidden="true" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
     </section>
 
-    <div id="toast"></div>
+    <!-- bottom sheet (menus, settings) -->
+    <div id="sheet-backdrop" hidden></div>
+    <div id="sheet" class="sheet" hidden role="dialog">
+      <div class="sheet-grip"></div>
+      <div class="sheet-body"></div>
+    </div>
+
+    <div id="toast" role="status"></div>
     <script type="module" src="./src/app.ts"></script>
   </body>
 </html>

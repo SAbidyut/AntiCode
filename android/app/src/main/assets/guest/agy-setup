@@ -1,0 +1,14 @@
+#!/bin/bash
+# Agy Terminal — install the Antigravity CLI (run again any time with: agy-setup)
+#   agy-setup --auto   skip the apt step when the basic tools are already there
+set -o pipefail
+G='\033[1;32m'; R='\033[1;31m'; N='\033[0m'
+/usr/local/bin/term-setup "$1" || exit 1
+if [ ! -x "$HOME/.local/bin/agy" ]; then
+  echo -e "\n${G}▸ Installing the Antigravity CLI (Google's official installer)${N}"
+  curl -fsSL https://antigravity.google/cli/install.sh | bash \
+    || { echo -e "${R}Installing agy failed — run 'agy-setup' to try again.${N}"; exit 1; }
+fi
+touch "$HOME/.agy-terminal-setup-done"
+echo -e "\n${G}✓ All set! Type 'agy' to start Antigravity.${N}"
+echo -e "  Tip: run 'setup-storage' to use your phone's files (~/storage).\n"
