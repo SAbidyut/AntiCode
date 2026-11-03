@@ -117,11 +117,15 @@ export class TerminalSession {
     });
     // Track cursor visibility (DECTCEM, CSI ? 25 h/l); headless xterm doesn't expose it.
     const track = (show: boolean) => (params: (number | number[])[]) => {
+      // (modes a restored session's replay sets itself: its own last word counts)
+      if (this.replaying) for (const p of params) if (typeof p === 'number') this.replaySet.add(p);
       if (params.some((p) => p === 25)) {
         this.renderer.cursorVisible = show;
         this.renderer.schedule();
       }
       if (params.some((p) => p === 1006)) this.sgrMouse = show; // how mouse reports look
+      // focus reports (CSI ? 1004 h): the program hears when its tab is in front or not
+      if (params.some((p) => p === 1004)) this.focusReports = show;
       return false; // let xterm handle it too
     };
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, track(true));
@@ -649,9 +653,25 @@ export class TerminalSession {
     if (!this.replaying) this.bridge.write(this.id, data);
   }
 
+  /**
+   * Focus reports (xterm's mode 1004): programs that ask are told when their tab comes to the
+   * front (CSI I) and when it goes (CSI O) — the app in the background, another tab, home.
+   */
+  private focusReports = false;
+  private inFront = false;
+  setInFront(on: boolean) {
+    if (on === this.inFront) return;
+    this.inFront = on;
+    if (this.focusReports && this.alive) this.reply(on ? '\x1b[I' : '\x1b[O');
+  }
+
+  /** Private modes (CSI ? n h/l) the replayed output set — its state of them is the latest. */
+  private replaySet = new Set<number>();
+
   /** A restored session: its saved output comes next (requests in it were answered then). */
   beginReplay() {
     this.replaying = true;
+    this.replaySet.clear();
     // draw it once, when it's all in — not flickering through the old screens
     this.renderer.paused = true;
     window.setTimeout(() => this.endReplayPause(), 4000); // in case the end never comes
@@ -684,13 +704,18 @@ export class TerminalSession {
     this.term.write('', () => {
       const m = this.term.modes;
       const mouseMode: Record<string, number> = { x10: 9, vt200: 1000, drag: 1002, any: 1003 };
+      // Only what the replay didn't set itself: the saved state can be older than the output
+      // (the page was closed while the program went on — Antigravity showed its cursor again
+      // then, and hiding it here left its input without a cursor for good: the program
+      // doesn't say again what it thinks is already so).
+      const seen = (...ps: number[]) => ps.some((p) => this.replaySet.has(p));
       let seq = '';
-      const lostAlt = alt === '1' && this.term.buffer.active.type !== 'alternate';
+      const lostAlt = alt === '1' && this.term.buffer.active.type !== 'alternate' && !seen(1049, 1047, 47);
       if (lostAlt) seq += '\x1b[?1049h';
-      if (bp === '1' && !m.bracketedPasteMode) seq += '\x1b[?2004h';
-      if (ac === '1' && !m.applicationCursorKeysMode) seq += '\x1b[?1h';
-      if (cur === '0' && this.renderer.cursorVisible) seq += '\x1b[?25l';
-      if (mouseMode[mouse] && m.mouseTrackingMode === 'none') seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
+      if (bp === '1' && !m.bracketedPasteMode && !seen(2004)) seq += '\x1b[?2004h';
+      if (ac === '1' && !m.applicationCursorKeysMode && !seen(1)) seq += '\x1b[?1h';
+      if (cur === '0' && this.renderer.cursorVisible && !seen(25)) seq += '\x1b[?25l';
+      if (mouseMode[mouse] && m.mouseTrackingMode === 'none' && !seen(9, 1000, 1002, 1003)) seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
       if (seq) this.term.write(seq);
       if (lostAlt && this.alive) {
         // its screen wasn't in the replay: a size change makes the program draw it again

@@ -419,6 +419,7 @@ function activate(s: TerminalSession | null) {
   renderTabs(true);
   saveUiState();
   if (s) showSessionPill(s);
+  updateFront();
 }
 
 let pillTimer = 0;
@@ -536,6 +537,7 @@ function saveUiState() {
 
 function showHome() {
   settleComposing(); // (before the keyboard goes: hiding it would commit the word nowhere)
+  endSelection();
   screen = 'home';
   saveUiState();
   bridge.setActiveSession(''); // looking at no session: all of them may notify
@@ -543,7 +545,15 @@ function showHome() {
   bridge.hideKeyboard();
   keyboardShown = false;
   renderHome();
+  updateFront();
 }
+
+/** Which session is in front (programs that ask are told: focus reports). */
+function updateFront() {
+  const shown = !document.hidden && screen === 'term';
+  for (const x of sessions.values()) x.setInFront(shown && x === active);
+}
+document.addEventListener('visibilitychange', updateFront);
 /** The first appearance of the home screen: its parts rise in one after another. */
 function enterHome() {
   const home = $('#home');
@@ -558,6 +568,7 @@ function showTerm() {
   if (active) bridge.setActiveSession(active.id);
   document.body.dataset.screen = 'term';
   requestAnimationFrame(() => active?.fit());
+  updateFront();
 }
 
 function renderHome() {
