@@ -693,9 +693,17 @@ class MainActivity : ComponentActivity() {
             ic.setComposingRegion(9, 11) // the next word the same way
             ic.commitText("সেখানে ", 1)
             for (w in listOf("v", "va", "val", "valo")) ic.setComposingText(w, 1)
-            ic.finishComposingText()
-            ic.deleteSurroundingText(4, 0) // or delete it …
-            ic.commitText("ভালো", 1) // … and type the suggestion
+            if (Build.VERSION.SDK_INT >= 34) {
+                // Android 14 keyboards pick a suggestion in one step: the word being typed is
+                // replaced where it stands (Gboard: "tuki" → tumi)
+                val n = ic.getTextBeforeCursor(1000, 0)?.length ?: 0
+                ic.replaceText(n - 4, n, "ভালো", 1, null)
+                Log.i(SELFTEST, "ime| suggestion picked with replaceText")
+            } else {
+                ic.finishComposingText()
+                ic.deleteSurroundingText(4, 0) // or delete it …
+                ic.commitText("ভালো", 1) // … and type the suggestion
+            }
             ic.deleteSurroundingText(1, 0) // ⌫ takes the vowel sign "ো" back …
             ic.commitText("ো", 1) // … and it's typed again
             ic.commitText(" ক্ষমা", 1) // a conjunct: ⌫ ⌫ ⌫ down to "ক্", then typed again

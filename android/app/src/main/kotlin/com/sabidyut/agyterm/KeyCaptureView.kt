@@ -297,6 +297,33 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
             return true
         }
 
+        // Android 14 lets a keyboard swap a word for a suggestion in one step (replaceText);
+        // the base class does it straight in the text, past every method above — the terminal
+        // didn't see the picked word until the next key ("tuki" stayed, then "tumi g").
+        @androidx.annotation.RequiresApi(34)
+        override fun replaceText(
+            start: Int, end: Int, text: CharSequence, newCursorPosition: Int,
+            textAttribute: android.view.inputmethod.TextAttribute?,
+        ): Boolean {
+            super.replaceText(start, end, text, newCursorPosition, textAttribute)
+            sync()
+            if (text.contains('\n')) reset() // (the line ended)
+            return true
+        }
+
+        // the forms with a text attribute (Android 13): the same as without, here explicitly
+        @androidx.annotation.RequiresApi(33)
+        override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: android.view.inputmethod.TextAttribute?) =
+            commitText(text, newCursorPosition)
+
+        @androidx.annotation.RequiresApi(33)
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: android.view.inputmethod.TextAttribute?) =
+            setComposingText(text, newCursorPosition)
+
+        @androidx.annotation.RequiresApi(33)
+        override fun setComposingRegion(start: Int, end: Int, textAttribute: android.view.inputmethod.TextAttribute?) =
+            setComposingRegion(start, end)
+
         override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
             if (editable?.isNotEmpty() == true) {
                 super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)

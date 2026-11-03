@@ -107,6 +107,13 @@ jobs:
     needs: apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # 34 = Android 14: keyboards there use newer calls (replaceText for a suggestion).
+        # Watched, but not blocking until it has proven stable in CI.
+        api: [30, 34]
+    continue-on-error: ${{ matrix.api == 34 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -122,7 +129,7 @@ jobs:
 
       - uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: ${{ matrix.api }}
           arch: x86_64
           target: default
           disable-animations: true
@@ -132,6 +139,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: selftest-screenshots
+          name: selftest-screenshots-${{ matrix.api }}
           path: selftest-shots/
           if-no-files-found: ignore
