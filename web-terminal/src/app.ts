@@ -124,6 +124,25 @@ let insetsMoving = false;
 let preeditOwner: TerminalSession | null = null;
 /** When the keyboard last sent ⌫ (it does before re-composing or replacing a word). */
 let imeDeletedAt = -1e9;
+/**
+ * The keyboard's ⌫s wait a moment (12 ms) for what comes with them: a tapped suggestion is
+ * ⌫ × the old word + the new word in one go. They then go out together and the screen waits
+ * for the program to finish redrawing — it showed every step ("Bahgladey", "Ban", "Banglad",
+ * "Bangladesh"), the word jumping about.
+ */
+let imeDels = 0;
+let imeDelsTimer = 0;
+function takeImeDels(): string {
+  clearTimeout(imeDelsTimer);
+  imeDelsTimer = 0;
+  const n = imeDels;
+  imeDels = 0;
+  return '\x7f'.repeat(n);
+}
+/** A replacement is under way: show its end, not its steps. */
+function holdForEdit(s: TerminalSession) {
+  s.renderer.holdForRedraw(450, 70);
+}
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -176,15 +195,28 @@ const bridge: Bridge = createBridge({
     if (s.renderer.scrollPx > 0) s.scrollToBottom();
     // the keyboard took letters back to compose them again (⌫ into a word): the word shows
     // once the program has removed them — drawn now, it stood next to itself ("amiami")
+    const dels = takeImeDels();
+    if (dels) {
+      holdForEdit(s);
+      s.input(dels);
+    }
     if (performance.now() - imeDeletedAt < 40) s.renderer.awaitEcho('deletes');
     s.renderer.setPreedit(text);
   },
   onImeText(text) {
     const s = typingTarget();
     if (!s) return;
+    const dels = takeImeDels();
     // several lines at once (the keyboard's clipboard): a paste, not lines typed and run
     if (text.length > 1 && /[\r\n]/.test(text) && !latch.ctrl && !latch.alt) {
+      if (dels) s.input(dels);
       s.paste(text);
+      return;
+    }
+    if (dels) {
+      // a word replaced (a suggestion): out in one piece, drawn once the program is done
+      holdForEdit(s);
+      s.input(dels + applyMods(text, consumeLatch()));
       return;
     }
     // the word on screen was finished (space, a suggestion): it stays where it is until the
@@ -197,8 +229,21 @@ const bridge: Bridge = createBridge({
     s.input(applyMods(text, consumeLatch()));
   },
   onImeKey(keyCode, ctrl, alt, shift, ch) {
-    if (!typingTarget()) return;
-    if (keyCode === 67 && !ctrl && !alt) imeDeletedAt = performance.now(); // ⌫ (KEYCODE_DEL)
+    const s = typingTarget();
+    if (!s) return;
+    if (keyCode === 67 && !ctrl && !alt && !shift && !latch.ctrl && !latch.alt) {
+      // ⌫ (KEYCODE_DEL): held a moment for what may come with it (see imeDels)
+      imeDeletedAt = performance.now();
+      imeDels++;
+      clearTimeout(imeDelsTimer);
+      imeDelsTimer = window.setTimeout(() => {
+        const d = takeImeDels();
+        if (d && sessions.get(s.id) === s) s.input(d);
+      }, 12);
+      return;
+    }
+    const dels = takeImeDels();
+    if (dels) s.input(dels); // (any other key: the ⌫s before it go first)
     const seq = androidKeySeq(keyCode, { ctrl: ctrl || latch.ctrl, alt: alt || latch.alt, shift }, active!.appCursor, ch ?? '');
     if (!seq) return; // e.g. Shift on its own: keep the Ctrl/Alt latch for the next key
     consumeLatch();
@@ -266,6 +311,9 @@ const bridge: Bridge = createBridge({
  * into the wrong place).
  */
 function settleComposing() {
+  // (⌫s the keyboard just sent go first)
+  const dels = takeImeDels();
+  if (dels) active?.input(dels);
   const s = preeditOwner;
   preeditOwner = null;
   if (s && s.renderer.preedit) {

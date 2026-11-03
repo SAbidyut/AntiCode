@@ -573,10 +573,15 @@ export class BanglaRenderer {
   /** Time of the last output (set by the session). */
   lastOutput = 0;
   private holdUntil = 0;
+  private holdQuiet = 60;
   private syncSince = 0;
-  /** After a resize, programs clear and redraw: keep the old picture until they're done. */
-  holdForRedraw(ms = 300) {
+  /**
+   * After a resize, programs clear and redraw: keep the old picture until they're done
+   * (output quiet for [quiet] ms, at most [ms]).
+   */
+  holdForRedraw(ms = 300, quiet = 60) {
     this.holdUntil = performance.now() + ms;
+    this.holdQuiet = quiet;
   }
   private shouldWait(): boolean {
     const now = performance.now();
@@ -585,8 +590,8 @@ export class BanglaRenderer {
       if (!this.syncSince) this.syncSince = now;
       if (now - this.syncSince < 250) return true;
     } else this.syncSince = 0;
-    // after a resize: wait until output has been quiet for 60 ms (at most holdForRedraw ms)
-    return now < this.holdUntil && now - this.lastOutput < 60;
+    // after a resize: wait until output has been quiet for a moment (at most holdForRedraw ms)
+    return now < this.holdUntil && now - this.lastOutput < this.holdQuiet;
   }
 
   private applyMetrics() {
