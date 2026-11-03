@@ -15,6 +15,12 @@ function xtermRgb(hex: string): string {
 }
 
 const URL_RE = /https?:\/\/[^\s'"<>`]+[^\s'"<>`.,;:)\]}]/g;
+/** A file name or path with a type worth opening (a page or PDF an agent made, a picture …). */
+const FILE_EXT = 'html?|xhtml|pdf|svg|png|jpe?g|gif|webp|bmp|txt|md|markdown|csv|json|log|xml|ya?ml|docx?|xlsx?|pptx?|odt|ods|odp|epub|mp4|webm|mkv|mov|mp3|wav|ogg|m4a|flac|zip';
+const FILE_RE = new RegExp(
+  String.raw`(?:file:\/\/)?[^\s'"<>\x60|*?()\[\]{}:,;]*[^\s'"<>\x60|*?()\[\]{}:,;/.]\.(?:${FILE_EXT})(?![\p{L}\p{N}_-])`,
+  'giu',
+);
 
 export class TerminalSession {
   /** Height (CSS px) currently covered by the on-screen keyboard; set by the app. */
@@ -41,6 +47,10 @@ export class TerminalSession {
   private sgrMouse = false;
   /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
   onLink?: (url: string, trusted: boolean) => void;
+  /** Where the shell is (OSC 7 from its prompt): a tapped file name is looked for there. */
+  cwd = '';
+  /** The folder the session was started in. */
+  startDir = '';
 
   constructor(
     private bridge: Bridge,
@@ -109,6 +119,18 @@ export class TerminalSession {
     };
     this.term.parser.registerEscHandler({ final: 'c' }, showAgain(true));
     this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain(false));
+    // OSC 7 ; file://host/path — the shell's folder (our prompt sends it)
+    this.term.parser.registerOscHandler(7, (data) => {
+      const m = /^file:\/\/[^/]*(\/.*)$/.exec(data);
+      if (m) {
+        try {
+          this.cwd = decodeURIComponent(m[1]);
+        } catch {
+          this.cwd = m[1];
+        }
+      }
+      return true;
+    });
     // OSC 7770 ; <cmd> ; …  — from our scripts inside Ubuntu.
     this.term.parser.registerOscHandler(7770, (data) => {
       const [cmd, ...rest] = data.split(';');
@@ -412,6 +434,16 @@ export class TerminalSession {
 
   /** If a URL is under the point, return it. */
   urlAt(clientX: number, clientY: number): string | null {
+    return this.matchAt(clientX, clientY, URL_RE);
+  }
+
+  /** If a file name (report.pdf, ~/site/index.html …) is under the point, return it. */
+  fileAt(clientX: number, clientY: number): string | null {
+    return this.matchAt(clientX, clientY, FILE_RE);
+  }
+
+  /** The match of [re] in the (unwrapped) line under the point. */
+  private matchAt(clientX: number, clientY: number, re: RegExp): string | null {
     const { x, line: at } = this.renderer.cellAt(clientX, clientY);
     const buf = this.term.buffer.active;
     let start = at;
@@ -425,7 +457,7 @@ export class TerminalSession {
       if (i === at) offset = text.length + line.translateToString(false, 0, x).length;
       text += line.translateToString(false);
     }
-    for (const m of text.matchAll(URL_RE)) {
+    for (const m of text.matchAll(re)) {
       if (offset >= m.index! && offset <= m.index! + m[0].length) return m[0];
     }
     return null;

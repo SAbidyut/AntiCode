@@ -22,6 +22,9 @@ class TermSession(
     cols: Int,
     private val onExit: (TermSession) -> Unit,
 ) {
+    /** The folder it was started in, inside Ubuntu (file names tapped in it are looked for there). */
+    var startDir = ""
+
     interface OutputListener {
         fun onOutput(session: TermSession, data: ByteArray, len: Int)
     }

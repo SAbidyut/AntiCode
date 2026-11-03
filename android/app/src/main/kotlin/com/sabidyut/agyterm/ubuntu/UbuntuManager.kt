@@ -551,6 +551,9 @@ class UbuntuManager private constructor(private val context: Context) {
 
     private fun child(dir: String, name: String) = if (dir == "/") "/$name" else "$dir/$name"
 
+    /** The phone's file for a path inside Ubuntu (a file name tapped in the terminal). */
+    fun hostFile(guest: String): File? = normalizeGuestPath(guest)?.let { hostPath(it) }
+
     /** The folders in a folder inside Ubuntu, as JSON: {path, dirs} or {path, error: notfound|noaccess}. */
     fun listDir(path: String): String {
         val g = normalizeGuestPath(path) ?: return JSONObject().put("path", path).put("error", "notfound").toString()

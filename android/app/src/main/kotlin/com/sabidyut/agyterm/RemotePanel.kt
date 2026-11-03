@@ -61,11 +61,16 @@ class RemotePanel(
     /** Shown (or sliding in), not on its way out. */
     var isOpen = false
         private set
+    /** Showing a file from inside the app (see openLocal), not a web page. */
+    private var localFile: java.io.File? = null
+    /** "Open with another app" for a local file. */
+    var openFileElsewhere: ((java.io.File) -> Unit)? = null
     /** Unload the page a while after closing, so it doesn't poll in the background. */
     private val unload = Runnable {
         if (!isOpen) {
             web.loadUrl("about:blank")
             startUrl = ""
+            leaveLocal()
         }
     }
 
@@ -92,8 +97,9 @@ class RemotePanel(
         }
         header.addView(titles, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         header.addView(iconButton(R.drawable.ic_panel_refresh, "Reload") { web.reload() })
-        header.addView(iconButton(R.drawable.ic_panel_external, "Open in Chrome") {
-            openInBrowser(web.url ?: startUrl)
+        header.addView(iconButton(R.drawable.ic_panel_external, "Open in another app") {
+            val f = localFile
+            if (f != null) openFileElsewhere?.invoke(f) else openInBrowser(web.url ?: startUrl)
         })
 
         progress.pivotX = 0f
@@ -116,6 +122,13 @@ class RemotePanel(
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 val scheme = url.scheme?.lowercase() ?: ""
+                if (localFile != null) {
+                    // a local page: its links to files next to it open here, web links in the
+                    // browser (a web page doesn't load with file access switched on)
+                    if (scheme == "file") return false
+                    if (request.hasGesture()) openInBrowser(url.toString())
+                    return true
+                }
                 if (scheme != "http" && scheme != "https") {
                     // intent:, mailto: … → another app, but only for a link the user tapped
                     // (not a page redirecting there by itself)
@@ -145,7 +158,7 @@ class RemotePanel(
 
             override fun onPageFinished(view: WebView, url: String?) {
                 CookieManager.getInstance().flush()
-                subtitleView.text = Uri.parse(url ?: "").host ?: ""
+                if (localFile == null) subtitleView.text = Uri.parse(url ?: "").host ?: ""
             }
         }
         web.webChromeClient = object : WebChromeClient() {
@@ -163,7 +176,7 @@ class RemotePanel(
 
             override fun onReceivedTitle(view: WebView, title: String?) {
                 // keep our own title; the page's goes in the second line if it says more
-                if (!title.isNullOrBlank() && !title.startsWith("http")) subtitleView.text = title
+                if (localFile == null && !title.isNullOrBlank() && !title.startsWith("http")) subtitleView.text = title
             }
 
             override fun onShowFileChooser(
@@ -239,12 +252,71 @@ class RemotePanel(
         }
         if (System.currentTimeMillis() - chromeSince < CHROME_FOR_MS) return false
         removeCallbacks(unload)
+        if (localFile != null) {
+            leaveLocal()
+            startUrl = "" // (load it afresh, without file access)
+        }
         titleView.text = title
         subtitleView.text = hostOf(url)
         if (url != startUrl || web.url == null) {
             startUrl = url
             web.loadUrl(url)
         }
+        show()
+        return true
+    }
+
+    /**
+     * A file from inside the app — a page or picture an agent made, a text file — shown here.
+     * Pages may load the files next to them (their CSS, images); file access is switched off
+     * again before any web page loads.
+     */
+    fun openLocal(file: java.io.File, title: String, subtitle: String) {
+        removeCallbacks(unload)
+        localFile = file
+        web.settings.allowFileAccess = true
+        titleView.text = title
+        subtitleView.text = subtitle
+        val ext = file.name.substringAfterLast('.', "").lowercase()
+        startUrl = Uri.fromFile(file).toString()
+        if (ext in TEXT_FILES) {
+            // plain text in the app's colours, wrapped, at a readable size
+            val text = try {
+                file.inputStream().use { inp ->
+                    val buf = ByteArray(minOf(file.length(), MAX_TEXT.toLong()).toInt())
+                    var n = 0
+                    while (n < buf.size) {
+                        val r = inp.read(buf, n, buf.size - n)
+                        if (r < 0) break
+                        n += r
+                    }
+                    String(buf, 0, n, Charsets.UTF_8)
+                }
+            } catch (e: Exception) {
+                e.message ?: "Couldn't read it"
+            }
+            val esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            val hex = { c: Int -> String.format(java.util.Locale.ROOT, "#%06X", c and 0xFFFFFF) }
+            web.loadDataWithBaseURL(
+                startUrl,
+                "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>" +
+                    "<body style='margin:0;background:${hex(bg)};color:${hex(fg)}'>" +
+                    "<pre style='margin:0;padding:14px 16px 40px;white-space:pre-wrap;overflow-wrap:anywhere;" +
+                    "font:13px/1.55 monospace'>$esc</pre>",
+                "text/html", "utf-8", null,
+            )
+        } else {
+            web.loadUrl(startUrl)
+        }
+        show()
+    }
+
+    private fun leaveLocal() {
+        localFile = null
+        web.settings.allowFileAccess = false
+    }
+
+    private fun show() {
         if (!isOpen) {
             isOpen = true
             animate().cancel() // maybe still sliding out
@@ -258,7 +330,6 @@ class RemotePanel(
             onOpened()
         }
         web.onResume()
-        return true
     }
 
     fun close() {
@@ -287,6 +358,9 @@ class RemotePanel(
     }
 
     companion object {
+        /** Shown as plain text (not as a page). */
+        val TEXT_FILES = setOf("txt", "md", "markdown", "csv", "json", "log", "xml", "yaml", "yml", "py", "js", "ts", "sh", "c", "cpp", "java", "kt", "go", "rs", "css")
+        private const val MAX_TEXT = 2 * 1024 * 1024
         private const val GOOGLE_SIGN_IN = "accounts.google.com"
         const val PREFS = "remote"
         private const val CHROME_FOR_MS = 7L * 24 * 3600 * 1000

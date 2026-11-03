@@ -43,5 +43,16 @@
         <service
             android:name=".SessionService"
             android:exported="false" />
+
+        <!-- hands a file tapped in the terminal (a PDF an agent made) to the app that shows it -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

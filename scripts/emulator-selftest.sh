@@ -33,6 +33,7 @@ echo "--- self test (up to 30 min)"
 #          ble.sh autosuggestions are attached in the shell       (SELFTEST_BLE_OK)
 #          and the phone's storage is visible in /sdcard           (SELFTEST_STORAGE_OK)
 #          the folder picker lists ~ and ~/storage/shared          (SELFTEST_FOLDERS_OK)
+#          tapped file names resolve + FileProvider + OSC 7 folder   (SELFTEST_FILES_OK)
 #          a program's OSC 9 → "task finished" notification        (checked here)
 #          zooming doesn't leave blank lines / prompt copies      (SELFTEST_ZOOM_OK)
 # Phase 4: Claude Code opened through the real web UI draws        (SELFTEST_CLAUDE_OK)
@@ -91,7 +92,7 @@ while [ $SECONDS -lt $deadline ]; do
   if grep -q "SELFTEST_PANEL_READY" <<<"$log" && [ ! -f "$SHOTS/5-panel.png" ]; then sleep 4; shot 5-panel; fi
   if grep -q "SELFTEST_PANEL_OK" <<<"$log"; then [ $notified -eq 1 ] && result=0; break; fi
   if [ $notified -eq 2 ]; then break; fi
-  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_BLE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|SELFTEST_PANEL_FAIL|SELFTEST_ZOOM_FAIL|SELFTEST_IME_FAIL|SELFTEST_KBCYCLE_FAIL|SELFTEST_CWD_FAIL|SELFTEST_FOLDERS_FAIL|SELFTEST_SANDBOX_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
+  if grep -qE "SELFTEST_FAIL|SELFTEST_AGY_FAIL|SELFTEST_TYPE_FAIL|SELFTEST_BLE_FAIL|SELFTEST_STORAGE_FAIL|SELFTEST_CLAUDE_FAIL|SELFTEST_PANEL_FAIL|SELFTEST_ZOOM_FAIL|SELFTEST_IME_FAIL|SELFTEST_KBCYCLE_FAIL|SELFTEST_CWD_FAIL|SELFTEST_FOLDERS_FAIL|SELFTEST_FILES_FAIL|SELFTEST_SANDBOX_FAIL|FATAL EXCEPTION" <<<"$log"; then break; fi
   if grep -q "session exited with code [^0]" <<<"$log"; then break; fi
   sleep 5
 done

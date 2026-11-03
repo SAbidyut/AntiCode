@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files a tapped path may point to: inside Ubuntu, or on the phone's shared storage. -->
+<paths>
+    <files-path name="ubuntu" path="ubuntu/" />
+    <external-path name="storage" path="." />
+</paths>

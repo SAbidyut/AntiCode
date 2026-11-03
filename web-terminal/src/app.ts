@@ -347,6 +347,7 @@ async function newSession(kind: SessionKind, cwd = '') {
   }
   const s = addSession(id, kind);
   s.notePtySize(cols, rows);
+  s.startDir = cwd || homeDir();
   activate(s);
   // The first session: ask (once) to be left alone by battery optimisation — otherwise
   // Android may stop the app, and every session with it, while it's in the background.
@@ -913,6 +914,11 @@ function bindTerminalGestures(s: TerminalSession) {
         bridge.openUrl(url); // the user tapped it
         return;
       }
+      const file = s.fileAt(e.clientX, e.clientY);
+      if (file) {
+        openTappedFile(s, file); // report.pdf, ~/site/index.html …
+        return;
+      }
       s.click(e.clientX, e.clientY);
       focusTerminalKeyboard();
     }
@@ -1184,6 +1190,29 @@ function askFolder(kind: SessionKind) {
       ...places.map(([icon, title, p]) => folderRow(icon, title,
         needsAccess && p !== homeDir() ? 'Needs storage access' : tildify(p), () => browseFolder(kind, p), 'browse'))),
   );
+}
+
+/**
+ * A file name tapped in the terminal (a page or PDF an agent made): it opens — pages, pictures
+ * and text in the app, a PDF in the phone's viewer. A bare name is looked for where the shell
+ * is, then in the folder the session started in, then at home.
+ */
+async function openTappedFile(s: TerminalSession, token: string) {
+  haptic();
+  let p = token;
+  if (/^file:\/\//i.test(p)) {
+    p = p.replace(/^file:\/\/[^/]*/i, '');
+    try {
+      p = decodeURIComponent(p);
+    } catch { /* as it is */ }
+  }
+  const rel = p.replace(/^\.\//, '');
+  const candidates = p.startsWith('/') || p === '~' || p.startsWith('~/')
+    ? [p]
+    : [...new Set([s.cwd, s.startDir, homeDir()].filter(Boolean).map((d) => `${d.replace(/\/+$/, '')}/${rel}`))];
+  const res = await bridge.openFile(candidates);
+  if (res === 'notfound') toast(`${p.split('/').pop()} wasn’t found here`);
+  else if (res) toast(res);
 }
 
 async function startIn(kind: SessionKind, p: string) {
@@ -1624,6 +1653,7 @@ async function boot() {
     for (const info of list) {
       const s = addSession(info.id, info.kind);
       s.title = info.title || s.title;
+      s.startDir = info.dir ?? '';
       if (!info.alive) s.alive = false;
       // replay the saved output at the size it was written for (background tabs too)
       if (info.cols && info.rows) s.notePtySize(info.cols, info.rows);

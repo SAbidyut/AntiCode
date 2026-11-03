@@ -180,6 +180,7 @@ class MainActivity : ComponentActivity() {
                 rebuildUi()
             },
         )
+        panel.openFileElsewhere = { openFileElsewhere(it) }
         root.addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         setContentView(root)
         followInsets(root)
@@ -315,6 +316,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private var lastFloating = false
+
+    /** Pages, pictures and text open in the app's panel; PDFs and the rest in the app for them. */
+    private fun openTappedFile(f: java.io.File, guest: String) {
+        val ext = f.name.substringAfterLast('.', "").lowercase()
+        if (ext in IN_APP_FILES || ext in RemotePanel.TEXT_FILES) {
+            if (keys.hasFocus()) {
+                imm.hideSoftInputFromWindow(keys.windowToken, 0)
+                web.holdFocusAway = false
+                keys.clearFocus()
+                js("__native.onKeyboardReleased()")
+            }
+            panel.openLocal(f, f.name, guest.replaceFirst(Regex("^/root(?=/|$)"), "~"))
+        } else {
+            openFileElsewhere(f)
+        }
+    }
+
+    private fun openFileElsewhere(f: java.io.File) {
+        val ext = f.name.substringAfterLast('.', "").lowercase()
+        val uri = try {
+            androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", f)
+        } catch (e: IllegalArgumentException) {
+            Toast.makeText(this, "This file can't be handed to another app", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val type = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            startActivity(view)
+        } catch (_: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, "No app on this phone opens .$ext files", Toast.LENGTH_LONG).show()
+        }
+    }
 
     private fun sendInsets(insets: WindowInsetsCompat, settled: Boolean) {
         val d = resources.displayMetrics.density
@@ -571,6 +606,23 @@ class MainActivity : ComponentActivity() {
                 Log.i(SELFTEST, "folders| ~/storage/shared → ${shared.take(300)}")
                 if (home.contains("\"storage\"") && shared.contains("\"Download\"")) Log.i(SELFTEST, "SELFTEST_FOLDERS_OK")
                 else Log.e(SELFTEST, "SELFTEST_FOLDERS_FAIL")
+                // a tapped file name: found inside Ubuntu and on the phone, handed out by the
+                // FileProvider; the shell's folder reaches the page (OSC 7 from the prompt)
+                val filesOk = try {
+                    val inUbuntu = ub?.hostFile("~/.bashrc")
+                    val onPhone = ub?.hostFile("~/storage/downloads/report.pdf")
+                    inUbuntu != null && inUbuntu.isFile && onPhone != null &&
+                        androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", inUbuntu) != null &&
+                        androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", onPhone) != null
+                } catch (e: Exception) {
+                    Log.e(SELFTEST, "files| ${e.message}")
+                    false
+                }
+                web.evaluateJavascript("__selftest.session()?.cwd ?? ''") { cwd ->
+                    Log.i(SELFTEST, "files| provider=$filesOk shell folder=$cwd")
+                    if (filesOk && cwd.trim('"') == "/root") Log.i(SELFTEST, "SELFTEST_FILES_OK")
+                    else Log.e(SELFTEST, "SELFTEST_FILES_FAIL")
+                }
                 // Phase 3b: a program's notification escape (OSC 9) while nobody looks at
                 // the session → a "task finished" notification (the CI script checks it)
                 web.evaluateJavascript("__selftest.home(); __selftest.send(\"printf '\\\\033]9;SELFTEST-NOTIFY\\\\007'\")", null)
@@ -844,7 +896,7 @@ class MainActivity : ComponentActivity() {
             for (s in svc().sessions.values.sortedBy { it.createdAt }) {
                 arr.put(
                     JSONObject().put("id", s.id).put("kind", s.kind).put("title", s.title).put("alive", s.alive)
-                        .put("cols", s.cols).put("rows", s.rows),
+                        .put("cols", s.cols).put("rows", s.rows).put("dir", s.startDir),
                 )
             }
             return arr.toString()
@@ -864,6 +916,30 @@ class MainActivity : ComponentActivity() {
         /** What our xdg-open puts in front of a link (the page trusts only those). */
         @JavascriptInterface
         fun linkToken(): String = com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken
+
+        /**
+         * A file name tapped in the terminal: [candidates] are where it may be inside Ubuntu (a
+         * JSON list — the name next to the shell's folder, the session's folder, home). The
+         * first that exists opens; "" when one did, else "notfound".
+         */
+        @JavascriptInterface
+        fun openFile(candidates: String): String {
+            val list = try {
+                JSONArray(candidates)
+            } catch (_: Exception) {
+                return "notfound"
+            }
+            val ub = svc().ubuntu
+            for (i in 0 until minOf(list.length(), 8)) {
+                val guest = ub.normalizeGuestPath(list.optString(i)) ?: continue
+                val f = ub.hostFile(guest) ?: continue
+                if (f.isFile) {
+                    main.post { openTappedFile(f, guest) }
+                    return ""
+                }
+            }
+            return "notfound"
+        }
 
         /** A remote dashboard in the app's own panel (Chrome tab for Google-only sites). */
         @JavascriptInterface
@@ -1031,6 +1107,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        /** Shown in the app's panel as they are (pages and pictures). */
+        private val IN_APP_FILES = setOf("html", "htm", "xhtml", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp")
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024

@@ -204,6 +204,7 @@ class SessionService : Service() {
         val session = TermSession(
             id, kind, title, launch.command, launch.args, launch.env, launch.cwd, rows, cols,
         ) { s -> sessionEnded(s) }
+        if (kind != "android") session.startDir = ubuntu.normalizeGuestPath(cwd.ifEmpty { "~" }) ?: "/root"
         sessions[id] = session
         saveLive()
         updateForeground()

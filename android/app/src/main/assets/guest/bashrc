@@ -47,8 +47,9 @@ __agy_git_branch() {
 __agy_prompt() {
   local status=$?
   __agy_in_prompt=1
-  # tell the app the command is done (its "task finished" notification)
-  printf '\e]7770;done\a'
+  # tell the app the command is done (its "task finished" notification), and where the
+  # shell is (OSC 7: a file name tapped in the terminal is looked for here)
+  printf '\e]7770;done\a\e]7;file://android%s\a' "${PWD//[[:cntrl:]]/}"
 
   local style=powerline
   [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"

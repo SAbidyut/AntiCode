@@ -67,6 +67,15 @@ const methods = {
       return { path: dir, error: e.code === 'EACCES' ? 'noaccess' : 'notfound' };
     }
   },
+  openFile: (candidates) => {
+    for (const c of candidates ?? []) {
+      const f = resolveDir(String(c));
+      try {
+        if (fs.statSync(f).isFile()) return f;
+      } catch { /* next */ }
+    }
+    return 'notfound';
+  },
   makeDir: (p) => {
     try {
       fs.mkdirSync(resolveDir(String(p)));

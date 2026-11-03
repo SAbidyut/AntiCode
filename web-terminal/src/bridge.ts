@@ -13,6 +13,8 @@ export interface SessionInfo {
   /** The PTY's current size (Android host). */
   cols?: number;
   rows?: number;
+  /** The folder it was started in. */
+  dir?: string;
 }
 
 export interface HostState {
@@ -84,6 +86,8 @@ export interface Bridge {
   linkToken(): string;
   /** A remote dashboard in the app's own panel (title shown in its header). */
   openRemote(url: string, title: string): void;
+  /** A file name tapped in the terminal: opens the first of these paths that exists ("" = done). */
+  openFile(candidates: string[]): Promise<string>;
   copyText(text: string): void;
   readClipboard(): Promise<string>;
   /** The session on screen ('' = none): no "task finished" notification for it. */
@@ -140,6 +144,7 @@ interface AndroidBridgeApi {
   openUrl(url: string): void;
   linkToken?(): string;
   openRemote(url: string, title?: string): void;
+  openFile?(candidates: string): string;
   copyText(text: string): void;
   readClipboard(): string;
   setActiveSession?(id: string): void;
@@ -189,6 +194,7 @@ class AndroidHostBridge implements Bridge {
   private token?: string;
   linkToken() { return (this.token ??= this.api.linkToken?.() ?? ''); }
   openRemote(url: string, title: string) { this.api.openRemote(url, title); }
+  async openFile(candidates: string[]) { return this.api.openFile?.(JSON.stringify(candidates)) ?? 'notfound'; }
   copyText(text: string) { this.api.copyText(text); }
   async readClipboard() { return this.api.readClipboard(); }
   setActiveSession(id: string) { this.api.setActiveSession?.(id); }
@@ -280,6 +286,15 @@ class DevBridge implements Bridge {
   /** tests can set one with ?linktoken= */
   linkToken() { return new URLSearchParams(location.search).get('linktoken') ?? ''; }
   openRemote(url: string) { window.open(url, '_blank'); }
+  /** (the browser can't show it: the path found is kept for tests) */
+  async openFile(candidates: string[]) {
+    const r = await this.call<string>('openFile', candidates);
+    if (r.startsWith('/')) {
+      (window as unknown as { __lastOpened: string }).__lastOpened = r;
+      return '';
+    }
+    return r;
+  }
   copyText(text: string) { navigator.clipboard?.writeText(text).catch(() => {}); }
   async readClipboard() { try { return await navigator.clipboard.readText(); } catch { return ''; } }
   setActiveSession() {}

@@ -177,6 +177,41 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
                 e.clear()
                 sent = ""
             }
+            reportSelection()
+        }
+
+        // ---- telling the keyboard where things are ----
+        // A text field must report its cursor and the word being composed after every change
+        // (an EditText does it by itself). Without it the keyboard works from an old picture
+        // of the field: tapping a suggestion did nothing, and the strip got stuck.
+        private var batch = 0
+        private val imm get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+
+        override fun beginBatchEdit(): Boolean {
+            batch++
+            return true
+        }
+
+        override fun endBatchEdit(): Boolean {
+            if (batch > 0) batch--
+            if (batch == 0) reportSelection()
+            return batch > 0
+        }
+
+        private fun reportSelection() {
+            if (batch > 0) return // once, when the keyboard's batch of edits is done
+            val e = editable ?: return
+            imm.updateSelection(
+                this@KeyCaptureView,
+                android.text.Selection.getSelectionStart(e), android.text.Selection.getSelectionEnd(e),
+                getComposingSpanStart(e), getComposingSpanEnd(e),
+            )
+        }
+
+        override fun setSelection(start: Int, end: Int): Boolean {
+            super.setSelection(start, end)
+            sync() // (the cursor moved within the line: the word being composed may differ)
+            return true
         }
 
         /** A new line (after Enter, a cursor key …): the keyboard starts from an empty field. */
