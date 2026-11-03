@@ -51,6 +51,11 @@ class UbuntuManager private constructor(private val context: Context) {
         syncGuestFiles()
     }
 
+    /** Claude Code's own full-screen view (Settings → Advanced); off: its classic view. */
+    var claudeFullscreen: Boolean
+        get() = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).getBoolean("claudeFullscreen", false)
+        set(v) = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).edit().putBoolean("claudeFullscreen", v).apply()
+
     fun stateJson(): String = JSONObject()
         .put("host", "android")
         .put("home", "/root")
@@ -434,6 +439,10 @@ class UbuntuManager private constructor(private val context: Context) {
             "ANTICODE_LINK_TOKEN=$linkToken",
             timeZoneEnv(), // the phone's time, not UTC (the prompt's clock, `date`, logs)
         )
+        // Claude Code's full-screen view keeps its own scrollback: every swipe is a wheel event
+        // it answers by redrawing the whole screen — slow under proot on a phone. Its classic
+        // view writes to the terminal's scrollback, which the app scrolls smoothly itself.
+        if (!claudeFullscreen) args += "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"
         // the folder picked in the app: the login shell goes there first (profile.sh)
         if (cwd.isNotEmpty()) normalizeGuestPath(cwd)?.takeIf { it != "/root" }?.let { args += "ANTICODE_CWD=$it" }
         when (kind) {
@@ -601,6 +610,7 @@ class UbuntuManager private constructor(private val context: Context) {
     )
 
     companion object {
+        private const val UI_PREFS = "anticode-ui"
         private const val TAG = "UbuntuManager"
         const val UBUNTU_VERSION = "24.04"
         // Newest first; the installer falls back if a point release isn't published.

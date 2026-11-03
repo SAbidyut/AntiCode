@@ -1076,6 +1076,15 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getNotifyWhenDone(): Boolean = service?.notifyWhenDone ?: true
 
+        /** Claude Code's full-screen view for new sessions (off: its classic, smoothly scrolled view). */
+        @JavascriptInterface
+        fun setClaudeFullscreen(on: Boolean) {
+            svc().ubuntu.claudeFullscreen = on
+        }
+
+        @JavascriptInterface
+        fun getClaudeFullscreen(): Boolean = service?.ubuntu?.claudeFullscreen ?: false
+
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface
         fun setKeyboardCompat(on: Boolean) {

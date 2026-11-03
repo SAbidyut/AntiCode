@@ -104,6 +104,7 @@ window.addEventListener('unhandledrejection', (e) => reportError(`unhandled reje
 const sessions = new Map<string, TerminalSession>();
 let accounts = { agy: '', claude: '' };
 let notifyWhenDone = true;
+let claudeFullscreen = false;
 let restored = false;
 let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
@@ -809,6 +810,17 @@ function bindTerminalGestures(s: TerminalSession) {
     cancelAnimationFrame(inertia);
     inertia = 0;
   };
+  // Full-screen programs (vim, less, Claude Code's full-screen view) scroll themselves: they
+  // get wheel steps, paced — at most 2 a frame, a short backlog — so a quick swipe doesn't
+  // bury them in events they redraw one by one (and then jump to catch up).
+  let wheelLines = 0, wheelFrame = 0, wheelX = 0, wheelY = 0;
+  const flushWheel = () => {
+    wheelFrame = 0;
+    const n = Math.max(-2, Math.min(2, wheelLines));
+    wheelLines -= n;
+    if (n) s.scrollLines(n, wheelX, wheelY);
+    if (wheelLines) wheelFrame = requestAnimationFrame(flushWheel);
+  };
   /** Scroll by pixels. Scrollback moves pixel-smooth; full-screen apps get wheel steps. */
   const scrollBy = (px: number, x: number, y: number): boolean => {
     if (s.term.buffer.active.type !== 'alternate') return s.renderer.scrollByPixels(px);
@@ -817,12 +829,14 @@ function bindTerminalGestures(s: TerminalSession) {
     const lines = Math.trunc(acc / lh);
     if (lines) {
       acc -= lines * lh;
-      s.scrollLines(lines, x, y);
+      wheelLines = Math.max(-12, Math.min(12, wheelLines + lines));
+      wheelX = x;
+      wheelY = y;
+      if (!wheelFrame) wheelFrame = requestAnimationFrame(flushWheel);
     }
     return true;
   };
   const startInertia = (v: number, x: number, y: number) => {
-    if (s.term.buffer.active.type === 'alternate') return;
     let prev = performance.now();
     const step = (now: number) => {
       const dt = Math.min(32, now - prev);
@@ -1479,6 +1493,10 @@ function openSettingsSheet() {
     // rarely needed: folded away
     h('details', { class: 'advanced' },
       h('summary', {}, h('span', {}, 'Advanced'), svg('chevron')),
+      toggle('Claude Code full-screen view', 'Claude’s own scrolling view. Off: its replies scroll like the rest of the terminal — smoother on a phone. For new Claude sessions.', claudeFullscreen, (v) => {
+        claudeFullscreen = v;
+        bridge.setClaudeFullscreen(v);
+      }),
       toggle('Keyboard compatibility mode', 'Smart keyboard off and keys type nothing or the wrong thing? Turn this on.', prefs.kbCompat, (v) => {
         prefs.kbCompat = v;
         savePrefs();
@@ -1633,6 +1651,7 @@ async function boot() {
   console.info(`boot: fonts ready=${document.fonts.check(`${prefs.fontSize}px Kalpurush`, 'বাংলা')}`);
 
   notifyWhenDone = await bridge.getNotifyWhenDone();
+  claudeFullscreen = await bridge.getClaudeFullscreen();
   accounts = await bridge.getAccounts();
   renderHome();
 

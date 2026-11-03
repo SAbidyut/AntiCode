@@ -96,6 +96,9 @@ export interface Bridge {
   setSessionLabel(id: string, label: string): void;
   setNotifyWhenDone(on: boolean): void;
   getNotifyWhenDone(): Promise<boolean>;
+  /** Claude Code's own full-screen view for new sessions. */
+  setClaudeFullscreen(on: boolean): void;
+  getClaudeFullscreen(): Promise<boolean>;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string): void;
   getAccounts(): Promise<{ agy: string; claude: string }>;
@@ -151,6 +154,8 @@ interface AndroidBridgeApi {
   setSessionLabel?(id: string, label: string): void;
   setNotifyWhenDone?(on: boolean): void;
   getNotifyWhenDone?(): boolean;
+  setClaudeFullscreen?(on: boolean): void;
+  getClaudeFullscreen?(): boolean;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string): void;
   getAccounts?(): string;
@@ -201,6 +206,8 @@ class AndroidHostBridge implements Bridge {
   setSessionLabel(id: string, label: string) { this.api.setSessionLabel?.(id, label); }
   setNotifyWhenDone(on: boolean) { this.api.setNotifyWhenDone?.(on); }
   async getNotifyWhenDone() { return this.api.getNotifyWhenDone?.() ?? true; }
+  setClaudeFullscreen(on: boolean) { this.api.setClaudeFullscreen?.(on); }
+  async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
   setAntigravityAccount(email: string) { this.api.setAntigravityAccount?.(email); }
   async getAccounts() {
@@ -301,6 +308,8 @@ class DevBridge implements Bridge {
   setSessionLabel() {}
   setNotifyWhenDone() {}
   async getNotifyWhenDone() { return true; }
+  setClaudeFullscreen() {}
+  async getClaudeFullscreen() { return false; }
   setThemeColors() {}
   setAntigravityAccount() {}
   async getAccounts() { return { agy: '', claude: '' }; }
