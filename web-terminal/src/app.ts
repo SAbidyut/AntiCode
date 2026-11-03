@@ -4,6 +4,7 @@ import { TerminalSession } from './term/session';
 import { BanglaRenderer, THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
 import { hydrateIcons, icon } from './icons';
+import { attachRubberBand } from './rubberband';
 
 // ================================================================ prefs
 type ThemeName = 'midnight' | 'black' | 'dracula' | 'solarized' | 'paper';
@@ -1598,6 +1599,12 @@ function applyTheme() {
 
 // ================================================================ wiring
 function bindChrome() {
+  // the home screen ends its scrolling like the terminal does (a stretch, a gentle bounce):
+  // the whole screen in portrait, each column in landscape
+  for (const sel of ['#home', '.home-main', '.home-side']) {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (el) attachRubberBand(el, () => prefs.animations);
+  }
   $('#home-btn').onclick = () => showHome();
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
