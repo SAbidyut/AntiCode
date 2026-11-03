@@ -803,6 +803,33 @@ function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
   let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0, vel = 0;
   let longTimer = 0, inertia = 0, caughtFling = false;
+  /** Pulled past the top or bottom of the scrollback (px, the rubber band). */
+  let stretch = 0;
+  /** A drag: scrolls; past an end the content stretches, and pulling back undoes that first. */
+  const dragScroll = (dy: number, x: number, y: number) => {
+    if (s.term.buffer.active.type === 'alternate') {
+      scrollBy(dy, x, y);
+      return;
+    }
+    if (stretch && Math.sign(dy) !== Math.sign(stretch)) {
+      const back = Math.sign(dy) * Math.min(Math.abs(dy), Math.abs(stretch));
+      stretch += back;
+      dy -= back;
+      s.renderer.setOverscroll(stretch);
+      if (!dy) return;
+    }
+    if (s.renderer.scrollByPixels(dy)) return;
+    const max = s.renderer.maxOverscroll;
+    // the further it's pulled, the harder it gets
+    stretch = Math.max(-max, Math.min(max, stretch + dy * 0.55 * (1 - Math.abs(stretch) / max)));
+    s.renderer.setOverscroll(stretch);
+  };
+  const letGo = () => {
+    if (!stretch) return false;
+    stretch = 0;
+    s.renderer.releaseOverscroll();
+    return true;
+  };
   let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize;
   const touches = new Map<number, { x: number; y: number }>();
 
@@ -842,6 +869,12 @@ function bindTerminalGestures(s: TerminalSession) {
       const dt = Math.min(32, now - prev);
       prev = now;
       const moving = scrollBy(v * dt, x, y);
+      // ran into the top or the bottom: a short bounce, like any list on the phone
+      if (!moving && s.term.buffer.active.type !== 'alternate') {
+        s.renderer.bounce(v);
+        inertia = 0;
+        return;
+      }
       v *= Math.pow(0.95, dt / 16);
       inertia = moving && Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
     };
@@ -903,7 +936,7 @@ function bindTerminalGestures(s: TerminalSession) {
     vel = 0.7 * (dy / dt) + 0.3 * vel;
     lastY = e.clientY;
     lastT = now;
-    scrollBy(dy, e.clientX, e.clientY);
+    dragScroll(dy, e.clientX, e.clientY);
   });
   const end = (e: PointerEvent) => {
     touches.delete(e.pointerId);
@@ -916,8 +949,12 @@ function bindTerminalGestures(s: TerminalSession) {
       }
       return;
     }
-    if (e.type !== 'pointerup') return;
+    if (e.type !== 'pointerup') {
+      letGo();
+      return;
+    }
     if (moved) {
+      if (letGo()) return; // springs back instead of flinging on
       if (performance.now() - lastT < 80 && Math.abs(vel) > 0.2) startInertia(vel, e.clientX, e.clientY);
       return;
     }

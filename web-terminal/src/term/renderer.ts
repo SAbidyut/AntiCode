@@ -360,6 +360,42 @@ export class BanglaRenderer {
     return moved;
   }
 
+  // ---- pulled past an end (the rubber band) ----
+  private overscroll = 0;
+  /** The most the content follows a pull past an end. */
+  get maxOverscroll() {
+    return Math.max(40, this.el.clientHeight * 0.12);
+  }
+  /** Scrolled into the top or bottom and still pulling: the content follows a little. */
+  setOverscroll(px: number) {
+    this.overscroll = px;
+    for (const a of this.zoomLayer.getAnimations()) if ((a as Animation).id === 'overscroll') a.cancel();
+    this.zoomLayer.style.translate = px ? `0 ${px.toFixed(1)}px` : '';
+  }
+  /** Let go: it springs back. */
+  releaseOverscroll() {
+    const from = this.overscroll;
+    if (!from) return;
+    this.setOverscroll(0);
+    if (!this.opts.animate) return;
+    const a = this.zoomLayer.animate([{ translate: `0 ${from.toFixed(1)}px` }, { translate: '0 0' }], {
+      duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+    });
+    a.id = 'overscroll';
+  }
+  /** A fling ran into an end at [v] px/ms: a short bounce. */
+  bounce(v: number) {
+    if (!this.opts.animate) return;
+    const amp = Math.max(-this.maxOverscroll, Math.min(this.maxOverscroll, v * 45));
+    if (Math.abs(amp) < 6) return;
+    this.setOverscroll(0);
+    const a = this.zoomLayer.animate(
+      [{ translate: '0 0' }, { translate: `0 ${amp.toFixed(1)}px`, offset: 0.28 }, { translate: '0 0' }],
+      { duration: 520, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    );
+    a.id = 'overscroll';
+  }
+
   /**
    * How far back the view can go: the whole scrollback, plus what the keyboard pan hides
    * at the top (with the keyboard up, the first lines would be out of reach otherwise).
@@ -882,6 +918,17 @@ export class BanglaRenderer {
       for (const [i, r] of this.rows) r.el.style.transform = `translateY(${rowY(i)}px)`;
     }
     const canReveal = motion && !this.suppressReveal && this.scrollPx === 0;
+    // An agent's input box (the rule line above the prompt, the prompt, its footer) is
+    // erased and drawn again below each new piece of a reply — always on fresh lines. It is
+    // not new output: it must not fade in (it flickered), and its lines stay "unrevealed" so
+    // the reply that takes their place still fades in.
+    let boxTop = cursorLine;
+    for (let y = cursorLine - 1; y >= Math.max(buf.baseY, cursorLine - 8); y--) {
+      if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
+        boxTop = y;
+        break;
+      }
+    }
     const revealed: HTMLDivElement[] = [];
     const labels = this.labelsByLine(first, last);
     for (let i = first; i <= last; i++) {
@@ -910,9 +957,9 @@ export class BanglaRenderer {
       }
       // A line getting content for the first time is new output: let it fade in. Not the
       // line being typed on (that would make typing feel slow).
-      if (el && i > this.revealedUpTo && live && line?.translateToString(true)) {
+      if (el && i > this.revealedUpTo && i < boxTop && live && line?.translateToString(true)) {
         this.revealedUpTo = i;
-        if (canReveal && i !== cursorLine) revealed.push(el);
+        if (canReveal) revealed.push(el);
       }
     }
     this.suppressReveal = false;
