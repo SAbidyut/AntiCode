@@ -1,7 +1,7 @@
 // One terminal tab: headless xterm (VT parser + buffer) + BanglaRenderer + reader view + input.
 
 import { Terminal } from '@xterm/headless';
-import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
+import { installWidths } from './conjuncts';
 import type { Bridge, SessionKind } from '../bridge';
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
 
@@ -47,6 +47,8 @@ export class TerminalSession {
   private sgrMouse = false;
   /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
   onLink?: (url: string, trusted: boolean) => void;
+  /** Count conjuncts the way a running program does (true) or the shell does (false). */
+  private setProgramWidths: (programRunning: boolean) => void;
   /** Where the shell is (OSC 7 from its prompt): a tapped file name is looked for there. */
   cwd = '';
   /** The folder the session was started in. */
@@ -60,7 +62,10 @@ export class TerminalSession {
   ) {
     this.title = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
-    this.term.loadAddon(new UnicodeGraphemesAddon() as never);
+    // conjuncts: the shell counts them by letters, newer programs as one (see conjuncts.ts);
+    // an agent session starts with its program running
+    this.setProgramWidths = installWidths(this.term);
+    this.setProgramWidths(kind === 'agy' || kind === 'claude');
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
     this.loadMeta();
@@ -144,7 +149,10 @@ export class TerminalSession {
       if (cmd === 'open' && args.length && !this.replaying) this.onLink?.(args.join(';'), trusted);
       else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
-      else if (cmd === 'done') this.renderer.anchorBottom = false;
+      else if (cmd === 'done') {
+        this.renderer.anchorBottom = false;
+        this.setProgramWidths(false); // the shell's prompt: its way of counting
+      } else if (cmd === 'exec') this.setProgramWidths(true); // a command starts
       else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });

@@ -130,6 +130,9 @@ __agy_prompt() {
   __agy_in_prompt=
 }
 PROMPT_COMMAND=__agy_prompt
+# a command starts: the app counts Bangla conjuncts the way programs do (one character) until
+# the prompt is back (the shell itself counts them by letters)
+PS0=$'\e]7770;exec\a'
 
 # ---------------------------------------------------------------- agents on demand
 # Typing 'agy' or 'claude' before they are installed installs them first.
@@ -189,5 +192,7 @@ if [[ ${BLE_VERSION-} ]]; then
     ble-bind -m emacs -f 'C-h' 'delete-region-or anticode-delete-backward-cluster'
   }
   blehook/eval-after-load keymap_emacs anticode/ble-keys 2>/dev/null || anticode/ble-keys
+  # (ble.sh runs commands itself: say when one starts from its hook as well)
+  blehook PREEXEC+='printf "\e]7770;exec\a"' 2>/dev/null
   ble-attach
 fi

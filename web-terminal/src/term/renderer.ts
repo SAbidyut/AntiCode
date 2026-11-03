@@ -878,8 +878,12 @@ export class BanglaRenderer {
       vm.dispose();
       this.viewMarker = null;
     }
+    // Every line the screen can show: more than the terminal's rows when the picture is taller
+    // than they are — a pinch-zoom preview (scaled down), the keyboard pan, a screen that grew
+    // before the terminal was resized. Drawing only `rows` lines left those parts black.
+    const shown = Math.ceil((this.el.clientHeight / Math.max(0.25, this.zoom) + this.pan) / lh) + 1;
     const first = Math.max(0, Math.floor(topPx / lh) - OVERSCAN);
-    const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + rows + OVERSCAN);
+    const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + Math.max(rows, shown) + OVERSCAN);
 
     for (const [i, r] of this.rows) {
       if (i < first || i > last) {

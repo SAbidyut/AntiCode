@@ -749,7 +749,7 @@ class MainActivity : ComponentActivity() {
                         Log.i(SELFTEST, "kbcycle| before=$before after=$size resizes=[$resizes]")
                         if (resizes.isEmpty() && size == before.trim('"')) Log.i(SELFTEST, "SELFTEST_KBCYCLE_OK")
                         else Log.e(SELFTEST, "SELFTEST_KBCYCLE_FAIL")
-                        selftestClaudeInUi()
+                        selftestConjuncts()
                     }
                 }, 3000)
             }, 3000)
@@ -757,6 +757,27 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */
+    /**
+     * Phase 3f: while a command runs, a conjunct takes one cell (as programs count it — their
+     * tables line up); the shell's "command starts" signal (PS0 / ble.sh) must arrive for that.
+     */
+    private fun selftestConjuncts() {
+        Log.i(SELFTEST, "phase 3f: conjunct widths while a program runs")
+        web.evaluateJavascript("__selftest.send(\"clear; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\\\n'\")", null)
+        main.postDelayed({
+            web.evaluateJavascript(
+                "(() => { const b = __selftest.session().term.buffer.active; for (let i = 0; i < b.length; i++) {" +
+                    " const l = b.getLine(i); const t = l.translateToString(true); if (!t.startsWith('CJ:x')) continue;" +
+                    " for (let x = 0; x < 12; x++) if (l.getCell(x).getChars() === 'y') return 'y@' + x; } return 'none'; })()",
+            ) { r ->
+                Log.i(SELFTEST, "conjunct| $r")
+                // C J : x ক্ষ y → y in cell 5 (the conjunct one cell); 6 = counted by letters
+                if (r.trim('"') == "y@5") Log.i(SELFTEST, "SELFTEST_CONJUNCT_OK") else Log.e(SELFTEST, "SELFTEST_CONJUNCT_FAIL")
+                selftestClaudeInUi()
+            }
+        }, 2500)
+    }
+
     private fun selftestClaudeInUi() {
         Log.i(SELFTEST, "phase 4: starting Claude Code in the real UI")
         web.evaluateJavascript("__selftest.open('claude')", null)
