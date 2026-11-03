@@ -634,12 +634,14 @@ function finishRenderHome() {
   renderHomeSessions();
 }
 
+/** A card's fold animation (kept here: older WebViews have no element.getAnimations). */
+const folding = new WeakMap<HTMLElement, Animation>();
 /** Shows / hides a home card; one that is done (permission given) folds away instead of vanishing. */
 function setCardShown(el: HTMLElement, show: boolean) {
   if (show) {
     if (el.dataset.folding) {
       delete el.dataset.folding;
-      for (const a of el.getAnimations()) a.cancel();
+      folding.get(el)?.cancel();
     }
     el.hidden = false;
     return;
@@ -655,6 +657,7 @@ function setCardShown(el: HTMLElement, show: boolean) {
   const to = { opacity: 0, height: '0px', paddingTop: '0px', paddingBottom: '0px', marginBottom: '0px' };
   el.style.overflow = 'hidden';
   const a = el.animate([from, to], { duration: 280, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' });
+  folding.set(el, a);
   const done = (hide: boolean) => {
     el.style.overflow = '';
     if (hide && el.dataset.folding) el.hidden = true;

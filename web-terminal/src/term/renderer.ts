@@ -362,14 +362,19 @@ export class BanglaRenderer {
 
   // ---- pulled past an end (the rubber band) ----
   private overscroll = 0;
+  private overscrollAnim: Animation | null = null;
+  /** (older WebViews have no `translate` property: no stretch there, nothing breaks) */
+  private static canStretch = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '0 1px');
   /** The most the content follows a pull past an end. */
   get maxOverscroll() {
     return Math.max(40, this.el.clientHeight * 0.12);
   }
   /** Scrolled into the top or bottom and still pulling: the content follows a little. */
   setOverscroll(px: number) {
+    if (!BanglaRenderer.canStretch) return;
     this.overscroll = px;
-    for (const a of this.zoomLayer.getAnimations()) if ((a as Animation).id === 'overscroll') a.cancel();
+    this.overscrollAnim?.cancel();
+    this.overscrollAnim = null;
     this.zoomLayer.style.translate = px ? `0 ${px.toFixed(1)}px` : '';
   }
   /** Let go: it springs back. */
@@ -378,22 +383,22 @@ export class BanglaRenderer {
     if (!from) return;
     this.setOverscroll(0);
     if (!this.opts.animate) return;
-    const a = this.zoomLayer.animate([{ translate: `0 ${from.toFixed(1)}px` }, { translate: '0 0' }], {
+    this.overscrollAnim = this.zoomLayer.animate([{ translate: `0 ${from.toFixed(1)}px` }, { translate: '0 0' }], {
       duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
     });
-    a.id = 'overscroll';
+    this.overscrollAnim.id = 'overscroll';
   }
   /** A fling ran into an end at [v] px/ms: a short bounce. */
   bounce(v: number) {
-    if (!this.opts.animate) return;
+    if (!this.opts.animate || !BanglaRenderer.canStretch) return;
     const amp = Math.max(-this.maxOverscroll, Math.min(this.maxOverscroll, v * 45));
     if (Math.abs(amp) < 6) return;
     this.setOverscroll(0);
-    const a = this.zoomLayer.animate(
+    this.overscrollAnim = this.zoomLayer.animate(
       [{ translate: '0 0' }, { translate: `0 ${amp.toFixed(1)}px`, offset: 0.28 }, { translate: '0 0' }],
       { duration: 520, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
     );
-    a.id = 'overscroll';
+    this.overscrollAnim.id = 'overscroll';
   }
 
   /**
