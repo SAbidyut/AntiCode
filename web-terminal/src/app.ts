@@ -1071,7 +1071,7 @@ function bindTerminalGestures(s: TerminalSession) {
     s.renderer.releaseOverscroll();
     return true;
   };
-  let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize;
+  let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize, pinchScale = 1;
   const touches = new Map<number, { x: number; y: number }>();
 
   const stopInertia = () => {
@@ -1134,8 +1134,12 @@ function bindTerminalGestures(s: TerminalSession) {
       letGo(); // a second finger: a pull past the end springs back (it stayed shifted)
       const [a, b] = [...touches.values()];
       pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
+      cancelZoomAnim();
+      s.renderer.dropGhost(); // (the last size change still fading in: done)
       font0 = pinchSize = prefs.fontSize;
+      pinchScale = 1;
       clearTimeout(longTimer);
+      showZoomChip(pinchSize, false);
       return;
     }
     startX = e.clientX;
@@ -1167,10 +1171,21 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2 && pinch0) {
-      // Pinch: only scale the picture now (smooth); resize the terminal once at the end.
+      // Pinch: the picture follows the fingers smoothly (not in whole text-size steps); the
+      // terminal takes the new size once the fingers lift.
       const [a, b] = [...touches.values()];
-      pinchSize = Math.round(Math.max(9, Math.min(28, font0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch0))));
-      s.renderer.previewZoom(pinchSize / font0);
+      const r = Math.hypot(a.x - b.x, a.y - b.y) / pinch0;
+      // past the smallest / largest size it still gives a little, harder the further
+      const lo = 9 / font0;
+      const hi = 28 / font0;
+      pinchScale = r < lo ? lo - (lo - r) * 0.25 : r > hi ? hi + (r - hi) * 0.25 : r;
+      s.renderer.previewZoom(pinchScale);
+      const size = Math.round(Math.max(9, Math.min(28, font0 * r)));
+      if (size !== pinchSize) {
+        pinchSize = size;
+        navigator.vibrate?.(3); // a light tick at each size, like a dial
+        showZoomChip(size, true);
+      }
       moved = true;
       return;
     }
@@ -1193,8 +1208,11 @@ function bindTerminalGestures(s: TerminalSession) {
     if (pinch0) {
       if (touches.size === 0) {
         pinch0 = 0;
-        s.renderer.previewZoom(null);
-        if (pinchSize !== prefs.fontSize) setFontSize(pinchSize, true);
+        hideZoomChip();
+        // the picture settles on the size it's going to be, then the text takes that size
+        const target = pinchSize / font0;
+        if (pinchSize === prefs.fontSize) animateZoom(s, pinchScale, 1, 220, () => s.renderer.previewZoom(null));
+        else animateZoom(s, pinchScale, target, 110, () => zoomTo(pinchSize));
       }
       return;
     }
@@ -1264,6 +1282,84 @@ function fitSoon() {
     }
     active?.fit();
   }, 250);
+}
+
+// ---- text size changes, animated (pinch, Settings) ----
+let zoomAnim = 0;
+function cancelZoomAnim() {
+  cancelAnimationFrame(zoomAnim);
+  zoomAnim = 0;
+}
+/** The pinch picture eases from one scale to another. */
+function animateZoom(s: TerminalSession, from: number, to: number, ms: number, done: () => void) {
+  cancelZoomAnim();
+  if (!prefs.animations || Math.abs(from - to) < 0.002) {
+    s.renderer.previewZoom(to === 1 ? null : to);
+    done();
+    return;
+  }
+  const t0 = performance.now();
+  const step = (now: number) => {
+    const k = Math.min(1, (now - t0) / ms);
+    const e = 1 - Math.pow(1 - k, 3); // ease out
+    s.renderer.previewZoom(from + (to - from) * e);
+    if (k < 1) zoomAnim = requestAnimationFrame(step);
+    else {
+      zoomAnim = 0;
+      done();
+    }
+  };
+  zoomAnim = requestAnimationFrame(step);
+}
+
+/**
+ * A new text size for the terminals, without the jumps: the picture as it is stays on
+ * screen while the terminal takes the size and its program redraws (an agent does it in
+ * several goes), then it fades into the new picture.
+ */
+function zoomTo(size: number) {
+  const s = screen === 'term' && !document.hidden ? active : null;
+  if (!s || !prefs.animations || s.renderer.options.fontSize === size) {
+    s?.renderer.previewZoom(null);
+    setFontSize(size, true);
+    return;
+  }
+  s.renderer.freezePicture();
+  s.renderer.previewZoom(null); // (the real picture, hidden under it, back to scale 1)
+  setFontSize(size, true);
+  // the program has had the new size and gone quiet (or it's taking too long): show it
+  const t0 = performance.now();
+  const check = () => {
+    const now = performance.now();
+    if (sessions.get(s.id) !== s) return;
+    if ((now - t0 > 240 && now - s.renderer.lastOutput > 130) || now - t0 > 1500) {
+      s.renderer.schedule();
+      requestAnimationFrame(() => requestAnimationFrame(() => s.renderer.revealPicture()));
+    } else window.setTimeout(check, 30);
+  };
+  window.setTimeout(check, 60);
+}
+
+let zoomChipTimer = 0;
+/** The text size while pinching, at the top of the terminal. */
+function showZoomChip(size: number, changed: boolean) {
+  let chip = document.getElementById('zoom-chip');
+  if (!chip) {
+    chip = h('div', { id: 'zoom-chip' }, h('b', {}, 'Aa'), h('span', {}), h('small', {}, 'px'));
+    $('#sessions').append(chip);
+  }
+  clearTimeout(zoomChipTimer);
+  chip.querySelector('span')!.textContent = String(size);
+  chip.classList.add('show');
+  if (changed) {
+    chip.classList.remove('pop');
+    void chip.offsetWidth; // (restart the pop)
+    chip.classList.add('pop');
+  }
+}
+function hideZoomChip() {
+  clearTimeout(zoomChipTimer);
+  zoomChipTimer = window.setTimeout(() => document.getElementById('zoom-chip')?.classList.remove('show'), 450);
 }
 
 function setFontSize(size: number, persist: boolean, say = false) {
@@ -1770,7 +1866,7 @@ function openSettingsSheet() {
     range('Text size', 9, 28, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
       prefs.fontSize = v;
       sample?.renderer.setOptions({ fontSize: v });
-    }, () => setFontSize(prefs.fontSize, true, false)),
+    }, () => zoomTo(prefs.fontSize)),
     range('Bangla letter size', 0.8, 1.3, 0.05, prefs.bnScale, (v) => `${Math.round(v * 100)}%`, (v) => {
       prefs.bnScale = v;
       for (const s of sessions.values()) s.renderer.setOptions({ bnScale: v });

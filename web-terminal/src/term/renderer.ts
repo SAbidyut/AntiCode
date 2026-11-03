@@ -555,11 +555,66 @@ export class BanglaRenderer {
     this.schedule();
   }
 
-  /** Visual-only zoom while pinching (cheap); the real font size is set when it ends. */
+  /**
+   * Visual-only zoom while pinching (cheap); the real font size is set when it ends. The
+   * picture grows from the edge that stays where it is once the text is laid out at the new
+   * size: the bottom when the screen is filled or an agent's input box sits there, else the
+   * top — so the change at the end is as small as it can be.
+   */
   previewZoom(scale: number | null) {
-    this.zoom = scale ?? 1;
+    const z = scale ?? 1;
+    if (z !== 1 && this.zoom === 1) {
+      const buf = this.term.buffer.active;
+      const visible = this.el.clientHeight - 12;
+      const bottom = this.anchorBottom || buf.type === 'alternate' || (buf.cursorY + 1) * this.lineHeight > visible * 0.5;
+      const oy = bottom ? this.pan + visible : this.pan;
+      this.zoomLayer.style.transformOrigin = `0 ${oy.toFixed(1)}px`;
+    }
+    this.zoom = z;
+    if (z === 1) this.zoomLayer.style.transformOrigin = '';
     this.zoomLayer.style.transitionDuration = '0s';
     this.applyLayerTransform();
+  }
+
+  // ---- a new text size, shown without the jumps ----
+  // A text size change resizes the terminal: the text re-wraps, the program redraws (agents
+  // in several goes — half-drawn frames, a logo in pieces). Meanwhile a still copy of the
+  // picture as it was stays on top; once the program is done, it fades (softly blurring)
+  // into the new one.
+  private still: HTMLElement | null = null;
+  /** Keep the picture as it is now on screen while the real one changes underneath. */
+  freezePicture() {
+    this.dropGhost();
+    const g = this.zoomLayer.cloneNode(true) as HTMLElement;
+    g.classList.add('term-ghost');
+    g.setAttribute('aria-hidden', 'true');
+    // (its sizes stay the old ones when the screen's change)
+    for (const v of ['--cw', '--lh', '--fs', '--bn-fs', '--bw']) g.style.setProperty(v, this.el.style.getPropertyValue(v));
+    g.style.fontSize = `${this.opts.fontSize}px`;
+    this.el.append(g);
+    this.still = g;
+    this.zoomLayer.style.opacity = '0';
+  }
+  /** The new picture is ready: the still copy fades into it. */
+  revealPicture() {
+    const g = this.still;
+    this.still = null;
+    this.zoomLayer.style.opacity = '';
+    if (!g) return;
+    if (!this.opts.animate) {
+      g.remove();
+      return;
+    }
+    const ease = 'cubic-bezier(0.33, 0, 0.2, 1)';
+    const out = g.animate([{ opacity: 1, filter: 'blur(0px)' }, { opacity: 0, filter: 'blur(2.5px)' }], { duration: 300, easing: ease, fill: 'forwards' });
+    out.onfinish = () => g.remove();
+    this.zoomLayer.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: ease });
+  }
+  /** (a new pinch while the last change is still fading: finish it at once) */
+  dropGhost() {
+    this.still?.remove();
+    this.still = null;
+    this.zoomLayer.style.opacity = '';
   }
 
   /** Vertical pan of the whole screen (keeps the cursor above the keyboard) + pinch zoom. */
