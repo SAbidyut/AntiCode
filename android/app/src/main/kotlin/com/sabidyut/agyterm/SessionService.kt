@@ -229,7 +229,7 @@ class SessionService : Service() {
     fun saveLive() {
         val arr = org.json.JSONArray()
         for (s in sessions.values.sortedBy { it.createdAt }) {
-            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label))
+            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label).put("dir", s.startDir))
         }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LIVE, arr.toString()).apply()
     }

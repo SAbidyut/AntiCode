@@ -65,6 +65,12 @@ class RemotePanel(
     private var localFile: java.io.File? = null
     /** "Open with another app" for a local file. */
     var openFileElsewhere: ((java.io.File) -> Unit)? = null
+    /**
+     * A new page replaced what was shown (a file after a dashboard, or the other way round):
+     * its history starts with it — Back must not step into the other kind of page (a file
+     * with file access off, or a web page while the panel still thinks it's showing a file).
+     */
+    private var freshHistory = false
     /** Unload the page a while after closing, so it doesn't poll in the background. */
     private val unload = Runnable {
         if (!isOpen) {
@@ -154,6 +160,13 @@ class RemotePanel(
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
                 onRendererGone()
                 return true
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                if (freshHistory && url != null && url != "about:blank") {
+                    freshHistory = false
+                    view.clearHistory()
+                }
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -260,6 +273,7 @@ class RemotePanel(
         subtitleView.text = hostOf(url)
         if (url != startUrl || web.url == null) {
             startUrl = url
+            freshHistory = true
             web.loadUrl(url)
         }
         show()
@@ -279,6 +293,7 @@ class RemotePanel(
         subtitleView.text = subtitle
         val ext = file.name.substringAfterLast('.', "").lowercase()
         startUrl = Uri.fromFile(file).toString()
+        freshHistory = true
         if (ext in TEXT_FILES) {
             // plain text in the app's colours, wrapped, at a readable size
             val text = try {
@@ -349,7 +364,9 @@ class RemotePanel(
     /** Back: inside the page first, then close the panel. */
     fun back(): Boolean {
         if (!isOpen) return false
-        if (web.canGoBack()) web.goBack() else close()
+        val list = web.copyBackForwardList()
+        val prev = if (list.currentIndex > 0) list.getItemAtIndex(list.currentIndex - 1)?.url else null
+        if (web.canGoBack() && prev != null && prev != "about:blank") web.goBack() else close()
         return true
     }
 

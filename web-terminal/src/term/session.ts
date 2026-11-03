@@ -140,15 +140,11 @@ export class TerminalSession {
     this.term.parser.registerEscHandler({ final: 'c' }, showAgain(true));
     this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain(false));
     // OSC 7 ; file://host/path — the shell's folder (our prompt sends it)
+    // (only from our prompt — host "android", the path as it is: a remote shell over ssh, or
+    // some program's output, doesn't decide where tapped file names are looked for)
     this.term.parser.registerOscHandler(7, (data) => {
-      const m = /^file:\/\/[^/]*(\/.*)$/.exec(data);
-      if (m) {
-        try {
-          this.cwd = decodeURIComponent(m[1]);
-        } catch {
-          this.cwd = m[1];
-        }
-      }
+      const m = /^file:\/\/android(\/.*)$/.exec(data);
+      if (m) this.cwd = m[1];
       return true;
     });
     // OSC 7770 ; <cmd> ; …  — from our scripts inside Ubuntu.
@@ -499,23 +495,36 @@ export class TerminalSession {
     return this.matchAt(clientX, clientY, FILE_RE);
   }
 
-  /** The match of [re] in the (unwrapped) line under the point. */
+  /**
+   * The match of [re] in the (unwrapped) line under the point. Only the run of non-spaces
+   * around the point is searched (at most 1k characters each way): these patterns can start
+   * anywhere, and on a long line (minified code, base64) a tap took seconds.
+   */
   private matchAt(clientX: number, clientY: number, re: RegExp): string | null {
     const { x, line: at } = this.renderer.cellAt(clientX, clientY);
     const buf = this.term.buffer.active;
     let start = at;
-    while (start > 0 && buf.getLine(start)?.isWrapped) start--;
+    while (start > 0 && at - start < 16 && buf.getLine(start)?.isWrapped) start--;
     let text = '';
     let offset = -1;
-    for (let i = start; i < buf.length; i++) {
+    for (let i = start; i < buf.length && i - at <= 16; i++) {
       const line = buf.getLine(i);
       if (!line || (i > start && !line.isWrapped)) break;
       // x is a cell; the text has one char per letter cluster or wide character
       if (i === at) offset = text.length + line.translateToString(false, 0, x).length;
       text += line.translateToString(false);
     }
-    for (const m of text.matchAll(re)) {
-      if (offset >= m.index! && offset <= m.index! + m[0].length) return m[0];
+    if (offset < 0) return null;
+    const space = (c: string) => c === ' ' || c === '\t' || c === '\u00a0';
+    let a = offset;
+    let b = offset;
+    while (a > 0 && offset - a < 1024 && !space(text[a - 1])) a--;
+    while (b < text.length && b - offset < 1024 && !space(text[b])) b++;
+    if (a === b) return null;
+    const token = text.slice(a, b);
+    const at0 = offset - a;
+    for (const m of token.matchAll(re)) {
+      if (at0 >= m.index! && at0 <= m.index! + m[0].length) return m[0];
     }
     return null;
   }

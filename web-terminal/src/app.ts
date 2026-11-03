@@ -391,7 +391,7 @@ async function reportLostSessions() {
         : 'If it keeps happening, lock AntiCode in Recents (long-press its card → Lock).'),
     h('div', { class: 'action-list' },
       action('terminal', lost.length === 1 ? 'Open it again' : 'Open them again', 'Fresh sessions of the same kind', async () => {
-        for (const l of lost) await newSession(l.kind);
+        for (const l of lost) await newSession(l.kind, l.dir ?? ''); // (in the folder it was started in)
       }),
       hostState.background === false ? action('shield', 'Allow running in the background', '', () => bridge.allowBackground()) : null,
       action('x', 'Not now', '', () => {}),
@@ -1050,10 +1050,15 @@ function bindTerminalGestures(s: TerminalSession) {
   };
 
   el.addEventListener('pointerdown', (e) => {
-    caughtFling = inertia !== 0; // a tap that only stops the scrolling isn't a tap
+    caughtFling = inertia !== 0 || wheelFrame !== 0; // a tap that only stops the scrolling isn't a tap
     stopInertia();
+    // (a full-screen program's queued scroll steps stop too)
+    cancelAnimationFrame(wheelFrame);
+    wheelFrame = 0;
+    wheelLines = 0;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2) {
+      letGo(); // a second finger: a pull past the end springs back (it stayed shifted)
       const [a, b] = [...touches.values()];
       pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
       font0 = pinchSize = prefs.fontSize;

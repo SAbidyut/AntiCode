@@ -121,7 +121,7 @@ export interface Bridge {
   /** Ask to run without battery restrictions (so Android doesn't stop the sessions). */
   allowBackground(): void;
   /** Sessions Android stopped while the app was gone; forget them once shown. */
-  getLostSessions(): Promise<{ kind: SessionKind; label: string }[]>;
+  getLostSessions(): Promise<{ kind: SessionKind; label: string; dir?: string }[]>;
   forgetLostSessions(): void;
   exitApp(): void;
 }
@@ -228,7 +228,7 @@ class AndroidHostBridge implements Bridge {
   allowBackground() { this.api.allowBackground?.(); }
   async getLostSessions() {
     try {
-      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string }[];
+      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string; dir?: string }[];
     } catch {
       return [];
     }

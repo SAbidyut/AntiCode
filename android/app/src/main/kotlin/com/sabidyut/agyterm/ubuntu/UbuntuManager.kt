@@ -546,7 +546,11 @@ class UbuntuManager private constructor(private val context: Context) {
             if (boundHost(next) == null) {
                 val f = File(rootfs, next.removePrefix("/"))
                 if (isSymlink(f)) {
-                    val t = try { Os.readlink(f.absolutePath) } catch (_: Exception) { return null }
+                    var t = try { Os.readlink(f.absolutePath) } catch (_: Exception) { return null }
+                    // a hard link made inside Ubuntu: proot keeps it as a link to a file in
+                    // Ubuntu's folder on the phone (an absolute phone path, not an Ubuntu one)
+                    val root = rootfs.absolutePath
+                    if (t == root || t.startsWith("$root/")) t = t.removePrefix(root).ifEmpty { "/" }
                     val target = if (t.startsWith("/")) t else "$cur/$t"
                     val rest = parts.drop(i + 1).joinToString("/")
                     val n = normalizeGuestPath(if (rest.isEmpty()) target else "$target/$rest") ?: return null
@@ -575,9 +579,14 @@ class UbuntuManager private constructor(private val context: Context) {
             val noAccess = (onPhone && !com.sabidyut.agyterm.Storage.hasAccess(context)) || host?.isDirectory == true
             return json.put("error", if (noAccess) "noaccess" else "notfound").toString()
         }
+        // (the folder is resolved once; only entries that are links are followed — DCIM/Camera
+        // has thousands of pictures)
         val dirs = names.asSequence()
             .filter { !it.startsWith(".") }
-            .filter { hostPath(child(g, it))?.isDirectory == true }
+            .filter {
+                val f = File(host, it)
+                if (isSymlink(f)) hostPath(child(g, it))?.isDirectory == true else f.isDirectory
+            }
             .sortedWith(String.CASE_INSENSITIVE_ORDER)
             .take(2000)
             .toList()
