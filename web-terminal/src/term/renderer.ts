@@ -225,7 +225,7 @@ export class BanglaRenderer {
 
   /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
   /** ([note]: plain grey text — a prompt's "5s" — not the clock's pill) */
-  /** ([acct]: an agent's signed-in account, partly hidden; [offset]: lines from the cursor's) */
+  /** ([acct]: an agent's signed-in account; [offset]: lines from the cursor's) */
   setRightLabel(text: string, note = false, acct = false, offset = 0) {
     if (this.term.buffer.active.type !== 'normal') return;
     const marker = this.term.registerMarker(offset);

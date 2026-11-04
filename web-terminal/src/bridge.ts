@@ -102,7 +102,7 @@ export interface Bridge {
   /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
   setPromptStyle(style: string): void;
   getPromptStyle(): Promise<string>;
-  /** The account an agent is signed in with, partly hidden ("sh***@gmail.com"); "" if unknown. */
+  /** The account (email) an agent is signed in with; "" if unknown. */
   accountEmail(kind: string): string;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string): void;

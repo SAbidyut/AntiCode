@@ -259,7 +259,7 @@ export class TerminalSession {
     this.accountTail = joined.slice(-200); // raw: an escape split across chunks still strips
   }
 
-  // ---- the account an agent is signed in with, shown (partly hidden) by its header: on the
+  // ---- the account an agent is signed in with, shown by its header: on the
   // plan's line of Claude Code's header ("Claude Max"), the first line of Antigravity's ----
   private acct: { name: string; text: string; from: IMarker; until: number } | null = null;
   private expectAccount(name: string) {

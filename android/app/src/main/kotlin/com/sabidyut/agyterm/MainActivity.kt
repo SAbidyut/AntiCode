@@ -1119,7 +1119,7 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getPromptStyle(): String = service?.ubuntu?.promptStyle ?: "powerline"
 
-        /** The account an agent ("claude" / "agy") is signed in with, partly hidden; "" if unknown. */
+        /** The account (email) an agent ("claude" / "agy") is signed in with; "" if unknown. */
         @JavascriptInterface
         fun accountEmail(kind: String): String = service?.ubuntu?.accountEmail(kind) ?: ""
 

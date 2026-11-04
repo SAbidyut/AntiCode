@@ -73,8 +73,7 @@ class UbuntuManager private constructor(private val context: Context) {
         }
 
     /**
-     * The account an agent is signed in with, partly hidden ("sh***@gmail.com"), or "" when
-     * not known. Claude Code keeps it in ~/.claude.json. Antigravity shows it in its header
+     * The account (email) an agent is signed in with, or "" when not known. Claude Code keeps it in ~/.claude.json. Antigravity shows it in its header
      * (the app remembers it from there); before that, its account and token files under
      * ~/.gemini are looked through for an email (a field, or the Google sign-in token's).
      * Read from the files only — nothing goes over the network.
@@ -93,7 +92,7 @@ class UbuntuManager private constructor(private val context: Context) {
         } catch (_: Exception) {
             ""
         }
-        return maskEmail(email.trim())
+        return email.trim().takeIf { Regex("^[^\\s@]+@[^\\s@]+$").matches(it) } ?: ""
     }
 
     private fun agyEmail(dir: File): String {
@@ -683,14 +682,6 @@ class UbuntuManager private constructor(private val context: Context) {
     )
 
     companion object {
-        /** "shawon.2449@gmail.com" → "sh***@gmail.com" ("" stays ""). */
-        fun maskEmail(email: String): String {
-            val at = email.lastIndexOf('@')
-            if (at <= 0 || at == email.length - 1) return ""
-            val local = email.substring(0, at)
-            val keep = if (local.length <= 3) 1 else 2
-            return local.take(keep) + "***" + email.substring(at)
-        }
 
         val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
         private const val UI_PREFS = "anticode-ui"

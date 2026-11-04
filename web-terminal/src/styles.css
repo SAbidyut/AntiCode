@@ -495,7 +495,7 @@ body[data-screen='home']::before {
 }
 /* a prompt's plain note at the right edge (how long the last command took) */
 .term-row .rlabel.note { background: none; color: #8a8fa3; padding: 0 0.2em; font-size: calc(var(--fs) * 0.95); }
-/* the account an agent is signed in with (partly hidden), by its header */
+/* the account an agent is signed in with, by its header */
 .term-row .rlabel.acct { background: rgba(137, 180, 250, 0.14); color: #a6b4d4; padding: 0 0.65em; gap: 0.4em; }
 .term-row .rlabel.acct b { color: #89b4fa; }
 .term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
