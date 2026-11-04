@@ -468,6 +468,15 @@ body[data-screen='home']::before {
 .term-row .dg, .term-preedit .dg { position: relative; z-index: 1; overflow: visible; }
 .term-row .dg svg, .term-preedit .dg svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .term-row .dg i, .term-preedit .dg i { position: absolute; border: 0 solid currentColor; box-sizing: border-box; }
+/* a powerline glyph: one em of the pictures' glyph (11.5 px in a 21 px row), its baseline
+   where JetBrains Mono puts it, flush with its own side of the cell */
+.term-row .dg i.pf, .term-preedit .dg i.pf {
+  top: 0; width: calc(var(--lh) * 11.5 / 21); height: var(--lh);
+  font: normal 400 calc(var(--lh) * 11.5 / 21) / var(--lh) 'JetBrains Mono', monospace; white-space: pre;
+}
+.term-row .dg i.pf.l, .term-preedit .dg i.pf.l { left: 0; }
+.term-row .dg i.pf.r, .term-preedit .dg i.pf.r { right: 0; }
+.term-row .dg i.pf b, .term-preedit .dg i.pf b { font-family: 'AgySymbols'; font-weight: 400; }
 .term-row .dg i.sh, .term-preedit .dg i.sh { left: 0; top: 0; right: 0; bottom: 0; background: currentColor; }
 .term-row .dg i.r-dr, .term-preedit .dg i.r-dr { left: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); right: 0; bottom: 0; border-top-width: var(--bw); border-left-width: var(--bw); border-top-left-radius: calc(var(--cw) * 0.75); }
 .term-row .dg i.r-dl, .term-preedit .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
@@ -475,9 +484,9 @@ body[data-screen='home']::before {
 .term-row .dg i.r-ur, .term-preedit .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
 /* the prompt's clock, always at the right edge of its line */
 .term-row .rlabel {
-  position: absolute; right: 0; top: 0; z-index: 1;
-  display: inline-flex; align-items: center; gap: 0.45em; height: var(--lh);
-  padding: 0 0.75em; border-radius: calc(var(--lh) / 2);
+  position: absolute; right: 0; top: calc(var(--lh) / 21); z-index: 1;
+  display: inline-flex; align-items: center; gap: 0.45em; height: calc(var(--lh) * 19 / 21);
+  padding: 0 0.75em; border-radius: calc(var(--lh) * 19 / 42);
   background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
 }
 /* a prompt's plain note at the right edge (how long the last command took) */

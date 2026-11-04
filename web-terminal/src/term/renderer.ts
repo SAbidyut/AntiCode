@@ -756,6 +756,14 @@ export class BanglaRenderer {
     // door on a phone (Claude Code's welcome art is made of them).
     const shade = cp === 0x2591 ? 0.25 : cp === 0x2592 ? 0.5 : cp === 0x2593 ? 0.75 : 0;
     if (shade) return `<span class="dg" style="${width}${style}"><i class="sh" style="opacity:${shade}"></i></span>`;
+    // Powerline separators and rounded ends as the font draws them (as in Settings' pictures
+    // of the prompt styles): a band through the middle of the row — rounded nubs and small
+    // arrows on the bar, not ends as tall as the row. Sized to the row as the pictures are
+    // (11.5 px glyphs in a 21 px row), against the side of the bar they belong to.
+    if (cp >= 0xe0b0 && cp <= 0xe0bf) {
+      const side = (cp - 0xe0b0) % 4 < 2 ? 'l' : 'r';
+      return `<span class="dg" style="${width}${style}"><i class="pf ${side}"><b>${String.fromCodePoint(cp)}</b></i></span>`;
+    }
     const pl = POWERLINE[cp];
     if (pl) {
       const paint = pl.fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"';

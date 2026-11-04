@@ -134,12 +134,14 @@ __agy_ps_bar() {
   local -a L=() R=() RK=()
   local wide=1
   (( cols < 72 )) && wide=
-  L+=("58;58;64|220;220;225| "$'\uf17c'" ")
-  L+=("38;100;190|240;244;250| "$'\uf07b'" @PATH ")
+  L+=("58;58;64|220;220;225| "$'\uf17c'"  ")
+  L+=("38;100;190|240;244;250| "$'\uf07b'"  @PATH ")
   if [ -n "$__agy_branch" ]; then
-    if [ -n "$wide" ]; then L+=("88;148;40|20;24;16| on "$'\ue725'" @BRANCH ")
-    else L+=("88;148;40|20;24;16| "$'\ue725'" @BRANCH "); fi
+    if [ -n "$wide" ]; then L+=("88;148;40|20;24;16| on "$'\ue0a0'"  @BRANCH ")
+    else L+=("88;148;40|20;24;16| "$'\ue0a0'"  @BRANCH "); fi
   fi
+  # lean: plain text, one space after an icon is enough
+  if [ "$kind" = lean ]; then local j; for j in "${!L[@]}"; do L[j]=${L[j]//  / }; done; fi
   (( status != 0 )) && R+=("204;62;62|250;240;240| "$'\uf071'" ${status} ") && RK+=(status)
   if [ -n "$wide" ]; then
     printf -v time '%(%H:%M:%S)T' -1
@@ -156,8 +158,12 @@ __agy_ps_bar() {
   [ "$kind" = lean ] && sep=0
   for i in "${L[@]}"; do t=${i##*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; wl=$(( wl + ${#t} + sep )); done
   for i in "${R[@]}"; do t=${i##*|}; wr=$(( wr + ${#t} + sep )); done
-  # still too narrow: the right side's parts go, the time first (the folder keeps 10)
-  while (( ${#R[@]} > 0 )) && (( cols - wl - wr - 3 < 10 )); do
+  # still too narrow: the right side's parts go, the time first (the folder keeps at least its own name)
+  local need=${path##*/}
+  need=${#need}
+  (( need < 1 )) && need=1
+  (( need > 16 )) && need=16
+  while (( ${#R[@]} > 0 )) && (( cols - wl - wr - 3 < need )); do
     t=${R[-1]##*|}; wr=$(( wr - ${#t} - sep )); unset 'R[-1]'
   done
   __agy_fit_path $(( cols - wl - wr - 3 ))
@@ -207,20 +213,23 @@ __agy_ps_capsule() {
   local -a C=()
   C+=("203;166;247|"$'\uf007'" ${USER:-root}")
   C+=("137;180;250|"$'\uf07b'" @PATH")
-  [ -n "$__agy_branch" ] && C+=("166;227;161|"$'\ue725'" @BRANCH")
-  [ -n "$took" ] && C+=("249;226;175|"$'\uf252'" ${took}")
+  [ -n "$__agy_branch" ] && C+=("166;227;161|"$'\ue0a0'" @BRANCH")
   (( status != 0 )) && C+=("243;139;168|"$'\uf071'" ${status}")
   local clock= w i t
   (( cols >= 34 )) && printf -v clock '%(%-I:%M %p)T' -1
   __agy_cw() {
-    w=3
+    w=-1
     for i in "${C[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; w=$(( w + ${#t} + 5 )); done
   }
   __agy_cw
-  # narrow: the clock goes first, then the user's capsule (the folder keeps 10)
+  # narrow: the clock goes first, then the user's capsule (the folder keeps at least its own name)
+  local need=${path##*/}
+  need=${#need}
+  (( need < 1 )) && need=1
+  (( need > 16 )) && need=16
   local room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
-  if (( room - w < 10 )) && [ -n "$clock" ]; then clock=; room=$(( cols - 1 )); fi
-  if (( room - w < 10 )); then C=("${C[@]:1}"); __agy_cw; fi
+  if (( room - w < need )) && [ -n "$clock" ]; then clock=; room=$(( cols - 1 )); fi
+  if (( room - w < need )); then C=("${C[@]:1}"); __agy_cw; fi
   __agy_fit_path $(( room - w ))
   __agy_txt=("$__agy_p" "$__agy_branch")
   local rclock=
@@ -248,8 +257,7 @@ __agy_ps_powerline() {
   local -a segs=()
   segs+=("245;169;127|"$'\uf007'" ${USER:-root}")
   segs+=("243;139;168|${dir_icon} ${path}")
-  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$'\ue725'" ${__agy_branch}")
-  [ -n "$took" ] && segs+=("137;220;235|"$'\uf252'" ${took}")
+  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$'\ue0a0'" ${__agy_branch}")
   (( status != 0 )) && segs+=("235;111;146|"$'\uf071'" ${status}")
 
   # Fit the phone's width (leaving room for the clock): shorten the path.
@@ -266,7 +274,7 @@ __agy_ps_powerline() {
     [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
     segs[1]="243;139;168|${dir_icon} ${short}"
     __agy_width
-    (( width > room )) && segs[1]="243;139;168|${dir_icon} ${path##*/}"
+    (( width > room )) && segs[1]="243;139;168|${dir_icon} ${path##*/}" && __agy_width
   fi
 
   # the clock only if it won't cover the bar
