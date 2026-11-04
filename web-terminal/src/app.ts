@@ -462,10 +462,11 @@ function activate(s: TerminalSession | null) {
   if (s !== active) {
     settleComposing();
     endSelection();
+    consumeLatch(); // (a Ctrl latched in one tab doesn't turn the next tab's letter into ^C)
   }
   for (const x of sessions.values()) {
     x.el.hidden = x !== s;
-    x.setFocused(false);
+    x.setFocused(x === s && keyboardShown);
     x.renderer.insetsMoving = x === s && insetsMoving;
   }
   active = s;
@@ -1056,8 +1057,9 @@ function bindTerminalGestures(s: TerminalSession) {
     if (selOwner === s) placeSelectionBar();
   };
   s.edit.onChanged = (sel) => {
-    // gone by itself (typing, the line was sent, the box moved): its bar goes with it
-    if (!sel && selOwner === s && !selBarAt) hideSelectionBar();
+    // gone by itself (the line was sent, the box moved): the bar and the selection's owner go
+    // with it, or a later tap would only "end" a selection that isn't there
+    if (!sel && selOwner === s) endSelection();
   };
   s.onTyped = () => {
     if (selOwner === s) endSelection();
@@ -1084,6 +1086,8 @@ function bindTerminalGestures(s: TerminalSession) {
     if (spot) s.edit.setSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
   };
   let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0;
+  /** The long-press fired: until the finger lifts, nothing scrolls or taps. */
+  let pressed = false;
   /** The finger's recent positions: a fling's speed is measured over them, not two events. */
   let track: [number, number][] = [];
   /**
@@ -1200,7 +1204,8 @@ function bindTerminalGestures(s: TerminalSession) {
     const t0 = performance.now();
     let done = 0;
     const step = (now: number) => {
-      const k = Math.min(1, (now - t0) / duration);
+      // (the first frame's time can be a little before the finger lifted: never below 0)
+      const k = Math.max(0, Math.min(1, (now - t0) / duration));
       const at = splineAt(k) * distance;
       const moving = scrollBy((at - done) * dir, x, y);
       done = at;
@@ -1248,12 +1253,20 @@ function bindTerminalGestures(s: TerminalSession) {
     acc = 0;
     track = [[lastT, e.clientY]];
     moved = false;
+    pressed = false;
     t0 = Date.now();
     clearTimeout(longTimer);
     longTimer = window.setTimeout(() => {
       if (!moved) {
+        // on the pinned input box (reading back in an agent): the line under it isn't what
+        // the finger is on — nothing to select there
+        const dock = s.renderer.dockRect();
+        if (dock && startY >= dock.top) return;
+        pressed = true;
         haptic();
         if (selOwner && selOwner !== s) endSelection();
+        // a word still being composed goes in first (Cut / Paste must find the selection)
+        settleComposing();
         // the word under the finger is selected where it is, like in any app: in the line
         // being typed (cut, paste over it too), anywhere else to copy
         const spot = s.editSpot(startX, startY);
@@ -1271,6 +1284,7 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (multi) return; // (two fingers, or the one left down after the other lifted: nothing)
+    if (pressed) return; // (a word was just selected under the finger: it stays put)
     if (!moved && (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8)) {
       moved = true;
       clearTimeout(longTimer);
@@ -1297,6 +1311,10 @@ function bindTerminalGestures(s: TerminalSession) {
     if (e.type !== 'pointerup') {
       letGo();
       return;
+    }
+    if (pressed) {
+      pressed = false;
+      return; // (the long-press did its work: no tap, no fling)
     }
     if (moved) {
       if (letGo()) return; // springs back instead of flinging on
@@ -1561,6 +1579,7 @@ function sheetOpen() {
 }
 let sheetHideTimer = 0;
 function openSheet(title: string, ...content: Kid[]) {
+  endSelection(); // (its bar would float over the sheet and act on the terminal behind it)
   const sheet = $('#sheet');
   const backdrop = $('#sheet-backdrop');
   const body = sheet.querySelector('.sheet-body') as HTMLElement;
@@ -1813,7 +1832,10 @@ function newFolderRow(kind: SessionKind, parent: string) {
 function openMoreSheet() {
   const s = active;
   openSheet('', h('div', { class: 'action-list' },
-    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', '', () => s.toggleReader()),
+    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', '', () => {
+      endSelection();
+      s.toggleReader();
+    }),
     s && action('copy', 'Copy all text', '', () => {
       bridge.copyText(s.allText());
       toast('Copied');

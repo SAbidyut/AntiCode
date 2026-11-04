@@ -155,7 +155,16 @@ class SessionService : Service() {
         ubuntu.onBusyChanged = { mainHandler.post { updateForeground() } }
         createChannel()
         // after the UI had its start: unpack the helper files once, ahead of the first launch
-        mainHandler.postDelayed({ Thread({ ubuntu.prepare() }, "ubuntu-prepare").start() }, 1500)
+        // (a failure here must not take the app down: launch() tries again and says what's wrong)
+        mainHandler.postDelayed({
+            Thread({
+                try {
+                    ubuntu.prepare()
+                } catch (e: Throwable) {
+                    android.util.Log.w("SessionService", "preparing Ubuntu failed", e)
+                }
+            }, "ubuntu-prepare").start()
+        }, 1500)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder

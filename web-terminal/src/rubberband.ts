@@ -63,7 +63,11 @@ export function attachRubberBand(el: HTMLElement, animate: () => boolean) {
     if (stretch) set(stretch); // (stops a spring-back in progress where it is)
   }, { passive: true });
   el.addEventListener('touchmove', (e) => {
-    if (!active || e.touches.length !== 1) return;
+    if (!active) return;
+    if (e.touches.length !== 1) {
+      lastY = e.touches[0].clientY; // (two fingers: none of it stretches, nothing jumps after)
+      return;
+    }
     const y = e.touches[0].clientY;
     const dy = y - lastY;
     lastY = y;
@@ -79,7 +83,11 @@ export function attachRubberBand(el: HTMLElement, animate: () => boolean) {
       set(Math.max(-m, Math.min(m, stretch + dy * 0.55 * (1 - Math.abs(stretch) / m))));
     }
   }, { passive: true });
-  const end = () => {
+  const end = (e: TouchEvent) => {
+    if (e.touches.length) {
+      lastY = e.touches[0].clientY; // one finger of two lifted: the other one goes on from here
+      return;
+    }
     touching = false;
     release();
   };

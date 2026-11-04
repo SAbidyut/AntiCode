@@ -32,10 +32,19 @@ __agy_style_file="$HOME/.config/agy-terminal/prompt"
 # ---------------------------------------------------------------- git branch (no subprocess)
 __agy_git_branch() {
   __agy_branch=
-  local d=$PWD head
+  local d=$PWD head g hf
   while :; do
-    if [ -f "$d/.git/HEAD" ]; then
-      read -r head < "$d/.git/HEAD"
+    hf=
+    if [ -f "$d/.git/HEAD" ]; then hf=$d/.git/HEAD
+    elif [ -f "$d/.git" ]; then
+      # a worktree or a submodule: .git is a file naming the real git folder
+      read -r g < "$d/.git"
+      g=${g#gitdir: }
+      [[ $g == /* ]] || g=$d/$g
+      [ -f "$g/HEAD" ] && hf=$g/HEAD
+    fi
+    if [ -n "$hf" ]; then
+      read -r head < "$hf"
       case $head in
         ref:\ refs/heads/*) __agy_branch=${head#ref: refs/heads/} ;;
         *) __agy_branch=${head:0:7} ;;
@@ -52,15 +61,72 @@ __agy_git_branch() {
 # Text that comes from outside (folder names, git branches) is never put into PS1 itself —
 # bash would expand $(…) in it — but referenced as ${__agy_txt[i]}.
 
-# The path, shortened to fit [$1] characters: "…/parent/name", else "name".
+# How many cells [$1] takes in the terminal → __agy_n: Chinese/Japanese/Korean and emoji 2,
+# vowel signs, viramas and joiners 0 (they join the letter before, as the terminal draws
+# them), the rest 1. (${#s} counts characters: a CJK folder name ran past the edge, a Bangla
+# one left a gap.)
+__agy_w() {
+  local s=$1
+  if [[ $s != *[![:ascii:]]* ]]; then __agy_n=${#s}; return; fi
+  local i c n=0 joined=
+  for (( i = 0; i < ${#s}; i++ )); do
+    printf -v c '%d' "'${s:i:1}"
+    if [ -n "$joined" ]; then joined=; continue; fi # (the emoji after a ZWJ joins the one before)
+    if (( c == 0x200D )); then joined=1; continue; fi
+    if (( (c >= 0x300 && c <= 0x36F) || (c >= 0x900 && c <= 0x903) || (c >= 0x93A && c <= 0x94F) ||
+      (c >= 0x951 && c <= 0x957) || (c >= 0x962 && c <= 0x963) || (c >= 0x981 && c <= 0x983) ||
+      c == 0x9BC || (c >= 0x9BE && c <= 0x9CD) || c == 0x9D7 || (c >= 0x9E2 && c <= 0x9E3) ||
+      c == 0x200B || c == 0x200C || (c >= 0xFE00 && c <= 0xFE0F) )); then continue; fi
+    if (( (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0x303E) || (c >= 0x3041 && c <= 0x33FF) ||
+      (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xA000 && c <= 0xA4CF) ||
+      (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F) ||
+      (c >= 0xFF00 && c <= 0xFF60) || (c >= 0xFFE0 && c <= 0xFFE6) || (c >= 0x1F300 && c <= 0x1F64F) ||
+      (c >= 0x1F680 && c <= 0x1F6FF) || (c >= 0x1F900 && c <= 0x1F9FF) || (c >= 0x1FA70 && c <= 0x1FAFF) ||
+      (c >= 0x20000 && c <= 0x3FFFD) )); then n=$(( n + 2 )); else n=$(( n + 1 )); fi
+  done
+  __agy_n=$n
+}
+
+# [$2] cut to at most [$3] cells with "…" → __agy_c: [$1] = tail keeps its end ("…older"),
+# head keeps its start ("feat/lo…").
+__agy_cut() {
+  local s=$2 max=$3
+  __agy_w "$s"
+  if (( __agy_n <= max )); then __agy_c=$s; return; fi
+  if (( max <= 1 )); then __agy_c=…; return; fi
+  while [ -n "$s" ]; do
+    if [ "$1" = tail ]; then s=${s:1}; else s=${s:0:${#s}-1}; fi
+    __agy_w "$s"
+    (( __agy_n <= max - 1 )) && break
+  done
+  if [ "$1" = tail ]; then __agy_c=…$s; else __agy_c=$s…; fi
+}
+
+# The path, shortened to fit [$1] cells: "…/parent/name", else "name", else the name's end.
 __agy_fit_path() {
   __agy_p=$path
-  (( ${#__agy_p} <= $1 )) && return
-  local short=${path##*/} parent=${path%/*}
+  __agy_w "$__agy_p"; (( __agy_n <= $1 )) && return
+  local name=${path##*/} parent=${path%/*}
+  [ -n "$name" ] || name=$path
   parent=${parent##*/}
-  [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
-  __agy_p=$short
-  (( ${#__agy_p} <= $1 )) || __agy_p=${path##*/}
+  if [ "$path" != "$name" ]; then
+    __agy_p="…/${parent:+$parent/}$name"
+    __agy_w "$__agy_p"; (( __agy_n <= $1 )) && return
+  fi
+  __agy_p=$name
+  __agy_w "$__agy_p"; (( __agy_n <= $1 )) && return
+  __agy_cut tail "$name" "$1"
+  __agy_p=$__agy_c
+}
+
+# The room the folder keeps before other parts make way (its name, up to 12 cells) → __agy_need
+__agy_folder_need() {
+  local name=${path##*/}
+  [ -n "$name" ] || name=$path
+  __agy_w "$name"
+  __agy_need=$__agy_n
+  (( __agy_need < 1 )) && __agy_need=1
+  (( __agy_need > 12 )) && __agy_need=12
 }
 
 # (on the first line of a style with coloured blocks: tells the app to draw that line's text
@@ -99,19 +165,41 @@ __agy_prompt() {
     elif (( d >= 60 )); then took="$(( d / 60 ))m$(( d % 60 ))s"
     elif (( d >= 2 )); then took="${d}s"
     fi
+    __agy_took=$took
+  elif [[ ${BLE_VERSION-} ]] && [ "$cols" != "$__agy_cols" ]; then
+    took=$__agy_took # ble.sh draws the prompt again for a new width: the same command's time
+  else
+    __agy_took=
   fi
+  __agy_cols=$cols
   __agy_t0=
   local title="\[\e]0;\${__agy_path}\a\]"
 
   case $style in
     simple)
-      PS1="${gap}${title}\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+      # (the folder shortened to leave room to type: at most half the width, or all but 24)
+      local room=$(( cols - 24 ))
+      (( room < cols / 2 )) && room=$(( cols / 2 ))
+      __agy_fit_path "$room"
+      __agy_txt=("$__agy_p")
+      PS1="${gap}${title}\[\e[38;2;137;220;235m\]\${__agy_txt[0]}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
       ;;
-    pure) __agy_git_branch; __agy_ps_pure ;;
-    rainbow) __agy_git_branch; __agy_ps_bar rainbow ;;
-    lean) __agy_git_branch; __agy_ps_bar lean ;;
-    capsule) __agy_git_branch; __agy_ps_capsule ;;
-    *) __agy_git_branch; __agy_ps_powerline ;;
+    *)
+      # the branch as shown: a long one cut to a quarter of the width (at least 8 cells)
+      __agy_git_branch
+      local bmax=$(( cols / 4 ))
+      (( bmax < 8 )) && bmax=8
+      __agy_cut head "$__agy_branch" "$bmax"
+      __agy_b=$__agy_c
+      __agy_folder_need
+      case $style in
+        pure) __agy_ps_pure ;;
+        rainbow) __agy_ps_bar rainbow ;;
+        lean) __agy_ps_bar lean ;;
+        capsule) __agy_ps_capsule ;;
+        *) __agy_ps_powerline ;;
+      esac
+      ;;
   esac
   __agy_in_prompt=
 }
@@ -119,10 +207,11 @@ __agy_prompt() {
 # pure — one quiet line: the folder (blue), the branch (green), ❯ (red after a failure);
 # how long the last command took appears at the right edge (drawn by the app)
 __agy_ps_pure() {
-  __agy_fit_path $(( cols - 6 - ${#__agy_branch} ))
-  __agy_txt=("$__agy_p" "$__agy_branch")
+  __agy_w "$__agy_b"
+  __agy_fit_path $(( cols - 6 - __agy_n ))
+  __agy_txt=("$__agy_p" "$__agy_b")
   local line="\[\e[38;2;116;169;233m\]\${__agy_txt[0]}"
-  [ -n "$__agy_branch" ] && line+=" \[\e[38;2;140;200;120m\]\${__agy_txt[1]}"
+  [ -n "$__agy_b" ] && line+=" \[\e[38;2;140;200;120m\]\${__agy_txt[1]}"
   local note=
   [ -n "$took" ] && note="\[\e]7770;rnote;${took}\a\]"
   PS1="${gap}${note}${title}${line} \[\e[38;2;${mark}m\]❯\[\e[0m\] "
@@ -141,7 +230,7 @@ __agy_ps_bar() {
   (( cols < 72 )) && wide=
   L+=("58;58;64|220;220;225| "$'\uf17c'"  ")
   L+=("38;100;190|240;244;250| "$'\uf07b'"  @PATH ")
-  if [ -n "$__agy_branch" ]; then
+  if [ -n "$__agy_b" ]; then
     if [ -n "$wide" ]; then L+=("88;148;40|20;24;16| on "$'\ue0a0'"  @BRANCH ")
     else L+=("88;148;40|20;24;16| "$'\ue0a0'"  @BRANCH "); fi
   fi
@@ -159,21 +248,24 @@ __agy_ps_bar() {
   fi
   # widths: each part plus its separator; the path shortened to leave room for the rule
   # (rainbow draws a slanted separator per part; lean none — counted, its rule fell short)
-  local i t wl=0 wr=0 sep=1
+  local i t wl wr=0 sep=1
   [ "$kind" = lean ] && sep=0
-  for i in "${L[@]}"; do t=${i##*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; wl=$(( wl + ${#t} + sep )); done
-  for i in "${R[@]}"; do t=${i##*|}; wr=$(( wr + ${#t} + sep )); done
-  # still too narrow: the right side's parts go, the time first (the folder keeps at least its own name)
-  local need=${path##*/}
-  need=${#need}
-  (( need < 1 )) && need=1
-  (( need > 16 )) && need=16
-  while (( ${#R[@]} > 0 )) && (( cols - wl - wr - 3 < need )); do
-    t=${R[-1]##*|}; wr=$(( wr - ${#t} - sep )); unset 'R[-1]'
+  __agy_bar_wl() {
+    wl=0
+    for i in "${L[@]}"; do t=${i##*|}; t=${t/@PATH/}; t=${t/@BRANCH/"$__agy_b"}; __agy_w "$t"; wl=$(( wl + __agy_n + sep )); done
+  }
+  __agy_bar_wl
+  for i in "${R[@]}"; do t=${i##*|}; __agy_w "$t"; wr=$(( wr + __agy_n + sep )); done
+  # still too narrow: the right side's parts go, the time first, then the branch (the folder
+  # keeps its name, up to 12 cells; after that it's cut)
+  while (( ${#R[@]} > 0 )) && (( cols - wl - wr - 3 < __agy_need )); do
+    t=${R[-1]##*|}; __agy_w "$t"; wr=$(( wr - __agy_n - sep )); unset 'R[-1]' 'RK[-1]'
   done
+  if (( ${#L[@]} > 2 )) && (( cols - wl - wr - 3 < __agy_need )); then unset 'L[2]'; __agy_bar_wl; fi
   __agy_fit_path $(( cols - wl - wr - 3 ))
-  __agy_txt=("$__agy_p" "$__agy_branch")
-  wl=$(( wl + ${#__agy_p} ))
+  __agy_txt=("$__agy_p" "$__agy_b")
+  __agy_w "$__agy_p"
+  wl=$(( wl + __agy_n ))
   local fill=$(( cols - wl - wr - 2 ))
   (( fill < 1 )) && fill=1
   local rule
@@ -221,27 +313,26 @@ __agy_ps_capsule() {
   local -a C=()
   C+=("203;166;247|"$'\uf007'" ${USER:-root}")
   C+=("137;180;250|"$'\uf07b'" @PATH")
-  [ -n "$__agy_branch" ] && C+=("166;227;161|"$'\ue0a0'" @BRANCH")
+  [ -n "$__agy_b" ] && C+=("166;227;161|"$'\ue0a0'" @BRANCH")
   (( status != 0 )) && C+=("243;139;168|"$'\uf071'" ${status}")
   local clock= w i t
   (( cols >= 34 )) && printf -v clock '%(%-I:%M %p)T' -1
+  # (╭─, each capsule its text and two ends, " ─ " between)
   __agy_cw() {
     w=-1
-    for i in "${C[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; w=$(( w + ${#t} + 5 )); done
+    for i in "${C[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/"$__agy_b"}; __agy_w "$t"; w=$(( w + __agy_n + 5 )); done
   }
   __agy_cw
-  # narrow: the clock goes first, then the user's capsule (the folder keeps at least its own name)
-  local need=${path##*/}
-  need=${#need}
-  (( need < 1 )) && need=1
-  (( need > 16 )) && need=16
+  # narrow: the clock goes first, then the user's capsule, then the branch's (the folder keeps
+  # its name, up to 12 cells; after that it's cut)
   local room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
-  if (( room - w < need )) && [ -n "$clock" ]; then clock=; room=$(( cols - 1 )); fi
-  if (( room - w < need )); then C=("${C[@]:1}"); __agy_cw; fi
+  if (( room - w < __agy_need )) && [ -n "$clock" ]; then clock=; room=$(( cols - 1 )); fi
+  if (( room - w < __agy_need )); then C=("${C[@]:1}"); __agy_cw; fi
+  if (( room - w < __agy_need )) && [[ ${C[1]} == *@BRANCH* ]]; then unset 'C[1]'; C=("${C[@]}"); __agy_cw; fi
   __agy_fit_path $(( room - w ))
-  __agy_txt=("$__agy_p" "$__agy_branch")
+  __agy_txt=("$__agy_p" "$__agy_b")
   local rclock=
-  [ -n "$clock" ] && (( w + ${#__agy_p} <= room )) && rclock="\[\e]7770;rprompt;${clock}\a\]"
+  [ -n "$clock" ] && rclock="\[\e]7770;rprompt;${clock}\a\]"
   local frame='108;112;134' line="\[\e[38;2;108;112;134m\]╭─" bg tx k=0
   for i in "${C[@]}"; do
     bg=${i%%|*}; tx=${i#*|}
@@ -264,35 +355,32 @@ __agy_ps_powerline() {
   [ "$PWD" = "$HOME" ] && dir_icon=$'\uf015'
   local -a segs=()
   segs+=("245;169;127|"$'\uf007'" ${USER:-root}")
-  segs+=("243;139;168|${dir_icon} ${path}")
-  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$'\ue0a0'" ${__agy_branch}")
+  segs+=("243;139;168|${dir_icon} @PATH")
+  [ -n "$__agy_b" ] && segs+=("249;226;175|"$'\ue0a0'" @BRANCH")
   (( status != 0 )) && segs+=("235;111;146|"$'\uf071'" ${status}")
 
-  # Fit the phone's width (leaving room for the clock): shorten the path.
-  local width i room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
+  # Fit the phone's width (leaving room for the clock): the clock goes first, then the user's
+  # segment, then the branch's; the path is shortened (the folder keeps its name, up to 12
+  # cells; after that it's cut).
+  local width i t room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
   __agy_width() {
-    local t
     width=2
-    for i in "${segs[@]}"; do t=${i#*|}; width=$(( width + ${#t} + 3 )); done
+    for i in "${segs[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/"$__agy_b"}; __agy_w "$t"; width=$(( width + __agy_n + 3 )); done
   }
   __agy_width
-  if (( width > room )); then
-    local short=${path##*/}
-    local parent=${path%/*}; parent=${parent##*/}
-    [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
-    segs[1]="243;139;168|${dir_icon} ${short}"
-    __agy_width
-    (( width > room )) && segs[1]="243;139;168|${dir_icon} ${path##*/}" && __agy_width
-  fi
+  if (( room - width < __agy_need )) && [ -n "$clock" ]; then clock=; room=$(( cols - 1 )); fi
+  if (( room - width < __agy_need )); then segs=("${segs[@]:1}"); __agy_width; fi
+  if (( room - width < __agy_need )) && [[ ${segs[1]} == *@BRANCH* ]]; then unset 'segs[1]'; segs=("${segs[@]}"); __agy_width; fi
+  __agy_fit_path $(( room - width ))
 
-  # the clock only if it won't cover the bar
-  [ -n "$clock" ] && (( width <= room )) && rclock="\[\e]7770;rprompt;${clock}\a\]"
+  [ -n "$clock" ] && rclock="\[\e]7770;rprompt;${clock}\a\]"
 
   local fg='30;30;46' line= n=${#segs[@]} bg next
   for (( i = 0; i < n; i++ )); do
     bg=${segs[i]%%|*}
     (( i == 0 )) && line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b6'
-    __agy_txt[i]=${segs[i]#*|}
+    t=${segs[i]#*|}; t=${t/@PATH/"$__agy_p"}; t=${t/@BRANCH/"$__agy_b"}
+    __agy_txt[i]=$t
     line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\] \${__agy_txt[$i]} "
     if (( i + 1 < n )); then
       next=${segs[i + 1]%%|*}

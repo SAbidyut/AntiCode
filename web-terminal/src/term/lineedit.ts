@@ -217,12 +217,10 @@ export class LineEditor {
     const line = this.buf.getLine(y);
     if (!line) return 0;
     let n = 0;
+    // (the cell before [s] isn't looked at: the cursor being at [s] — after ক্ in the shell,
+    // which steps through a conjunct letter by letter — the letter there is a step of its own;
+    // counted as part of the conjunct, the walk stopped one letter short)
     let prevLinks = false;
-    if (s > 0) {
-      const c = line.getCell(s - 1, this.cell);
-      const ch = c?.getChars() ?? '';
-      prevLinks = !!ch && isVirama(ch.codePointAt(ch.length - 1) ?? 0);
-    }
     for (let x = s; x < e && x < this.term.cols; x++) {
       const c = (this.cell = line.getCell(x, this.cell));
       if (!c || c.getWidth() === 0) continue;
@@ -445,7 +443,9 @@ export class LineEditor {
     const sel = this.sel;
     if (!sel || sel.kind !== 'input') return;
     this.clearSelection();
-    await this.moveCaret(sel.b);
+    // (the cursor didn't get to the selection's end — the program didn't answer in time, a tap
+    // took over: deleting from wherever it is would take the wrong letters)
+    if (!(await this.moveCaret(sel.b))) return;
     const gen = ++this.gen;
     for (let round = 0; round < 12; round++) {
       const area = this.area();

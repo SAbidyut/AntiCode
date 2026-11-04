@@ -349,6 +349,8 @@ export class BanglaRenderer {
    * it sits at the bottom (the prompt box right above the keys), like Claude Code.
    */
   anchorBottom = false;
+  /** The scrollback lost lines at its top (a full scrollback, a clear): line numbers moved. */
+  onLinesRenumbered?: () => void;
   /** Chat layout: rows from this line down are moved down by splitGap px (-1 = off). */
   private splitLine = -1;
   private splitGap = 0;
@@ -1094,8 +1096,11 @@ export class BanglaRenderer {
     // line number down: move the rendered rows along instead of rebuilding them.
     const reflowed = this.lastCols !== 0 && cols !== this.lastCols;
     this.lastCols = cols;
+    const gen0 = this.trimGen;
     const trimmed = this.checkTrim(buf.type === 'normal', reflowed);
     if (trimmed > 0) this.shiftRows(trimmed);
+    // (lines numbered anew: a selection of the output would now point at other text)
+    if (trimmed > 0 || this.trimGen !== gen0) this.onLinesRenumbered?.();
 
     // A different buffer (alt screen), a resize (reflow), or a trim we couldn't measure
     // invalidate the line → row mapping.
@@ -1116,7 +1121,7 @@ export class BanglaRenderer {
     // when the lines were re-wrapped to a new width (zoom, rotation).
     const vm = this.viewMarker;
     if (reflowed && this.scrollPx > 0 && buf.type === 'normal' && vm && !vm.isDisposed && vm.line >= 0) {
-      this.scrollPx = (buf.baseY - vm.line - this.viewFrac) * lh;
+      this.scrollPx = (buf.baseY - vm.line - this.viewFrac) * lh - this.lift; // (topPx counts the lift)
       this.lastBaseY = buf.baseY;
     } else if (buf.baseY !== this.lastBaseY) {
       if (this.scrollPx > 0 && buf.baseY > this.lastBaseY) this.scrollPx += (buf.baseY - this.lastBaseY) * lh;

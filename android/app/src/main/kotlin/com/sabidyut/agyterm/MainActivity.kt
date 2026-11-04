@@ -246,7 +246,13 @@ class MainActivity : ComponentActivity() {
         })
 
         val serviceIntent = Intent(this, SessionService::class.java)
-        startService(serviceIntent)
+        // (rebuilt in the background — the WebView's renderer was killed while the app was out of
+        // sight — Android refuses startService; binding still creates the service)
+        try {
+            startService(serviceIntent)
+        } catch (_: IllegalStateException) {
+        } catch (_: SecurityException) {
+        }
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
         takeOpenSession(intent)
     }

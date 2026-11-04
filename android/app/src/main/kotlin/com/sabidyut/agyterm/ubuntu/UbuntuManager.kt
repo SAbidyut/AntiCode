@@ -35,6 +35,8 @@ class UbuntuManager private constructor(private val context: Context) {
     var onBusyChanged: (() -> Unit)? = null
 
     val rootfs: File get() = File(context.filesDir, "ubuntu")
+    /** Ubuntu's folder with the phone's own links resolved (how proot names it). */
+    private val rootfsReal: String by lazy { try { rootfs.canonicalPath } catch (_: Exception) { rootfs.absolutePath } }
     private val tmpDir: File get() = File(context.filesDir, "tmp")
     private val fakeProc: File get() = File(context.filesDir, "fakeproc")
     private val marker: File get() = File(context.filesDir, "ubuntu.installed")
@@ -82,17 +84,33 @@ class UbuntuManager private constructor(private val context: Context) {
         val home = File(rootfs, "root")
         val email = try {
             when (kind) {
-                "claude" -> JSONObject(File(home, ".claude.json").readText())
-                    .optJSONObject("oauthAccount")?.optString("emailAddress").orEmpty()
+                "claude" -> claudeEmail(File(home, ".claude.json"))
                 // (the account its header showed, which the app remembers; else its files)
                 "agy" -> com.sabidyut.agyterm.Accounts.antigravity(context)?.takeIf { "@" in it }
                     ?: agyEmail(File(home, ".gemini"))
                 else -> ""
             }
-        } catch (_: Exception) {
+        } catch (_: Throwable) { // (an odd file — even one too big for memory — just means "unknown")
             ""
         }
         return email.trim().takeIf { Regex("^[^\\s@]+@[^\\s@]+$").matches(it) } ?: ""
+    }
+
+    // ~/.claude.json also holds every project's history and can grow to many MB: it is read
+    // again only when it changed, and only the account's part is looked at
+    private var claudeSeen: Triple<Long, Long, String>? = null
+
+    private fun claudeEmail(f: File): String {
+        val modified = f.lastModified()
+        val size = f.length()
+        claudeSeen?.let { if (it.first == modified && it.second == size) return it.third }
+        if (!f.isFile || size > 64L * 1024 * 1024) return ""
+        val text = f.readText()
+        val at = text.indexOf("\"oauthAccount\"")
+        val email = if (at < 0) "" else Regex("\"emailAddress\"\\s*:\\s*\"([^\"]*)\"")
+            .find(text.substring(at, minOf(text.length, at + 4096)))?.groupValues?.get(1).orEmpty()
+        claudeSeen = Triple(modified, size, email)
+        return email
     }
 
     private fun agyEmail(dir: File): String {
@@ -228,7 +246,7 @@ class UbuntuManager private constructor(private val context: Context) {
                 val name = entry.name.removePrefix("./").trimEnd('/')
                 if (name.isEmpty()) continue
                 val dest = File(root, name)
-                if (!dest.canonicalPath.startsWith(root.canonicalPath)) continue // path traversal guard
+                if (!inside(root, dest)) continue // path traversal guard
                 when {
                     entry.isDirectory -> {
                         dest.mkdirs()
@@ -240,7 +258,8 @@ class UbuntuManager private constructor(private val context: Context) {
                         Os.symlink(entry.linkName, dest.absolutePath)
                     }
                     entry.isLink -> {
-                        hardLinks += dest to File(root, entry.linkName.removePrefix("./"))
+                        val target = File(root, entry.linkName.removePrefix("./"))
+                        if (inside(root, target)) hardLinks += dest to target
                     }
                     entry.isFile -> {
                         dest.parentFile?.mkdirs()
@@ -338,9 +357,19 @@ class UbuntuManager private constructor(private val context: Context) {
         write("etc/agy-terminal.bashrc", asset("bashrc"), 0x1a4)
         syncBlesh()
         // Hook the prompt/aliases into root's .bashrc (after Ubuntu's own PS1).
-        val bashrc = File(rootfs, "root/.bashrc")
+        // (~/.bashrc may be a link the user made — `ln -s ~/dotfiles/bashrc ~/.bashrc` — whose
+        // target is a path inside Ubuntu; a file that can't be written is left as it is)
+        var bashrc = File(rootfs, "root/.bashrc")
+        if (isSymlink(bashrc)) {
+            val t = try { Os.readlink(bashrc.absolutePath) } catch (_: Exception) { null }
+            if (t != null) bashrc = if (t.startsWith("/")) File(rootfs, t.removePrefix("/")) else File(bashrc.parentFile, t)
+        }
         val hook = "[ -f /etc/agy-terminal.bashrc ] && . /etc/agy-terminal.bashrc"
-        if (!bashrc.exists() || !bashrc.readText().contains(hook)) bashrc.appendText("\n$hook\n")
+        try {
+            if (!bashrc.exists() || !bashrc.readText().contains(hook)) bashrc.appendText("\n$hook\n")
+        } catch (e: Exception) {
+            android.util.Log.w("UbuntuManager", "couldn't hook ~/.bashrc", e)
+        }
         // ~/storage/* → the phone's folders (like Termux), dangling until access is granted.
         val storageDir = File(rootfs, "root/storage").apply { mkdirs() }
         for ((name, target) in com.sabidyut.agyterm.Storage.links) {
@@ -612,8 +641,14 @@ class UbuntuManager private constructor(private val context: Context) {
                     var t = try { Os.readlink(f.absolutePath) } catch (_: Exception) { return null }
                     // a hard link made inside Ubuntu: proot keeps it as a link to a file in
                     // Ubuntu's folder on the phone (an absolute phone path, not an Ubuntu one)
-                    val root = rootfs.absolutePath
-                    if (t == root || t.startsWith("$root/")) t = t.removePrefix(root).ifEmpty { "/" }
+                    // (proot writes it under the folder's real path — /data/data/… where the app
+                    // sees /data/user/0/… — so both spellings are recognised)
+                    for (root in listOf(rootfs.absolutePath, rootfsReal)) {
+                        if (t == root || t.startsWith("$root/")) {
+                            t = t.removePrefix(root).ifEmpty { "/" }
+                            break
+                        }
+                    }
                     val target = if (t.startsWith("/")) t else "$cur/$t"
                     val rest = parts.drop(i + 1).joinToString("/")
                     val n = normalizeGuestPath(if (rest.isEmpty()) target else "$target/$rest") ?: return null
@@ -680,6 +715,13 @@ class UbuntuManager private constructor(private val context: Context) {
         ),
         context.filesDir.absolutePath,
     )
+
+    /** [f] is [root] or under it, links resolved ("../ubuntu2/x" isn't, though it starts alike). */
+    private fun inside(root: File, f: File): Boolean {
+        val r = root.canonicalPath
+        val p = f.canonicalPath
+        return p == r || p.startsWith(r + File.separator)
+    }
 
     companion object {
 

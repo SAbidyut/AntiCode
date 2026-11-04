@@ -72,6 +72,9 @@ export class TerminalSession {
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
     this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput);
+    this.renderer.onLinesRenumbered = () => {
+      if (this.edit.sel?.kind === 'screen') this.edit.clearSelection();
+    };
     this.edit.onSelection = (sel, area) => {
       this.edit.onChanged?.(sel);
       if (!sel || (sel.kind === 'input' && !area)) return this.renderer.setSelection(null);
@@ -183,7 +186,9 @@ export class TerminalSession {
         this.setProgramWidths(false); // the shell's prompt: its way of counting
         this.edit.atPrompt = true;
       } else if (cmd === 'exec') {
-        this.setProgramWidths(false); // a command starts (by letters…)
+        // a command starts: by letters… (Antigravity counts conjuncts whole — its start script
+        // says "exec;agy" and runs the program itself, not the shell's agy wrapper)
+        this.setProgramWidths(rest[0] === 'agy');
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
@@ -226,7 +231,9 @@ export class TerminalSession {
     // OSC 52 clipboard copy (used by many TUIs).
     this.term.parser.registerOscHandler(52, (data) => {
       const b64 = data.split(';')[1];
-      if (b64 && b64 !== '?') {
+      // (not again while a restored session's old output is replayed: it would put long-gone
+      // text back on the clipboard)
+      if (b64 && b64 !== '?' && !this.replaying) {
         try {
           const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
           this.bridge.copyText(new TextDecoder().decode(bytes));

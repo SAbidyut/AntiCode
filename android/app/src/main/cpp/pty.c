@@ -21,6 +21,49 @@ static void throw_io(JNIEnv *env, const char *what) {
     if (cls) (*env)->ThrowNew(env, cls, msg);
 }
 
+/*
+ * A Java string as real UTF-8 (GetStringUTFChars gives "modified UTF-8": a character outside
+ * the basic plane — most emoji — comes out as two 3-byte halves no program reads right, so a
+ * folder named "📁proj" couldn't be entered).
+ */
+static char *utf8_dup(JNIEnv *env, jstring s) {
+    if (!s) return strdup("");
+    jsize n = (*env)->GetStringLength(env, s);
+    const jchar *u = (*env)->GetStringChars(env, s, NULL);
+    if (!u) return strdup("");
+    char *out = malloc((size_t)n * 3 + 1);
+    size_t o = 0;
+    if (out) {
+        for (jsize i = 0; i < n; i++) {
+            unsigned int c = u[i];
+            if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF) {
+                c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+                i++;
+            } else if (c >= 0xD800 && c <= 0xDFFF) {
+                c = 0xFFFD; // a lone half
+            }
+            if (c < 0x80) {
+                out[o++] = (char)c;
+            } else if (c < 0x800) {
+                out[o++] = (char)(0xC0 | (c >> 6));
+                out[o++] = (char)(0x80 | (c & 0x3F));
+            } else if (c < 0x10000) {
+                out[o++] = (char)(0xE0 | (c >> 12));
+                out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+                out[o++] = (char)(0x80 | (c & 0x3F));
+            } else {
+                out[o++] = (char)(0xF0 | (c >> 18));
+                out[o++] = (char)(0x80 | ((c >> 12) & 0x3F));
+                out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+                out[o++] = (char)(0x80 | (c & 0x3F));
+            }
+        }
+        out[o] = 0;
+    }
+    (*env)->ReleaseStringChars(env, s, u);
+    return out ? out : strdup("");
+}
+
 static char **to_cstrings(JNIEnv *env, jobjectArray arr) {
     if (!arr) return NULL;
     jsize n = (*env)->GetArrayLength(env, arr);
@@ -28,9 +71,7 @@ static char **to_cstrings(JNIEnv *env, jobjectArray arr) {
     if (!out) return NULL;
     for (jsize i = 0; i < n; i++) {
         jstring s = (jstring)(*env)->GetObjectArrayElement(env, arr, i);
-        const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-        out[i] = strdup(c);
-        (*env)->ReleaseStringUTFChars(env, s, c);
+        out[i] = utf8_dup(env, s);
         (*env)->DeleteLocalRef(env, s);
     }
     return out;
@@ -68,12 +109,8 @@ Java_com_sabidyut_agyterm_term_Pty_createSubprocess(JNIEnv *env, jclass clazz, j
     struct winsize sz = {.ws_row = (unsigned short)rows, .ws_col = (unsigned short)cols};
     ioctl(ptm, TIOCSWINSZ, &sz);
 
-    const char *cmd_c = (*env)->GetStringUTFChars(env, jcmd, NULL);
-    const char *cwd_c = (*env)->GetStringUTFChars(env, jcwd, NULL);
-    char *cmd = strdup(cmd_c);
-    char *cwd = strdup(cwd_c);
-    (*env)->ReleaseStringUTFChars(env, jcmd, cmd_c);
-    (*env)->ReleaseStringUTFChars(env, jcwd, cwd_c);
+    char *cmd = utf8_dup(env, jcmd);
+    char *cwd = utf8_dup(env, jcwd);
     char **argv = to_cstrings(env, jargs);
     char **envp = to_cstrings(env, jenv);
 

@@ -19,6 +19,9 @@ fi
 echo -e "${Y}✦ First-time setup — this takes a few minutes, keep the app open.${N}"
 export DEBIAN_FRONTEND=noninteractive
 step() { echo -e "\n${G}▸ $*${N}"; }
+# (an install the phone cut short — the app killed mid-way — leaves dpkg half done, and every
+# apt-get after it refuses until this runs)
+dpkg --configure -a >/dev/null 2>&1 || true
 step "Updating package lists"
 apt-get update || { echo -e "${R}apt update failed — check your connection and try again.${N}"; exit 1; }
 step "Installing basic tools (curl, git, nano …)"

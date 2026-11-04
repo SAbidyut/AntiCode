@@ -686,7 +686,7 @@ body[data-screen='home']::before {
 .fp-empty { color: var(--muted); font-size: 14px; margin: 10px 10px 14px; line-height: 1.5; }
 .fp-new { display: flex; gap: 8px; align-items: center; padding: 6px 4px; }
 .fp-new .text-input { flex: 1; min-width: 0; margin: 0; }
-.fp-new .btn { flex: none; height: 46px; padding: 0 18px; }
+.fp-new .btn { flex: none; width: auto; height: 46px; padding: 0 18px; }
 
 /* settings */
 .setting { padding: 12px 4px; border-bottom: 1px solid var(--line); }
