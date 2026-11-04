@@ -201,7 +201,7 @@ __agy_ps_bar() {
   PS1="${gap}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
-# capsule — rounded capsules joined by a thin line, framed: ╭─ … on top, ╰─❯ below; the
+# capsule — rounded capsules with a short line between, framed: ╭─ … on top, ╰─❯ below; the
 # clock at the right edge (drawn by the app)
 __agy_ps_capsule() {
   local -a C=()
@@ -211,10 +211,10 @@ __agy_ps_capsule() {
   [ -n "$took" ] && C+=("249;226;175|"$'\uf252'" ${took}")
   (( status != 0 )) && C+=("243;139;168|"$'\uf071'" ${status}")
   local clock= w i t
-  (( cols >= 34 )) && printf -v clock '%(%I:%M %p)T' -1
+  (( cols >= 34 )) && printf -v clock '%(%-I:%M %p)T' -1
   __agy_cw() {
     w=3
-    for i in "${C[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; w=$(( w + ${#t} + 3 )); done
+    for i in "${C[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; w=$(( w + ${#t} + 5 )); done
   }
   __agy_cw
   # narrow: the clock goes first, then the user's capsule (the folder keeps 10)
@@ -229,7 +229,7 @@ __agy_ps_capsule() {
   for i in "${C[@]}"; do
     bg=${i%%|*}; tx=${i#*|}
     tx=${tx/@PATH/\$\{__agy_txt[0]\}}; tx=${tx/@BRANCH/\$\{__agy_txt[1]\}}
-    (( k++ )) && line+="\[\e[0m\e[38;2;${frame}m\]─"
+    (( k++ )) && line+="\[\e[0m\e[38;2;${frame}m\] ─ "
     line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b6'"\[\e[48;2;${bg}m\e[38;2;30;30;46m\]${tx}\[\e[0m\e[38;2;${bg}m\]"$'\ue0b4'
   done
   line+="\[\e[0m\]"
@@ -240,7 +240,7 @@ __agy_ps_capsule() {
 # it there, so it isn't text the bar could run into)
 __agy_ps_powerline() {
   local clock= rclock=
-  (( cols >= 30 )) && printf -v clock '%(%I:%M %p)T' -1
+  (( cols >= 30 )) && printf -v clock '%(%-I:%M %p)T' -1
 
   # segments: "r;g;b|icon text" — dark text on pastel backgrounds
   local dir_icon=$'\uf07b'

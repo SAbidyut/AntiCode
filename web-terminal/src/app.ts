@@ -1339,7 +1339,8 @@ function bindTerminalGestures(s: TerminalSession) {
         return;
       }
       s.click(e.clientX, e.clientY);
-      focusTerminalKeyboard();
+      // the keyboard comes up for a tap on the prompt only, not anywhere on the screen
+      if (s.nearInput(e.clientX, e.clientY)) focusTerminalKeyboard();
     }
   };
   el.addEventListener('pointerup', end);
@@ -1997,7 +1998,7 @@ function openSettingsSheet() {
     }, savePrefs),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Prompt style'),
-      h('div', { class: 's-sub' }, 'How the shell’s prompt looks.'), promptList),
+      h('div', { class: 's-sub' }, 'How the shell’s prompt looks. The branch (main) shows inside a git project, the time a command took after one that ran 2 s or more.'), promptList),
     toggle('Notify when a task finishes', 'When an agent answers while you’re elsewhere.', notifyWhenDone, (v) => {
       notifyWhenDone = v;
       bridge.setNotifyWhenDone(v);

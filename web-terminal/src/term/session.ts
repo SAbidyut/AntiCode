@@ -401,6 +401,20 @@ export class TerminalSession {
     return this.edit.screenSpot(line, this.renderer.colAt(clientX));
   }
 
+  /**
+   * A tap here is on the line being typed or right by it (the prompt's own row above, one
+   * row of slack below): it brings up the keyboard. Elsewhere a tap only reads/clicks.
+   * No line editor found (a full-screen program, a command asking something): the rows
+   * around the cursor.
+   */
+  nearInput(clientX: number, clientY: number): boolean {
+    const { line } = this.renderer.cellAt(clientX, clientY);
+    const area = this.edit.area();
+    if (area) return line >= area.top - 1 && line <= area.bottom + 1;
+    const buf = this.term.buffer.active;
+    return Math.abs(line - (buf.baseY + buf.cursorY)) <= 2;
+  }
+
   editSpot(clientX: number, clientY: number, loose = false): Pos | null {
     const { line } = this.renderer.cellAt(clientX, clientY);
     const area = this.edit.area();
