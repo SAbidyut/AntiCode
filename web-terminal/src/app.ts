@@ -394,6 +394,7 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
     if (email === accounts.agy) return;
     accounts.agy = email;
     bridge.setAntigravityAccount(email);
+    renderHomeSessions(); // (its card shows the account)
   };
   sessions.set(id, s);
   for (const d of early.get(id) ?? []) s.write(d);
@@ -796,7 +797,7 @@ function renderHomeSessions() {
       const item = h('button', { class: 'list-item' },
         h('span', { class: `li-icon kind-${s.kind}` }, svg(KIND_ICON[s.kind] ?? 'terminal')),
         h('span', { class: 'li-main' },
-          h('div', { class: 'li-title' }, s.customName || s.kindLabel),
+          titleWithAccount(s),
           h('div', { class: 'li-sub' },
             h('span', { class: 'li-dot' + (s.alive ? ' on' : '') }),
             h('span', { class: 'li-sub-text' }, s.about ? `${s.about} · ${status}` : status))),
@@ -806,6 +807,15 @@ function renderHomeSessions() {
       return item;
     }),
   );
+}
+
+/** A session's name, and the account its agent is signed in with ("Antigravity  you@gmail.com"). */
+function titleWithAccount(s: TerminalSession): HTMLElement {
+  const name = s.customName || s.kindLabel;
+  const agent = s.kind === 'agy' || s.kind === 'claude' ? s.kind : s.agent;
+  const email = agent ? bridge.accountEmail(agent) : '';
+  if (!email) return h('div', { class: 'li-title' }, name);
+  return h('div', { class: 'li-title has-acct' }, h('span', { class: 'li-name' }, name), h('span', { class: 'li-acct' }, email));
 }
 
 /** Long-press (contextmenu on touch) without the browser's own menu. */
