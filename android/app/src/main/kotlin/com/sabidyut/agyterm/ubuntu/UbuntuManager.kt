@@ -97,14 +97,15 @@ class UbuntuManager private constructor(private val context: Context) {
      * ~/.gemini are looked through for an email (a field, or the Google sign-in token's).
      * Read from the files only — nothing goes over the network.
      */
-    fun accountEmail(kind: String): String {
+    fun accountEmail(kind: String, profile: String = ""): String {
+        val prof = profile.takeIf { validProfile(it) } ?: ""
         val home = File(rootfs, "root")
         val email = try {
             when (kind) {
-                "claude" -> claudeEmail(File(home, ".claude.json"))
+                "claude" -> claudeEmail(if (prof.isEmpty()) File(home, ".claude.json") else File(profileDir("claude", prof), ".claude.json"))
                 // (the account its header showed, which the app remembers; else its files)
-                "agy" -> com.sabidyut.agyterm.Accounts.antigravity(context)?.takeIf { "@" in it }
-                    ?: agyEmail(File(home, ".gemini"))
+                "agy" -> com.sabidyut.agyterm.Accounts.antigravity(context, prof)?.takeIf { "@" in it }
+                    ?: agyEmail(File(if (prof.isEmpty()) home else profileDir("agy", prof), ".gemini"))
                 else -> ""
             }
         } catch (_: Throwable) { // (an odd file — even one too big for memory — just means "unknown")
@@ -115,19 +116,65 @@ class UbuntuManager private constructor(private val context: Context) {
 
     // ~/.claude.json also holds every project's history and can grow to many MB: it is read
     // again only when it changed, and only the account's part is looked at
-    private var claudeSeen: Triple<Long, Long, String>? = null
+    private val claudeSeen = HashMap<String, Triple<Long, Long, String>>()
 
     private fun claudeEmail(f: File): String {
         val modified = f.lastModified()
         val size = f.length()
-        claudeSeen?.let { if (it.first == modified && it.second == size) return it.third }
+        claudeSeen[f.path]?.let { if (it.first == modified && it.second == size) return it.third }
         if (!f.isFile || size > 64L * 1024 * 1024) return ""
         val text = f.readText()
         val at = text.indexOf("\"oauthAccount\"")
         val email = if (at < 0) "" else Regex("\"emailAddress\"\\s*:\\s*\"([^\"]*)\"")
             .find(text.substring(at, minOf(text.length, at + 4096)))?.groupValues?.get(1).orEmpty()
-        claudeSeen = Triple(modified, size, email)
+        claudeSeen[f.path] = Triple(modified, size, email)
         return email
+    }
+
+    // ---- more than one account per agent ("profiles") ----
+    // Each extra account keeps its sign-in apart: Claude Code in its own config folder
+    // (CLAUDE_CONFIG_DIR); Antigravity, which keeps everything in ~/.gemini, in a home of its
+    // own whose other files are links to the real home's (git, ssh, the phone's storage). The
+    // start scripts set this up from ANTICODE_PROFILE (see agy-start / claude-start).
+
+    private fun profilesRoot(kind: String) = File(rootfs, "root/.anticode/profiles/$kind")
+
+    private fun profileDir(kind: String, name: String) = File(profilesRoot(kind), name)
+
+    /** The extra accounts of [kind] ("agy" / "claude"), as JSON: [{name, email}], oldest first. */
+    fun listProfiles(kind: String): String {
+        val arr = org.json.JSONArray()
+        if (kind != "agy" && kind != "claude") return arr.toString()
+        val dirs = profilesRoot(kind).listFiles()?.filter { it.isDirectory && !isSymlink(it) && validProfile(it.name) }
+            ?.sortedBy { it.lastModified() } ?: emptyList()
+        for (d in dirs) arr.put(JSONObject().put("name", d.name).put("email", accountEmail(kind, d.name)))
+        return arr.toString()
+    }
+
+    /** A new account's folder: "" when made, else why not. */
+    fun createProfile(kind: String, name: String): String {
+        if (kind != "agy" && kind != "claude") return "Unknown agent"
+        if (!validProfile(name)) return "Use letters, digits and - (up to 20)"
+        val d = profileDir(kind, name)
+        if (d.exists()) return "There's already an account called $name"
+        return if (d.mkdirs()) "" else "The account's folder couldn't be made"
+    }
+
+    /**
+     * Forget an account: its folder goes, sign-in and all. Links in it (an Antigravity
+     * account's links to the real home) are removed as links — never followed.
+     */
+    fun deleteProfile(kind: String, name: String): Boolean {
+        if ((kind != "agy" && kind != "claude") || !validProfile(name)) return false
+        val d = profileDir(kind, name)
+        if (!d.exists() || isSymlink(d)) return false
+        fun remove(f: File) {
+            if (!isSymlink(f) && f.isDirectory) f.listFiles()?.forEach { remove(it) }
+            f.delete()
+        }
+        remove(d)
+        if (kind == "agy") com.sabidyut.agyterm.Accounts.forgetAntigravity(context, name)
+        return !d.exists()
     }
 
     private fun agyEmail(dir: File): String {
@@ -366,7 +413,7 @@ class UbuntuManager private constructor(private val context: Context) {
         fun asset(name: String) = context.assets.open("guest/$name").bufferedReader().use { it.readText() }
         write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
-        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "agy-autocomplete")) {
+        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "agy-autocomplete", "anticode-account")) {
             write("usr/local/bin/$script", asset(script), exec)
         }
         write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)
@@ -494,7 +541,7 @@ class UbuntuManager private constructor(private val context: Context) {
      * kind = "ubuntu" (login shell), "agy" (Antigravity CLI, then a shell) or
      * "claude" (Claude Code, then a shell).
      */
-    fun launch(kind: String, cwd: String = ""): Launch {
+    fun launch(kind: String, cwd: String = "", profile: String = ""): Launch {
         prepare()
         val proot = "$nativeDir/libproot.so"
         val args = mutableListOf(
@@ -552,6 +599,10 @@ class UbuntuManager private constructor(private val context: Context) {
         // it answers by redrawing the whole screen — slow under proot on a phone. Its classic
         // view writes to the terminal's scrollback, which the app scrolls smoothly itself.
         if (!claudeFullscreen) args += "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"
+        // which account the agent signs in with (one of the profiles; none: the usual one)
+        if ((kind == "agy" || kind == "claude") && validProfile(profile) && profileDir(kind, profile).isDirectory) {
+            args += "ANTICODE_PROFILE=$profile"
+        }
         // the folder picked in the app: the login shell goes there first (profile.sh)
         if (cwd.isNotEmpty()) normalizeGuestPath(cwd)?.takeIf { it != "/root" }?.let { args += "ANTICODE_CWD=$it" }
         when (kind) {
@@ -741,6 +792,9 @@ class UbuntuManager private constructor(private val context: Context) {
     }
 
     companion object {
+        /** A profile's name: a folder name and an environment value, nothing that could be a path. */
+        fun validProfile(name: String) = Regex("^[A-Za-z0-9][A-Za-z0-9-]{0,19}$").matches(name)
+
         private const val AGY_APPROVE_ALL = "root/.config/agy-terminal/agy-approve-all"
 
         val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")

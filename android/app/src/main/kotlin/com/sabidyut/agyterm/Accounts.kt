@@ -11,12 +11,19 @@ import android.net.Uri
 object Accounts {
     private const val PREFS = "accounts"
 
-    fun antigravity(context: Context): String? =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("agy", null)?.takeIf { it.isNotBlank() }
+    /** ([profile]: one of the extra accounts — see UbuntuManager's profiles; "" the usual one) */
+    fun antigravity(context: Context, profile: String = ""): String? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(key(profile), null)?.takeIf { it.isNotBlank() }
 
-    fun setAntigravity(context: Context, email: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("agy", email.trim()).apply()
+    fun setAntigravity(context: Context, email: String, profile: String = "") {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(key(profile), email.trim()).apply()
     }
+
+    fun forgetAntigravity(context: Context, profile: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(key(profile)).apply()
+    }
+
+    private fun key(profile: String) = if (profile.isEmpty()) "agy" else "agy:$profile"
 
     /**
      * Pick the account on Google sites: `authuser=<email>` selects that signed-in account

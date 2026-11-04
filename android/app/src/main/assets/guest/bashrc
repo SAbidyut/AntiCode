@@ -423,13 +423,23 @@ command_not_found_handle() {
 # way, so the program's tables and input line come out right (back to letters at the prompt).
 # Settings → "Antigravity: approve everything": its own flag, when agy starts a session (not
 # for a subcommand such as `agy plugin …`)
+# A tab opened for one of an agent's extra accounts (ANTICODE_PROFILE): `agy` / `claude` typed
+# in it sign in with that account too (see anticode-account).
 agy() {
   printf '\e]7770;widths;%s;joined\a' "$__agy_tok"
+  local -a pre=()
   if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ] && { [ $# -eq 0 ] || [[ $1 == -* ]]; }; then
-    command agy --dangerously-skip-permissions "$@"
-  else
-    command agy "$@"
+    pre=(--dangerously-skip-permissions)
   fi
+  local h
+  h=$(/usr/local/bin/anticode-account agy 2>/dev/null)
+  if [ -n "$h" ]; then ANTICODE_REAL_HOME=$HOME HOME=$h command agy "${pre[@]}" "$@"
+  else command agy "${pre[@]}" "$@"; fi
+}
+claude() {
+  local d
+  d=$(/usr/local/bin/anticode-account claude 2>/dev/null)
+  if [ -n "$d" ]; then CLAUDE_CONFIG_DIR=$d command claude "$@"; else command claude "$@"; fi
 }
 
 # ---------------------------------------------------------------- ble.sh look & attach

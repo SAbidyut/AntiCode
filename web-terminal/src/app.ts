@@ -27,6 +27,8 @@ interface Prefs {
   askedBackground: boolean;
   /** Which layout the prefs were saved with (2: fixed text size, no pinch zoom). */
   layout?: number;
+  /** The account each agent was last opened with ('' the usual one). */
+  lastProfile?: Record<string, string>;
 }
 /** Driven by the emulator self test (no system dialogs over the terminal then). */
 const SELFTEST = new URLSearchParams(location.search).has('selftest');
@@ -391,9 +393,12 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
   s.onTitle = () => renderTabs();
   s.onMeta = () => renderTabs();
   s.onAccount = (email) => {
-    if (email === accounts.agy) return;
-    accounts.agy = email;
-    bridge.setAntigravityAccount(email);
+    // (an extra account's session: that account's; else the usual one, also shown in Settings)
+    if (s.profile) bridge.setAntigravityAccount(email, s.profile);
+    else if (email !== accounts.agy) {
+      accounts.agy = email;
+      bridge.setAntigravityAccount(email);
+    }
     renderHomeSessions(); // (its card shows the account)
   };
   sessions.set(id, s);
@@ -404,7 +409,7 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
   return s;
 }
 
-async function newSession(kind: SessionKind, cwd = '') {
+async function newSession(kind: SessionKind, cwd = '', profile = profileFor(kind)) {
   if (kind !== 'android' && hostState.ubuntu !== 'ready') {
     toast('Install Ubuntu first');
     showHome();
@@ -416,7 +421,7 @@ async function newSession(kind: SessionKind, cwd = '') {
   const { cols, rows } = probe.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
   probe.dispose();
   console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px (+${TerminalSession.keyboardInset}px keyboard) → ${cols}x${rows}`);
-  const id = await bridge.createSession(kind, cols, rows, cwd);
+  const id = await bridge.createSession(kind, cols, rows, cwd, profile);
   if (!id) {
     toast('Could not start the session');
     if (!sessions.size) showHome();
@@ -425,6 +430,7 @@ async function newSession(kind: SessionKind, cwd = '') {
   const s = addSession(id, kind);
   s.notePtySize(cols, rows);
   s.startDir = cwd || homeDir();
+  if (kind === 'agy' || kind === 'claude') s.profile = profile;
   activate(s);
   // The first session: ask (once) to be left alone by battery optimisation — otherwise
   // Android may stop the app, and every session with it, while it's in the background.
@@ -452,7 +458,7 @@ async function reportLostSessions() {
         : 'If it keeps happening, lock AntiCode in Recents (long-press its card → Lock).'),
     h('div', { class: 'action-list' },
       action('terminal', lost.length === 1 ? 'Open it again' : 'Open them again', 'Fresh sessions of the same kind', async () => {
-        for (const l of lost) await newSession(l.kind, l.dir ?? ''); // (in the folder it was started in)
+        for (const l of lost) await newSession(l.kind, l.dir ?? '', l.profile ?? ''); // (in the folder, with the account)
       }),
       hostState.background === false ? action('shield', 'Allow running in the background', '', () => bridge.allowBackground()) : null,
       action('x', 'Not now', '', () => {}),
@@ -812,8 +818,9 @@ function renderHomeSessions() {
 /** A session's name, and the account its agent is signed in with ("Antigravity  you@gmail.com"). */
 function titleWithAccount(s: TerminalSession): HTMLElement {
   const name = s.customName || s.kindLabel;
-  const agent = s.kind === 'agy' || s.kind === 'claude' ? s.kind : s.agent;
-  const email = agent ? bridge.accountEmail(agent) : '';
+  const own = s.kind === 'agy' || s.kind === 'claude';
+  const agent = own ? s.kind : s.agent;
+  const email = agent ? bridge.accountEmail(agent, own ? s.profile : '') : '';
   if (!email) return h('div', { class: 'li-title' }, name);
   return h('div', { class: 'li-title has-acct' }, h('span', { class: 'li-name' }, name), h('span', { class: 'li-acct' }, email));
 }
@@ -1722,7 +1729,9 @@ function askFolder(kind: SessionKind) {
     );
   }
   const needsAccess = hostState.host === 'android' && !hostState.storage;
+  const accountRow = kind === 'agy' || kind === 'claude' ? accountPicker(kind) : null;
   openSheet(`Open ${KIND_NAME[kind]} in…`,
+    ...(accountRow ? [h('div', { class: 'fp-label' }, 'Account'), accountRow] : []),
     h('div', { class: 'fp-label' }, 'Start in'),
     h('div', { class: 'action-list' },
       ...start.map((p, i) => folderRow(p === homeDir() ? 'home' : 'folder', dirName(p), i === 0 && recent.length ? `${shortPath(p)} · last used` : shortPath(p),
@@ -1755,6 +1764,96 @@ async function openTappedFile(s: TerminalSession, token: string) {
   const res = await bridge.openFile(candidates);
   if (res === 'notfound') toast(`${p.split('/').pop()} wasn’t found here`);
   else if (res) toast(res);
+}
+
+// ---- more than one account per agent ----
+// Each extra account ("profile") keeps its own sign-in (see anticode-account inside Ubuntu), so
+// two or three Antigravity or Claude Code tabs can run with different accounts at once.
+
+/** The account an agent opens with: the one picked last ('' the usual one). */
+function profileFor(kind: SessionKind): string {
+  return kind === 'agy' || kind === 'claude' ? prefs.lastProfile?.[kind] ?? '' : '';
+}
+function pickProfile(kind: SessionKind, name: string) {
+  prefs.lastProfile = { ...(prefs.lastProfile ?? {}), [kind]: name };
+  savePrefs();
+}
+
+/** The folder picker's row of accounts: tap one to use it, + to add one, long-press to remove. */
+function accountPicker(kind: SessionKind): HTMLElement {
+  const row = h('div', { class: 'acct-chips' });
+  const draw = async () => {
+    const list = await bridge.listProfiles(kind);
+    // a remembered account that was removed: back to the usual one
+    if (profileFor(kind) && !list.some((p) => p.name === profileFor(kind))) pickProfile(kind, '');
+    const cur = profileFor(kind);
+    const chip = (name: string, label: string, sub: string) => {
+      const b = h('button', { class: 'acct-chip' + (name === cur ? ' on' : '') },
+        h('span', { class: 'ac-name' }, label), sub ? h('span', { class: 'ac-sub' }, sub) : null);
+      b.onclick = () => {
+        haptic();
+        pickProfile(kind, name);
+        void draw();
+      };
+      if (name) onLongPress(b, () => removeAccount(kind, name, label));
+      return b;
+    };
+    const add = h('button', { class: 'acct-chip add', 'aria-label': 'Add an account' }, svg('plus'), h('span', { class: 'ac-name' }, 'Account'));
+    add.onclick = () => addAccount(kind);
+    row.replaceChildren(
+      chip('', bridge.accountEmail(kind, '') || 'Main account', bridge.accountEmail(kind, '') ? 'main' : ''),
+      ...list.map((p) => chip(p.name, p.email || p.name, p.email ? p.name : 'not signed in yet')),
+      add);
+  };
+  void draw();
+  return row;
+}
+
+function addAccount(kind: SessionKind) {
+  const input = h('input', { class: 'text-input', type: 'text', maxlength: '20', placeholder: 'work, personal, team…', spellcheck: 'false', autocapitalize: 'off', 'data-autofocus': '1' }) as HTMLInputElement;
+  const err = h('p', { class: 'note warn' });
+  err.hidden = true;
+  const save = async () => {
+    const name = input.value.trim().replace(/\s+/g, '-');
+    const res = await bridge.createProfile(kind, name);
+    if (res) {
+      err.textContent = res;
+      err.hidden = false;
+      return;
+    }
+    pickProfile(kind, name);
+    toast(`${KIND_NAME[kind]} opens with “${name}” — sign in when it starts`);
+    askFolder(kind); // back to the folder picker, the new account picked
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') void save();
+  });
+  const btn = h('button', { class: 'btn btn-primary' }, 'Add');
+  btn.onclick = () => void save();
+  openSheet(`New ${KIND_NAME[kind]} account`,
+    h('p', { class: 'note' }, `A name for it. ${KIND_NAME[kind]} asks you to sign in the first time it opens with it; each account stays signed in on its own, so several can run at once.`),
+    input, err,
+    h('div', { class: 'sheet-actions' }, btn));
+  setTimeout(() => input.focus(), 250);
+}
+
+function removeAccount(kind: SessionKind, name: string, label: string) {
+  const btn = h('button', { class: 'btn btn-danger' }, 'Remove');
+  btn.onclick = async () => {
+    if ([...sessions.values()].some((s) => s.kind === kind && s.profile === name && s.alive)) {
+      toast('Close its tabs first');
+      return;
+    }
+    const ok = await bridge.deleteProfile(kind, name);
+    if (ok && profileFor(kind) === name) pickProfile(kind, '');
+    toast(ok ? `Removed ${label}` : 'It couldn’t be removed');
+    askFolder(kind);
+  };
+  const back = h('button', { class: 'btn' }, 'Keep');
+  back.onclick = () => askFolder(kind);
+  openSheet(`Remove ${label}?`,
+    h('p', { class: 'note' }, `${KIND_NAME[kind]} forgets this account here: its sign-in and settings for it. Your files and projects stay.`),
+    h('div', { class: 'sheet-actions' }, back, btn));
 }
 
 async function startIn(kind: SessionKind, p: string) {
@@ -2245,6 +2344,7 @@ async function boot() {
       const s = addSession(info.id, info.kind);
       s.title = info.title || s.title;
       s.startDir = info.dir ?? '';
+      s.profile = info.profile ?? '';
       if (!info.alive) s.alive = false;
       // replay the saved output at the size it was written for (background tabs too)
       if (info.cols && info.rows) s.notePtySize(info.cols, info.rows);

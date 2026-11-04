@@ -24,6 +24,8 @@ class TermSession(
 ) {
     /** The folder it was started in, inside Ubuntu (file names tapped in it are looked for there). */
     var startDir = ""
+    /** The account (profile) an agent session signs in with; "" the usual one. */
+    var profile = ""
 
     interface OutputListener {
         fun onOutput(session: TermSession, data: ByteArray, len: Int)
