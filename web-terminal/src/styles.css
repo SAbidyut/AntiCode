@@ -545,7 +545,7 @@ body[data-screen='home']::before {
 @keyframes blink { 0%, 45% { opacity: 0.85; } 55%, 100% { opacity: 0.15; } }
 
 .fab-bottom {
-  position: absolute; right: 14px; bottom: 14px; z-index: 3;
+  position: absolute; right: 14px; bottom: calc(14px + var(--dock-h, 0px)); z-index: 5;
   width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
   background: var(--surface-3); color: var(--text); border: 1px solid var(--line-strong);
   box-shadow: var(--shadow);
@@ -857,3 +857,11 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
 .ps-pic .pclock { background: #89b4fa; color: #1e1e2e; border-radius: 10px; padding: 0 8px; height: 19px; line-height: 19px; font-size: 11px; margin-top: 1px; }
 .ps-pic > div.pfill { display: flex; }
 .ps-pic .prule { flex: 1; height: 1px; background: #585862; margin: 0 6px; align-self: center; }
+
+/* an agent's input box, pinned at the bottom while the conversation is scrolled back */
+.term-dock { position: absolute; left: 8px; right: 8px; bottom: 0; z-index: 4; background: var(--tbg, #000); }
+.term-dock[hidden] { display: none; }
+.term-dock::before {
+  content: ''; position: absolute; left: -8px; right: -8px; top: -22px; height: 22px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--tbg, #000));
+}

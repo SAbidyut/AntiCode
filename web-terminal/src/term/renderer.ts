@@ -182,7 +182,8 @@ interface Row {
   live: boolean;
 }
 
-const OVERSCAN = 3;
+/** Rows drawn beyond each edge of the screen: a fast fling never shows a row not yet drawn. */
+const OVERSCAN = 10;
 
 export class BanglaRenderer {
   /**
@@ -1264,11 +1265,82 @@ export class BanglaRenderer {
       this.cursorEl.classList.toggle('focused', this.focused);
     }
     this.drawSelection(rowY, first, last);
+    this.drawDock(boxTop, buf.baseY + lastY, cursorLine);
     const scrolled = this.scrollPx >= lh;
     if (scrolled !== this.wasScrolled) {
       this.wasScrolled = scrolled;
       this.onScrolled?.(scrolled);
     }
+  }
+
+  // ---- an agent's input box stays put while the conversation scrolls ----
+  // Like a chat app: reading back through a reply, the box (the rule line above the prompt
+  // down to its footer) stays at the bottom, where it is when not scrolled; the conversation
+  // scrolls behind it. (It's a copy, drawn while scrolled back; the box itself is still in
+  // the terminal, where the program keeps drawing it.)
+  private dockEl: HTMLDivElement | null = null;
+  private dockRows: HTMLDivElement[] = [];
+  private dockHtml: string[] = [];
+  private dockCursor: HTMLDivElement | null = null;
+  private drawDock(boxTop: number, end: number, cursorLine: number) {
+    const buf = this.term.buffer.active;
+    const on = this.anchorBottom && buf.type === 'normal' && boxTop >= 0 && end >= boxTop && this.scrollPx > 0.5;
+    const host = this.el.parentElement;
+    if (!on) {
+      if (this.dockEl && !this.dockEl.hidden) {
+        this.dockEl.hidden = true;
+        host?.style.setProperty('--dock-h', '0px');
+      }
+      return;
+    }
+    if (!this.dockEl) {
+      this.dockEl = document.createElement('div');
+      this.dockEl.className = 'term-dock';
+      this.dockCursor = document.createElement('div');
+      this.dockCursor.className = 'term-cursor';
+      this.dockEl.append(this.dockCursor);
+      this.el.append(this.dockEl);
+    }
+    const lh = this.lineHeight;
+    const cols = this.term.cols;
+    const n = Math.min(12, end - boxTop + 1);
+    // where the box is when not scrolled (the zoom layer starts 6 px down)
+    this.dockEl.style.top = `${(6 + (boxTop - buf.baseY) * lh - this.pan).toFixed(1)}px`;
+    for (let k = 0; k < n; k++) {
+      let r = this.dockRows[k];
+      if (!r) {
+        r = document.createElement('div');
+        r.className = 'term-row';
+        r.style.transform = `translateY(${k * lh}px)`;
+        this.dockEl.append(r);
+        this.dockRows[k] = r;
+      }
+      r.style.transform = `translateY(${k * lh}px)`;
+      const html = this.rowToHtml(buf.getLine(boxTop + k), cols);
+      if (this.dockHtml[k] !== html) {
+        this.dockHtml[k] = html;
+        r.innerHTML = html;
+      }
+    }
+    while (this.dockRows.length > n) {
+      this.dockRows.pop()!.remove();
+      this.dockHtml.pop();
+    }
+    const c = this.dockCursor!;
+    const inBox = this.cursorVisible && cursorLine >= boxTop && cursorLine < boxTop + n;
+    c.style.display = inBox ? 'block' : 'none';
+    if (inBox) {
+      c.style.transform = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${(cursorLine - boxTop) * lh}px)`;
+      c.classList.toggle('focused', this.focused);
+    }
+    this.dockEl.hidden = false;
+    // (the "back to the bottom" button sits above it)
+    const top = 6 + (boxTop - buf.baseY) * lh - this.pan;
+    host?.style.setProperty('--dock-h', `${Math.max(0, this.el.clientHeight - top).toFixed(0)}px`);
+  }
+  /** The pinned input box on screen, if shown (a tap on it goes back to the bottom). */
+  dockRect(): DOMRect | null {
+    return this.dockEl && !this.dockEl.hidden ? this.dockEl.getBoundingClientRect() : null;
   }
 
   /** The cell under a client point: x/y relative to the visible screen, plus the buffer line. */

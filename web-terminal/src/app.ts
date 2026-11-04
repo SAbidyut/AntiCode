@@ -1305,6 +1305,13 @@ function bindTerminalGestures(s: TerminalSession) {
       return;
     }
     if (caughtFling) return;
+    // a tap on the input box pinned at the bottom (while reading back): back to it
+    const dock = s.renderer.dockRect();
+    if (dock && e.clientY >= dock.top && Date.now() - t0 < 600) {
+      s.scrollToBottom();
+      focusTerminalKeyboard();
+      return;
+    }
     if (Date.now() - t0 < 600) {
       if (selOwner) {
         endSelection(); // a tap anywhere ends a selection (and does nothing else)
