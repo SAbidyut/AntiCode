@@ -1119,6 +1119,10 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getPromptStyle(): String = service?.ubuntu?.promptStyle ?: "powerline"
 
+        /** The account an agent ("claude" / "agy") is signed in with, partly hidden; "" if unknown. */
+        @JavascriptInterface
+        fun accountEmail(kind: String): String = service?.ubuntu?.accountEmail(kind) ?: ""
+
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface
         fun setKeyboardCompat(on: Boolean) {
@@ -1159,7 +1163,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         /** Shown in the app's panel as they are (pages and pictures). */
-        private val IN_APP_FILES = setOf("html", "htm", "xhtml", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp")
+        private val IN_APP_FILES = setOf("html", "htm", "xhtml", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif")
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024

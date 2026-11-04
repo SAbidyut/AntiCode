@@ -1,6 +1,6 @@
 // One terminal tab: headless xterm (VT parser + buffer) + BanglaRenderer + reader view + input.
 
-import { Terminal } from '@xterm/headless';
+import { Terminal, type IMarker } from '@xterm/headless';
 import { installWidths } from './conjuncts';
 import type { Bridge, SessionKind } from '../bridge';
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
@@ -187,7 +187,10 @@ export class TerminalSession {
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
-        if (/^(agy|claude)$/.test(rest[0] ?? '')) this.renderer.anchorBottom = true;
+        if (/^(agy|claude)$/.test(rest[0] ?? '')) {
+          this.renderer.anchorBottom = true;
+          this.expectAccount(rest[0]);
+        }
       }
       else if (cmd === 'widths') this.setProgramWidths(rest[0] === 'joined'); // …unless it's agy
       else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
@@ -256,12 +259,51 @@ export class TerminalSession {
     this.accountTail = joined.slice(-200); // raw: an escape split across chunks still strips
   }
 
+  // ---- the account an agent is signed in with, shown (partly hidden) by its header: on the
+  // plan's line of Claude Code's header ("Claude Max"), the first line of Antigravity's ----
+  private acct: { name: string; text: string; from: IMarker; until: number } | null = null;
+  private expectAccount(name: string) {
+    this.acct?.from.dispose();
+    this.acct = null;
+    const text = this.bridge.accountEmail(name);
+    const from = text ? this.term.registerMarker(0) : undefined;
+    if (from) this.acct = { name, text, from, until: performance.now() + 90_000 };
+  }
+  private placeAccount() {
+    const a = this.acct;
+    if (!a) return;
+    const buf = this.term.buffer.active;
+    if (a.from.isDisposed || performance.now() > a.until || buf.type !== 'normal') {
+      if (a.from.isDisposed || performance.now() > a.until) {
+        a.from.dispose();
+        this.acct = null;
+      }
+      return;
+    }
+    const start = a.from.line;
+    for (let y = start; y < Math.min(buf.length, start + 16); y++) {
+      const t = buf.getLine(y)?.translateToString(true) ?? '';
+      const hit = a.name === 'claude' ? /\bClaude (Max|Pro|Team|Enterprise|API)\b/.test(t) : y > start && t.trim() !== '';
+      if (!hit) continue;
+      // that line, or a header line next to it with room at its right end (the label is
+      // never drawn over text)
+      const need = Math.ceil(a.text.length * 0.8) + 5;
+      const fits = (l: number) => l >= start && l < buf.length && (buf.getLine(l)?.translateToString(true).length ?? 0) + need <= this.term.cols;
+      const at = [y, y + 1, y + 2, y - 1, y - 2].find(fits) ?? y;
+      this.renderer.setRightLabel(a.text, false, true, at - (buf.baseY + buf.cursorY));
+      a.from.dispose();
+      this.acct = null;
+      return;
+    }
+  }
+
   write(data: Uint8Array) {
     if (this.kind === 'agy' && !this.accountSeen) this.spotAccount(data);
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;
-    this.term.write(data);
+    if (this.acct) this.term.write(data, () => this.placeAccount());
+    else this.term.write(data);
   }
 
   /** Diagnostics for bug reports: terminal state + the last output with escapes made visible. */

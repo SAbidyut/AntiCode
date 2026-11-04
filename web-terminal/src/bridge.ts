@@ -102,6 +102,8 @@ export interface Bridge {
   /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
   setPromptStyle(style: string): void;
   getPromptStyle(): Promise<string>;
+  /** The account an agent is signed in with, partly hidden ("sh***@gmail.com"); "" if unknown. */
+  accountEmail(kind: string): string;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string): void;
   getAccounts(): Promise<{ agy: string; claude: string }>;
@@ -161,6 +163,7 @@ interface AndroidBridgeApi {
   getClaudeFullscreen?(): boolean;
   setPromptStyle?(style: string): void;
   getPromptStyle?(): string;
+  accountEmail?(kind: string): string;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string): void;
   getAccounts?(): string;
@@ -215,6 +218,13 @@ class AndroidHostBridge implements Bridge {
   async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
   setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
   async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
+  accountEmail(kind: string) {
+    try {
+      return this.api.accountEmail?.(kind) ?? '';
+    } catch {
+      return '';
+    }
+  }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
   setAntigravityAccount(email: string) { this.api.setAntigravityAccount?.(email); }
   async getAccounts() {
@@ -323,6 +333,10 @@ class DevBridge implements Bridge {
   async getPromptStyle() {
     try { return localStorage.getItem('promptStyle') ?? 'powerline'; } catch { return 'powerline'; }
   }
+  accountEmail() {
+    return ''; // (no agent accounts in the browser)
+  }
+
   setThemeColors() {}
   setAntigravityAccount() {}
   async getAccounts() { return { agy: '', claude: '' }; }

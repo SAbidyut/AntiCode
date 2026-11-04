@@ -72,6 +72,54 @@ class UbuntuManager private constructor(private val context: Context) {
             } catch (_: Exception) { /* not installed yet */ }
         }
 
+    /**
+     * The account an agent is signed in with, partly hidden ("sh***@gmail.com"), or "" when
+     * not known. Claude Code keeps it in ~/.claude.json. Antigravity shows it in its header
+     * (the app remembers it from there); before that, its account and token files under
+     * ~/.gemini are looked through for an email (a field, or the Google sign-in token's).
+     * Read from the files only — nothing goes over the network.
+     */
+    fun accountEmail(kind: String): String {
+        val home = File(rootfs, "root")
+        val email = try {
+            when (kind) {
+                "claude" -> JSONObject(File(home, ".claude.json").readText())
+                    .optJSONObject("oauthAccount")?.optString("emailAddress").orEmpty()
+                // (the account its header showed, which the app remembers; else its files)
+                "agy" -> com.sabidyut.agyterm.Accounts.antigravity(context)?.takeIf { "@" in it }
+                    ?: agyEmail(File(home, ".gemini"))
+                else -> ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+        return maskEmail(email.trim())
+    }
+
+    private fun agyEmail(dir: File): String {
+        if (!dir.isDirectory) return ""
+        val skip = setOf("brain", "skills", "plugins", "sidecars", "artifacts", "workflows", "global_workflows", "tmp", "history", "cache", "logs")
+        val names = Regex("account|oauth|cred|auth|token|user|login|session", RegexOption.IGNORE_CASE)
+        val field = Regex(""""(?:email|emailAddress|user_email|userEmail|active)"\s*:\s*"([^"\s@]+@[^"\s@]+\.[^"\s@]+)"""")
+        val jwt = Regex(""""id_token"\s*:\s*"([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.""")
+        val files = dir.walkTopDown().maxDepth(3)
+            .onEnter { it == dir || it.name !in skip }
+            .filter { it.isFile && it.length() in 1..262_144 && names.containsMatchIn(it.name) }
+            .take(40)
+        for (f in files) {
+            val text = try { f.readText() } catch (_: Exception) { continue }
+            field.find(text)?.let { return it.groupValues[1] }
+            jwt.find(text)?.let { m ->
+                try {
+                    val payload = String(android.util.Base64.decode(m.groupValues[2], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP))
+                    val e = JSONObject(payload).optString("email")
+                    if ("@" in e) return e
+                } catch (_: Exception) { /* not a sign-in token */ }
+            }
+        }
+        return ""
+    }
+
     fun stateJson(): String = JSONObject()
         .put("host", "android")
         .put("home", "/root")
@@ -635,6 +683,15 @@ class UbuntuManager private constructor(private val context: Context) {
     )
 
     companion object {
+        /** "shawon.2449@gmail.com" → "sh***@gmail.com" ("" stays ""). */
+        fun maskEmail(email: String): String {
+            val at = email.lastIndexOf('@')
+            if (at <= 0 || at == email.length - 1) return ""
+            val local = email.substring(0, at)
+            val keep = if (local.length <= 3) 1 else 2
+            return local.take(keep) + "***" + email.substring(at)
+        }
+
         val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
         private const val UI_PREFS = "anticode-ui"
         private const val TAG = "UbuntuManager"

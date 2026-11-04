@@ -221,13 +221,14 @@ export class BanglaRenderer {
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
   // `sig` is the line's text once the prompt was drawn on it: when the line no longer
   // reads the same (cleared, redrawn elsewhere after a zoom, overwritten) the label goes.
-  private rightLabels: { marker: IMarker; text: string; sig: string; born: number; note: boolean }[] = [];
+  private rightLabels: { marker: IMarker; text: string; sig: string; born: number; note: boolean; acct: boolean }[] = [];
 
   /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
   /** ([note]: plain grey text — a prompt's "5s" — not the clock's pill) */
-  setRightLabel(text: string, note = false) {
+  /** ([acct]: an agent's signed-in account, partly hidden; [offset]: lines from the cursor's) */
+  setRightLabel(text: string, note = false, acct = false, offset = 0) {
     if (this.term.buffer.active.type !== 'normal') return;
-    const marker = this.term.registerMarker(0);
+    const marker = this.term.registerMarker(offset);
     if (!marker) return;
     // a redraw of the same prompt replaces its label
     this.rightLabels = this.rightLabels.filter((l) => {
@@ -235,7 +236,7 @@ export class BanglaRenderer {
       if (same) l.marker.dispose();
       return !same;
     });
-    this.rightLabels.push({ marker, text: text.slice(0, 24), sig: '', born: performance.now(), note });
+    this.rightLabels.push({ marker, text: text.slice(0, acct ? 48 : 24), sig: '', born: performance.now(), note, acct });
     while (this.rightLabels.length > 300) this.rightLabels.shift()!.marker.dispose();
     this.schedule();
   }
@@ -305,8 +306,8 @@ export class BanglaRenderer {
   }
 
   /** Labels of the lines first..last that still belong to their prompt. */
-  private labelsByLine(first: number, last: number): Map<number, { text: string; note: boolean }> {
-    const m = new Map<number, { text: string; note: boolean }>();
+  private labelsByLine(first: number, last: number): Map<number, { text: string; note: boolean; acct: boolean }> {
+    const m = new Map<number, { text: string; note: boolean; acct: boolean }>();
     const buf = this.term.buffer.active;
     if (buf.type !== 'normal') return m;
     const now = performance.now();
@@ -320,7 +321,7 @@ export class BanglaRenderer {
         return false;
       }
       if (!ok) return true; // not drawn yet
-      m.set(line, { text: l.text, note: l.note });
+      m.set(line, { text: l.text, note: l.note, acct: l.acct });
       return true;
     });
     return m;
@@ -1220,8 +1221,12 @@ export class BanglaRenderer {
       let label = labels.get(i);
       // never cover text: only when the row leaves room at its right end (zoomed in,
       // re-wrapped, or a wide prompt bar → no clock on that row)
-      if (label && line && this.usedCells(line, cols) > cols - (label.note ? label.text.length + 3 : 13)) label = undefined;
-      const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.note
+      // (the account's text is small: about 0.8 of a cell a letter)
+      const room = !label ? 0 : label.acct ? Math.ceil(label.text.length * 0.8) + 4 : label.note ? label.text.length + 3 : 13;
+      if (label && line && this.usedCells(line, cols) > cols - room) label = undefined;
+      const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.acct
+        ? `<span class="rlabel acct"><b>\uf0e0</b>${esc(label.text)}</span>`
+        : label.note
         ? `<span class="rlabel note">${esc(label.text)}</span>`
         : `<span class="rlabel"><b>\uf017</b>${esc(label.text)}</span>`);
       let el: HTMLDivElement | null = null;
