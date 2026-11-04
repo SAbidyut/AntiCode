@@ -188,7 +188,9 @@ const OVERSCAN = 10;
 export class BanglaRenderer {
   /**
    * A floating keyboard is open: Android doesn't say where it is (it takes no room at the
-   * bottom), so the line being typed is kept in the upper half, where it usually isn't.
+   * bottom), so in a portrait shell the line being typed is kept in the upper half, where it
+   * usually isn't. (Not an agent's input box, which stays at the bottom, nor in landscape,
+   * where the keyboard floats over a part of a wide screen: it can be moved off the line.)
    */
   static floatingKeyboard = false;
   readonly el: HTMLDivElement;
@@ -230,9 +232,9 @@ export class BanglaRenderer {
     if (this.term.buffer.active.type !== 'normal') return;
     const marker = this.term.registerMarker(offset);
     if (!marker) return;
-    // a redraw of the same prompt replaces its label
+    // a redraw of the same prompt replaces its label (and there's one account label: it moves)
     this.rightLabels = this.rightLabels.filter((l) => {
-      const same = l.marker.isDisposed || l.marker.line === marker.line;
+      const same = l.marker.isDisposed || l.marker.line === marker.line || (acct && l.acct);
       if (same) l.marker.dispose();
       return !same;
     });
@@ -258,6 +260,12 @@ export class BanglaRenderer {
     this.barLines.push({ marker, sig: '', born: performance.now() });
     while (this.barLines.length > 300) this.barLines.shift()!.marker.dispose();
     this.schedule();
+  }
+
+  /** The line of the account label (Claude Code's / Antigravity's header), -1 if none. */
+  accountLabelLine(): number {
+    const l = this.rightLabels.find((x) => x.acct && !x.marker.isDisposed);
+    return l ? l.marker.line : -1;
   }
 
   /** After a terminal reset the old buffers (and their markers) are gone. */
@@ -1145,7 +1153,8 @@ export class BanglaRenderer {
     let splitLine = -1;
     let splitGap = 0;
     let lift = 0;
-    if (this.anchorBottom && !BanglaRenderer.floatingKeyboard && buf.type === 'normal' && visible > 0) {
+    // (a floating keyboard too: the box stays at the bottom — the keyboard can be moved off it)
+    if (this.anchorBottom && buf.type === 'normal' && visible > 0) {
       const free = visible - (lastY + 1) * lh;
       if (free >= lh) {
         let box = -1;
@@ -1295,7 +1304,8 @@ export class BanglaRenderer {
       let pan = 0;
       if (splitLine >= 0 || lift > 0) {
         pan = 0; // the chat layout already fits the screen
-      } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal') {
+      } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal' &&
+        !this.anchorBottom && this.el.clientHeight > this.el.clientWidth) {
         // the input line (and what's drawn under it) in the upper half of the screen (not in
         // full-screen programs — vim, less: their top half couldn't be scrolled back to)
         pan = Math.max(0, Math.min((lastY + 1) * lh - visible * 0.5, buf.cursorY * lh));

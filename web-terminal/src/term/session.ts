@@ -187,6 +187,7 @@ export class TerminalSession {
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
       else if (cmd === 'done') {
         this.renderer.anchorBottom = false;
+        this.dropAccount(); // (the agent is gone: its label stays where it was)
         this.setProgramWidths(false); // the shell's prompt: its way of counting
         this.edit.atPrompt = true;
       } else if (cmd === 'exec') {
@@ -272,40 +273,75 @@ export class TerminalSession {
 
   // ---- the account an agent is signed in with, shown by its header: on the
   // plan's line of Claude Code's header ("Claude Max"), the first line of Antigravity's ----
-  private acct: { name: string; text: string; from: IMarker; until: number } | null = null;
+  // (kept while the agent runs: when it draws its header again — a turned phone, a new
+  // width — the label follows to the new header line)
+  private acct: { name: string; text: string; from: IMarker; until: number; placed: boolean; checked: number } | null = null;
   private expectAccount(name: string) {
-    this.acct?.from.dispose();
-    this.acct = null;
+    this.dropAccount();
     const text = this.bridge.accountEmail(name);
     const from = text ? this.term.registerMarker(0) : undefined;
-    if (from) this.acct = { name, text, from, until: performance.now() + 90_000 };
+    if (from) this.acct = { name, text, from, until: performance.now() + 90_000, placed: false, checked: 0 };
   }
+  private dropAccount() {
+    this.acct?.from.dispose();
+    this.acct = null;
+    clearTimeout(this.acctTimer);
+    this.acctTimer = 0;
+  }
+  private acctTimer = 0;
   private placeAccount() {
     const a = this.acct;
     if (!a) return;
+    const now = performance.now();
     const buf = this.term.buffer.active;
-    if (a.from.isDisposed || performance.now() > a.until || buf.type !== 'normal') {
-      if (a.from.isDisposed || performance.now() > a.until) {
-        a.from.dispose();
-        this.acct = null;
+    if (!a.placed && now > a.until) return this.dropAccount(); // (no header came)
+    if (buf.type !== 'normal') return;
+    if (now - a.checked < 250) {
+      // (a streaming reply: not on every piece — but once more after the last one)
+      if (!this.acctTimer) this.acctTimer = window.setTimeout(() => {
+        this.acctTimer = 0;
+        this.placeAccount();
+      }, 300);
+      return;
+    }
+    a.checked = now;
+    const text = (y: number) => buf.getLine(y)?.translateToString(true) ?? '';
+    const end = Math.min(buf.length, buf.baseY + buf.cursorY + 1);
+    // (from where the agent started; Claude Code: anywhere above the cursor — it clears the
+    // screen and draws itself anew for a new width, leaving that line elsewhere)
+    const start = a.name === 'claude' || a.from.isDisposed || a.from.line < 0 ? 0 : a.from.line;
+    let hit = -1;
+    if (a.name === 'claude') {
+      // the latest header ("Claude Code v…": drawn again for a new width, the old one may
+      // still be above), its plan line ("Claude Max") among the next lines
+      let title = -1;
+      for (let y = Math.max(0, end - 600); y < end; y++) if (/Claude Code v\d/.test(text(y))) title = y;
+      if (title < 0) return;
+      hit = title;
+      for (let y = title; y < Math.min(end, title + 5); y++) {
+        if (/\bClaude (Max|Pro|Team|Enterprise|API)\b/.test(text(y))) {
+          hit = y;
+          break;
+        }
       }
-      return;
+    } else {
+      if (a.from.isDisposed || a.from.line < 0) return;
+      for (let y = start + 1; y < Math.min(end, start + 16); y++) {
+        if (text(y).trim()) {
+          hit = y;
+          break;
+        }
+      }
+      if (hit < 0) return;
     }
-    const start = a.from.line;
-    for (let y = start; y < Math.min(buf.length, start + 16); y++) {
-      const t = buf.getLine(y)?.translateToString(true) ?? '';
-      const hit = a.name === 'claude' ? /\bClaude (Max|Pro|Team|Enterprise|API)\b/.test(t) : y > start && t.trim() !== '';
-      if (!hit) continue;
-      // right after that line's text ("Claude Max  ✉ you@gmail.com"), or after a header line
-      // next to it when that one has no room (never drawn over text)
-      const need = Math.ceil(a.text.length * 0.8) + 5;
-      const fits = (l: number) => l >= start && l < buf.length && (buf.getLine(l)?.translateToString(true).trimEnd().length ?? 0) + 1 + need <= this.term.cols;
-      const at = [y, y + 1, y + 2, y - 1, y - 2].find(fits) ?? y;
-      this.renderer.setRightLabel(a.text, false, true, at - (buf.baseY + buf.cursorY));
-      a.from.dispose();
-      this.acct = null;
-      return;
-    }
+    // right after that line's text ("Claude Max  ✉ you@gmail.com"), or after a header line
+    // next to it when that one has no room (never drawn over text)
+    const need = Math.ceil(a.text.length * 0.8) + 5;
+    const fits = (l: number) => l >= start && l < buf.length && text(l).trimEnd().length + 1 + need <= this.term.cols;
+    const at = [hit, hit + 1, hit + 2, hit - 1, hit - 2].find(fits) ?? hit;
+    if (this.renderer.accountLabelLine() === at) return; // (where it is already)
+    this.renderer.setRightLabel(a.text, false, true, at - (buf.baseY + buf.cursorY));
+    a.placed = true;
   }
 
   write(data: Uint8Array) {
