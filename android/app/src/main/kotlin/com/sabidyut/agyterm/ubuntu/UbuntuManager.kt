@@ -56,6 +56,22 @@ class UbuntuManager private constructor(private val context: Context) {
         get() = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).getBoolean("claudeFullscreen", false)
         set(v) = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).edit().putBoolean("claudeFullscreen", v).apply()
 
+    /** The shell prompt's look (Settings → Prompt style): Ubuntu's ~/.config/agy-terminal/prompt. */
+    var promptStyle: String
+        get() = try {
+            File(rootfs, "root/.config/agy-terminal/prompt").readText().trim()
+        } catch (_: Exception) {
+            ""
+        }.takeIf { it in PROMPT_STYLES } ?: "powerline"
+        set(v) {
+            if (v !in PROMPT_STYLES) return
+            try {
+                val f = File(rootfs, "root/.config/agy-terminal/prompt")
+                f.parentFile?.mkdirs()
+                f.writeText("$v\n")
+            } catch (_: Exception) { /* not installed yet */ }
+        }
+
     fun stateJson(): String = JSONObject()
         .put("host", "android")
         .put("home", "/root")
@@ -619,6 +635,7 @@ class UbuntuManager private constructor(private val context: Context) {
     )
 
     companion object {
+        val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
         private const val UI_PREFS = "anticode-ui"
         private const val TAG = "UbuntuManager"
         const val UBUNTU_VERSION = "24.04"

@@ -1,6 +1,11 @@
 # Agy Terminal shell look — sourced from ~/.bashrc (rewritten when the app updates).
-# Prompt styles:  agy-prompt powerline   (default, Oh-My-Posh-like segments)
-#                 agy-prompt simple      (one short line)
+# Prompt styles (Settings → Prompt style, or:  agy-prompt <style>):
+#   powerline  pastel segments with rounded ends (default)
+#   pure       one quiet line: folder, branch, ❯ — how long a command took at the right
+#   rainbow    slanted colour blocks, a rule to the right edge, time and duration there
+#   lean       the same in coloured text only, no blocks
+#   capsule    rounded capsules on a framed line: ╭─ … / ╰─❯
+#   simple     the folder and ❯
 
 # ---------------------------------------------------------------- ble.sh (autosuggestions)
 # Fish-like grey suggestions from history (→ or End accepts), Tab completion menu and
@@ -44,6 +49,20 @@ __agy_git_branch() {
 }
 
 # ---------------------------------------------------------------- prompt
+# Text that comes from outside (folder names, git branches) is never put into PS1 itself —
+# bash would expand $(…) in it — but referenced as ${__agy_txt[i]}.
+
+# The path, shortened to fit [$1] characters: "…/parent/name", else "name".
+__agy_fit_path() {
+  __agy_p=$path
+  (( ${#__agy_p} <= $1 )) && return
+  local short=${path##*/} parent=${path%/*}
+  parent=${parent##*/}
+  [ "$path" != "$short" ] && short="…/${parent:+$parent/}$short"
+  __agy_p=$short
+  (( ${#__agy_p} <= $1 )) || __agy_p=${path##*/}
+}
+
 __agy_prompt() {
   local status=$?
   __agy_in_prompt=1
@@ -57,39 +76,179 @@ __agy_prompt() {
   local path=${PWD/#$HOME/\~}
   # a folder name can't smuggle escape sequences into the title or the bar
   path=${path//[[:cntrl:]]/?}
-  # Text that comes from outside (folder names, git branches) is never put into PS1
-  # itself — bash would expand $(…) in it — but referenced as ${__agy_txt[i]}.
   __agy_txt=()
   __agy_path=$path
-  # a blank line between the last output and the prompt bar (not on the first prompt)
+  # a blank line between the last output and the prompt (not on the first prompt)
   local gap=
   [ -n "$__agy_prompted" ] && gap='\n'
   __agy_prompted=1
   local ok='166;227;161' bad='243;139;168'
   local mark=$ok
   (( status != 0 )) && mark=$bad
-  # The clock sits at the right edge of the screen. The app draws it there (it's not
-  # text in the terminal), so it stays at the edge through zooming and resizing. Only
-  # when the bar leaves room for it (decided after fitting the bar, below).
-  local cols=${COLUMNS:-80} clock= rclock=
+  local cols=${COLUMNS:-80}
+  # how long the command took (its start noted by PS0 / ble.sh): shown from 2 s
+  local took=
+  if [ -n "$__agy_t0" ]; then
+    local d=$(( SECONDS - __agy_t0 ))
+    if (( d >= 3600 )); then took="$(( d / 3600 ))h$(( d % 3600 / 60 ))m"
+    elif (( d >= 60 )); then took="$(( d / 60 ))m$(( d % 60 ))s"
+    elif (( d >= 2 )); then took="${d}s"
+    fi
+  fi
+  __agy_t0=
+  local title="\[\e]0;\${__agy_path}\a\]"
+
+  case $style in
+    simple)
+      PS1="${gap}${title}\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+      ;;
+    pure) __agy_git_branch; __agy_ps_pure ;;
+    rainbow) __agy_git_branch; __agy_ps_bar rainbow ;;
+    lean) __agy_git_branch; __agy_ps_bar lean ;;
+    capsule) __agy_git_branch; __agy_ps_capsule ;;
+    *) __agy_git_branch; __agy_ps_powerline ;;
+  esac
+  __agy_in_prompt=
+}
+
+# pure — one quiet line: the folder (blue), the branch (green), ❯ (red after a failure);
+# how long the last command took appears at the right edge (drawn by the app)
+__agy_ps_pure() {
+  __agy_fit_path $(( cols - 6 - ${#__agy_branch} ))
+  __agy_txt=("$__agy_p" "$__agy_branch")
+  local line="\[\e[38;2;116;169;233m\]\${__agy_txt[0]}"
+  [ -n "$__agy_branch" ] && line+=" \[\e[38;2;140;200;120m\]\${__agy_txt[1]}"
+  local note=
+  [ -n "$took" ] && note="\[\e]7770;rnote;${took}\a\]"
+  PS1="${gap}${note}${title}${line} \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+}
+
+# rainbow / lean — the first line runs to the right edge: on the left the system, the folder
+# and the branch; on the right the failed status, how long the command took and the time,
+# a thin rule between. rainbow: slanted colour blocks; lean: the same as coloured text.
+# The ❯ waits on the second line.
+__agy_ps_bar() {
+  local kind=$1 time
+  # the parts as "background|foreground|text" (lean uses only the foreground); a phone held
+  # upright gets the short forms ("16:23", "5s")
+  local -a L=() R=() RK=()
+  local wide=1
+  (( cols < 72 )) && wide=
+  L+=("58;58;64|220;220;225| "$'\uf17c'" ")
+  L+=("38;100;190|240;244;250| "$'\uf07b'" @PATH ")
+  if [ -n "$__agy_branch" ]; then
+    if [ -n "$wide" ]; then L+=("88;148;40|20;24;16| on "$'\ue725'" @BRANCH ")
+    else L+=("88;148;40|20;24;16| "$'\ue725'" @BRANCH "); fi
+  fi
+  (( status != 0 )) && R+=("204;62;62|250;240;240| "$'\uf071'" ${status} ") && RK+=(status)
+  if [ -n "$wide" ]; then
+    printf -v time '%(%H:%M:%S)T' -1
+    [ -n "$took" ] && R+=("196;160;0|30;26;0| took ${took} "$'\uf252'" ") && RK+=(took)
+    R+=("200;200;204|28;28;32| at ${time} "$'\uf017'" ") && RK+=(time)
+  else
+    printf -v time '%(%H:%M)T' -1
+    [ -n "$took" ] && R+=("196;160;0|30;26;0| ${took} "$'\uf252'" ") && RK+=(took)
+    R+=("200;200;204|28;28;32| ${time} "$'\uf017'" ") && RK+=(time)
+  fi
+  # widths: each part plus its separator; the path shortened to leave room for the rule
+  local i t wl=0 wr=0
+  for i in "${L[@]}"; do t=${i##*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; wl=$(( wl + ${#t} + 1 )); done
+  for i in "${R[@]}"; do t=${i##*|}; wr=$(( wr + ${#t} + 1 )); done
+  # still too narrow: the right side's parts go, the time first (the folder keeps 10)
+  while (( ${#R[@]} > 0 )) && (( cols - 1 - wl - wr - 3 < 10 )); do
+    t=${R[-1]##*|}; wr=$(( wr - ${#t} - 1 )); unset 'R[-1]'
+  done
+  __agy_fit_path $(( cols - 1 - wl - wr - 3 ))
+  __agy_txt=("$__agy_p" "$__agy_branch")
+  wl=$(( wl + ${#__agy_p} ))
+  local fill=$(( cols - 1 - wl - wr - 2 ))
+  (( fill < 1 )) && fill=1
+  local rule
+  printf -v rule '%*s' "$fill" ''
+  rule=${rule// /─}
+
+  local line= n=${#L[@]} bg fg tx next
+  for (( i = 0; i < n; i++ )); do
+    bg=${L[i]%%|*}; fg=${L[i]#*|}; fg=${fg%%|*}; tx=${L[i]##*|}
+    tx=${tx/@PATH/\$\{__agy_txt[0]\}}; tx=${tx/@BRANCH/\$\{__agy_txt[1]\}}
+    if [ "$kind" = lean ]; then
+      # the folder blue, the branch green, the rest grey — no blocks
+      case $i in 1) fg='116;169;233' ;; 2) fg='140;200;120' ;; *) fg='150;150;160' ;; esac
+      line+="\[\e[38;2;${fg}m\]${tx}"
+      continue
+    fi
+    line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\]${tx}"
+    if (( i + 1 < n )); then next=${L[i + 1]%%|*}; line+="\[\e[48;2;${next}m\e[38;2;${bg}m\]"$'\ue0bc'
+    else line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0bc'
+    fi
+  done
+  line+="\[\e[0m\e[38;2;88;88;98m\] ${rule} "
+  local prev= k=0
+  for i in "${R[@]}"; do
+    bg=${i%%|*}; fg=${i#*|}; fg=${fg%%|*}; tx=${i##*|}
+    if [ "$kind" = lean ]; then
+      case ${RK[k++]} in took) fg='220;190;90' ;; time) fg='150;150;160' ;; *) fg='240;110;110' ;; esac
+      line+="\[\e[38;2;${fg}m\]${tx}"
+      continue
+    fi
+    if [ -n "$prev" ]; then line+="\[\e[48;2;${prev}m"; else line+="\[\e[49m"; fi
+    line+="\e[38;2;${bg}m\]"$'\ue0ba'"\[\e[48;2;${bg}m\e[38;2;${fg}m\]${tx}"
+    prev=$bg
+  done
+  line+="\[\e[0m\]"
+  PS1="${gap}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+}
+
+# capsule — rounded capsules joined by a thin line, framed: ╭─ … on top, ╰─❯ below; the
+# clock at the right edge (drawn by the app)
+__agy_ps_capsule() {
+  local -a C=()
+  C+=("203;166;247|"$'\uf007'" ${USER:-root}")
+  C+=("137;180;250|"$'\uf07b'" @PATH")
+  [ -n "$__agy_branch" ] && C+=("166;227;161|"$'\ue725'" @BRANCH")
+  [ -n "$took" ] && C+=("249;226;175|"$'\uf252'" ${took}")
+  (( status != 0 )) && C+=("243;139;168|"$'\uf071'" ${status}")
+  local clock= w i t
+  (( cols >= 34 )) && printf -v clock '%(%I:%M %p)T' -1
+  __agy_cw() {
+    w=3
+    for i in "${C[@]}"; do t=${i#*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; w=$(( w + ${#t} + 3 )); done
+  }
+  __agy_cw
+  # narrow: the clock goes first, then the user's capsule (the folder keeps 10)
+  local room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
+  if (( room - w < 10 )) && [ -n "$clock" ]; then clock=; room=$(( cols - 1 )); fi
+  if (( room - w < 10 )); then C=("${C[@]:1}"); __agy_cw; fi
+  __agy_fit_path $(( room - w ))
+  __agy_txt=("$__agy_p" "$__agy_branch")
+  local rclock=
+  [ -n "$clock" ] && (( w + ${#__agy_p} <= room )) && rclock="\[\e]7770;rprompt;${clock}\a\]"
+  local frame='108;112;134' line="\[\e[38;2;108;112;134m\]╭─" bg tx k=0
+  for i in "${C[@]}"; do
+    bg=${i%%|*}; tx=${i#*|}
+    tx=${tx/@PATH/\$\{__agy_txt[0]\}}; tx=${tx/@BRANCH/\$\{__agy_txt[1]\}}
+    (( k++ )) && line+="\[\e[0m\e[38;2;${frame}m\]─"
+    line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b6'"\[\e[48;2;${bg}m\e[38;2;30;30;46m\]${tx}\[\e[0m\e[38;2;${bg}m\]"$'\ue0b4'
+  done
+  line+="\[\e[0m\]"
+  PS1="${gap}${rclock}${title}${line}\n\[\e[38;2;${frame}m\]╰─\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+}
+
+# powerline — pastel segments with rounded ends; the clock at the right edge (the app draws
+# it there, so it isn't text the bar could run into)
+__agy_ps_powerline() {
+  local clock= rclock=
   (( cols >= 30 )) && printf -v clock '%(%I:%M %p)T' -1
 
-  if [ "$style" = simple ]; then
-    PS1="${gap}\[\e]0;\${__agy_path}\a\]\[\e[38;2;137;220;235m\]\${__agy_path}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
-    __agy_in_prompt=
-    return
-  fi
-
-  __agy_git_branch
-
   # segments: "r;g;b|icon text" — dark text on pastel backgrounds
-  local dir_icon=$''
-  [ "$PWD" = "$HOME" ] && dir_icon=$''
+  local dir_icon=$'\uf07b'
+  [ "$PWD" = "$HOME" ] && dir_icon=$'\uf015'
   local -a segs=()
-  segs+=("245;169;127|"$''" ${USER:-root}")
+  segs+=("245;169;127|"$'\uf007'" ${USER:-root}")
   segs+=("243;139;168|${dir_icon} ${path}")
-  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$''" ${__agy_branch}")
-  (( status != 0 )) && segs+=("235;111;146|"$''" ${status}")
+  [ -n "$__agy_branch" ] && segs+=("249;226;175|"$'\ue725'" ${__agy_branch}")
+  [ -n "$took" ] && segs+=("137;220;235|"$'\uf252'" ${took}")
+  (( status != 0 )) && segs+=("235;111;146|"$'\uf071'" ${status}")
 
   # Fit the phone's width (leaving room for the clock): shorten the path.
   local width i room=$(( cols - 1 - (${#clock} ? ${#clock} + 6 : 0) ))
@@ -114,24 +273,25 @@ __agy_prompt() {
   local fg='30;30;46' line= n=${#segs[@]} bg next
   for (( i = 0; i < n; i++ )); do
     bg=${segs[i]%%|*}
-    (( i == 0 )) && line+="\[\e[0m\e[38;2;${bg}m\]"$''
+    (( i == 0 )) && line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b6'
     __agy_txt[i]=${segs[i]#*|}
     line+="\[\e[48;2;${bg}m\e[38;2;${fg}m\] \${__agy_txt[$i]} "
     if (( i + 1 < n )); then
       next=${segs[i + 1]%%|*}
-      line+="\[\e[48;2;${next}m\e[38;2;${bg}m\]"$''
+      line+="\[\e[48;2;${next}m\e[38;2;${bg}m\]"$'\ue0b0'
     else
-      line+="\[\e[0m\e[38;2;${bg}m\]"$''"\[\e[0m\]"
+      line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b4'"\[\e[0m\]"
     fi
   done
 
   # window title (shown on the app's tab) + segments + input line
-  PS1="${gap}${rclock}\[\e]0;\${__agy_path}\a\]${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
-  __agy_in_prompt=
+  PS1="${gap}${rclock}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 PROMPT_COMMAND=__agy_prompt
-# a command starts (the app's "task finished" notification waits for the prompt again)
-PS0=$'\e]7770;exec\a'
+# a command starts (the app's "task finished" notification waits for the prompt again); its
+# start time is noted for the prompt's "took 5s" (the empty slice prints nothing — the
+# arithmetic sets the variable)
+PS0=$'\e]7770;exec\a''${PS0:0:$((__agy_t0=SECONDS,0))}'
 
 # ---------------------------------------------------------------- agents on demand
 # Typing 'agy' or 'claude' before they are installed installs them first.
@@ -200,6 +360,6 @@ if [[ ${BLE_VERSION-} ]]; then
   }
   blehook/eval-after-load keymap_emacs anticode/ble-keys 2>/dev/null || anticode/ble-keys
   # (ble.sh runs commands itself: say when one starts from its hook as well)
-  blehook PREEXEC+='printf "\e]7770;exec\a"' 2>/dev/null
+  blehook PREEXEC+='printf "\e]7770;exec\a"; __agy_t0=$SECONDS' 2>/dev/null
   ble-attach
 fi

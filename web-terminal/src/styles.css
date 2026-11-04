@@ -480,6 +480,8 @@ body[data-screen='home']::before {
   padding: 0 0.75em; border-radius: calc(var(--lh) / 2);
   background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
 }
+/* a prompt's plain note at the right edge (how long the last command took) */
+.term-row .rlabel.note { background: none; color: #8a8fa3; padding: 0 0.2em; }
 .term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
 /* the smart keyboard's word, inserted at the cursor (what follows on the row moves aside) */
 .term-preedit {
@@ -831,3 +833,27 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   #session-pill i.on { background: var(--good); }
   #session-pill span { color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* ---- Settings → Prompt style: a card per style, with a small picture of it ---- */
+.prompt-styles { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ps-card {
+  display: block; width: 100%; text-align: left; padding: 10px 12px 12px; border-radius: 14px;
+  background: var(--surface-2); border: 1.5px solid transparent; color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+.ps-card.on { border-color: var(--accent); background: var(--surface-3); }
+.ps-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ps-head b { font: 650 14px var(--ui-font); }
+.ps-head span { font-size: 12px; color: var(--muted); }
+.ps-pic {
+  position: relative; background: #0d0f15; border-radius: 9px; padding: 8px 10px; overflow: hidden;
+  font: 11.5px/1.75 var(--mono); color: #cdd6f4; white-space: pre;
+}
+.ps-pic > div { position: relative; display: block; height: 21px; white-space: pre; }
+.ps-pic span { display: inline-block; height: 21px; line-height: 21px; }
+.ps-pic .pi { font-style: normal; font-family: 'AgySymbols', var(--mono); }
+.ps-pic .pc { width: 7px; height: 15px; background: #cdd6f4; opacity: 0.4; vertical-align: middle; }
+.ps-pic .pr { position: absolute; right: 0; top: 0; }
+.ps-pic .pclock { background: #89b4fa; color: #1e1e2e; border-radius: 10px; padding: 0 8px; height: 19px; line-height: 19px; font-size: 11px; margin-top: 1px; }
+.ps-pic > div.pfill { display: flex; }
+.ps-pic .prule { flex: 1; height: 1px; background: #585862; margin: 0 6px; align-self: center; }

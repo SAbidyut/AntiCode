@@ -219,10 +219,11 @@ export class BanglaRenderer {
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
   // `sig` is the line's text once the prompt was drawn on it: when the line no longer
   // reads the same (cleared, redrawn elsewhere after a zoom, overwritten) the label goes.
-  private rightLabels: { marker: IMarker; text: string; sig: string; born: number }[] = [];
+  private rightLabels: { marker: IMarker; text: string; sig: string; born: number; note: boolean }[] = [];
 
   /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
-  setRightLabel(text: string) {
+  /** ([note]: plain grey text — a prompt's "5s" — not the clock's pill) */
+  setRightLabel(text: string, note = false) {
     if (this.term.buffer.active.type !== 'normal') return;
     const marker = this.term.registerMarker(0);
     if (!marker) return;
@@ -232,7 +233,7 @@ export class BanglaRenderer {
       if (same) l.marker.dispose();
       return !same;
     });
-    this.rightLabels.push({ marker, text: text.slice(0, 24), sig: '', born: performance.now() });
+    this.rightLabels.push({ marker, text: text.slice(0, 24), sig: '', born: performance.now(), note });
     while (this.rightLabels.length > 300) this.rightLabels.shift()!.marker.dispose();
     this.schedule();
   }
@@ -245,8 +246,8 @@ export class BanglaRenderer {
   }
 
   /** Labels of the lines first..last that still belong to their prompt. */
-  private labelsByLine(first: number, last: number): Map<number, string> {
-    const m = new Map<number, string>();
+  private labelsByLine(first: number, last: number): Map<number, { text: string; note: boolean }> {
+    const m = new Map<number, { text: string; note: boolean }>();
     const buf = this.term.buffer.active;
     if (buf.type !== 'normal') return m;
     const now = performance.now();
@@ -261,11 +262,13 @@ export class BanglaRenderer {
           l.marker.dispose(); // its line stayed empty: the prompt went elsewhere
           return false;
         } else return true;
-      } else if (text !== l.sig) {
-        l.marker.dispose(); // cleared, overwritten, or the prompt was redrawn elsewhere
+      } else if (!text.startsWith(l.sig)) {
+        // cleared, overwritten, or the prompt was redrawn elsewhere (typing after a one-line
+        // prompt keeps it: the line still starts with the prompt)
+        l.marker.dispose();
         return false;
       }
-      m.set(line, l.text);
+      m.set(line, { text: l.text, note: l.note });
       return true;
     });
     return m;
@@ -1112,8 +1115,10 @@ export class BanglaRenderer {
       let label = labels.get(i);
       // never cover text: only when the row leaves room at its right end (zoomed in,
       // re-wrapped, or a wide prompt bar → no clock on that row)
-      if (label && line && this.usedCells(line, cols) > cols - 13) label = undefined;
-      const html = this.rowToHtml(line, cols) + (label ? `<span class="rlabel"><b>\uf017</b>${esc(label)}</span>` : '');
+      if (label && line && this.usedCells(line, cols) > cols - (label.note ? label.text.length + 3 : 13)) label = undefined;
+      const html = this.rowToHtml(line, cols) + (!label ? '' : label.note
+        ? `<span class="rlabel note">${esc(label.text)}</span>`
+        : `<span class="rlabel"><b>\uf017</b>${esc(label.text)}</span>`);
       let el: HTMLDivElement | null = null;
       if (!r) {
         el = this.spare.pop() ?? document.createElement('div');

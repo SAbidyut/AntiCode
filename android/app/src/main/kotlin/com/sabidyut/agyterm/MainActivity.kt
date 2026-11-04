@@ -1110,6 +1110,15 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getClaudeFullscreen(): Boolean = service?.ubuntu?.claudeFullscreen ?: false
 
+        /** The shell prompt's look (Settings → Prompt style). */
+        @JavascriptInterface
+        fun setPromptStyle(style: String) {
+            svc().ubuntu.promptStyle = style
+        }
+
+        @JavascriptInterface
+        fun getPromptStyle(): String = service?.ubuntu?.promptStyle ?: "powerline"
+
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface
         fun setKeyboardCompat(on: Boolean) {

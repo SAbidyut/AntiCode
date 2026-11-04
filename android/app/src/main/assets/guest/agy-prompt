@@ -1,12 +1,12 @@
 #!/bin/sh
-# Choose the shell prompt style of Agy Terminal.
+# Choose the shell prompt style of AntiCode (also in the app: Settings → Prompt style).
 case "$1" in
-  powerline|simple)
+  powerline|pure|rainbow|lean|capsule|simple)
     mkdir -p "$HOME/.config/agy-terminal"
     echo "$1" > "$HOME/.config/agy-terminal/prompt"
     echo "Prompt style: $1 (takes effect at the next prompt)"
     ;;
   *)
-    echo "usage: agy-prompt powerline | simple"
+    echo "usage: agy-prompt powerline | pure | rainbow | lean | capsule | simple"
     ;;
 esac

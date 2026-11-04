@@ -99,6 +99,9 @@ export interface Bridge {
   /** Claude Code's own full-screen view for new sessions. */
   setClaudeFullscreen(on: boolean): void;
   getClaudeFullscreen(): Promise<boolean>;
+  /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
+  setPromptStyle(style: string): void;
+  getPromptStyle(): Promise<string>;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string): void;
   getAccounts(): Promise<{ agy: string; claude: string }>;
@@ -156,6 +159,8 @@ interface AndroidBridgeApi {
   getNotifyWhenDone?(): boolean;
   setClaudeFullscreen?(on: boolean): void;
   getClaudeFullscreen?(): boolean;
+  setPromptStyle?(style: string): void;
+  getPromptStyle?(): string;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string): void;
   getAccounts?(): string;
@@ -208,6 +213,8 @@ class AndroidHostBridge implements Bridge {
   async getNotifyWhenDone() { return this.api.getNotifyWhenDone?.() ?? true; }
   setClaudeFullscreen(on: boolean) { this.api.setClaudeFullscreen?.(on); }
   async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
+  setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
+  async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
   setAntigravityAccount(email: string) { this.api.setAntigravityAccount?.(email); }
   async getAccounts() {
@@ -310,6 +317,12 @@ class DevBridge implements Bridge {
   async getNotifyWhenDone() { return true; }
   setClaudeFullscreen() {}
   async getClaudeFullscreen() { return false; }
+  setPromptStyle(style: string) {
+    try { localStorage.setItem('promptStyle', style); } catch { /* storage unavailable */ }
+  }
+  async getPromptStyle() {
+    try { return localStorage.getItem('promptStyle') ?? 'powerline'; } catch { return 'powerline'; }
+  }
   setThemeColors() {}
   setAntigravityAccount() {}
   async getAccounts() { return { agy: '', claude: '' }; }

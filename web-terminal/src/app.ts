@@ -1365,6 +1365,54 @@ function fitSoon() {
   }, 250);
 }
 
+// ---- the shell prompt's styles (Settings → Prompt style; drawn by the shell, see bashrc) ----
+const PROMPT_STYLES: { id: string; name: string; note: string }[] = [
+  { id: 'powerline', name: 'Powerline', note: 'Pastel segments with rounded ends' },
+  { id: 'pure', name: 'Pure', note: 'One quiet line — how long a command took, on the right' },
+  { id: 'rainbow', name: 'Rainbow', note: 'Slanted colour blocks, a rule to the time' },
+  { id: 'lean', name: 'Lean', note: 'Rainbow’s line in coloured text only' },
+  { id: 'capsule', name: 'Capsule', note: 'Rounded capsules on a framed line' },
+  { id: 'simple', name: 'Simple', note: 'Just the folder and ❯' },
+];
+/** A small picture of a prompt style (HTML), as the shell draws it. */
+function promptPicture(id: string): string {
+  const ic = (cp: number) => `<i class="pi">${String.fromCodePoint(cp)}</i>`;
+  const t = (fg: string, text: string, bg = '') => `<span style="color:rgb(${fg})${bg ? `;background:rgb(${bg})` : ''}">${text}</span>`;
+  const dark = '30,30,46';
+  const ok = t('166,227,161', '❯');
+  const cursor = '<span class="pc"></span>';
+  switch (id) {
+    case 'pure':
+      return `<div>${t('116,169,233', '~/src')} ${t('140,200,120', 'main')} ${ok} ${cursor}<span class="pr">${t('138,143,163', '5s')}</span></div>`;
+    case 'rainbow': {
+      const seg = (bg: string, fg: string, text: string, next: string) =>
+        t(fg, text, bg) + t(bg, ic(0xe0bc), next);
+      const left = seg('58,58,64', '220,220,225', ` ${ic(0xf17c)} `, '38,100,190') +
+        seg('38,100,190', '240,244,250', ` ${ic(0xf07b)} ~/src `, '88,148,40') +
+        t('20,24,16', ` ${ic(0xe0a0)} main `, '88,148,40') + t('88,148,40', ic(0xe0bc));
+      const right = t('196,160,0', ic(0xe0ba)) + t('30,26,0', ` 5s ${ic(0xf252)} `, '196,160,0') +
+        t('200,200,204', ic(0xe0ba), '196,160,0') + t('28,28,32', ` 16:23 ${ic(0xf017)} `, '200,200,204');
+      return `<div class="pfill">${left}<span class="prule"></span>${right}</div><div>${ok} ${cursor}</div>`;
+    }
+    case 'lean':
+      return `<div class="pfill">${t('150,150,160', ` ${ic(0xf17c)} `)}${t('116,169,233', `${ic(0xf07b)} ~/src`)}${t('140,200,120', ` ${ic(0xe0a0)} main`)}` +
+        `<span class="prule"></span>${t('220,190,90', `5s ${ic(0xf252)} `)}${t('150,150,160', ` 16:23 ${ic(0xf017)}`)}</div><div>${ok} ${cursor}</div>`;
+    case 'capsule': {
+      const cap = (bg: string, text: string) => t(bg, ic(0xe0b6)) + t(dark, text, bg) + t(bg, ic(0xe0b4));
+      const line = t('108,112,134', '─');
+      return `<div>${t('108,112,134', '╭─')}${cap('203,166,247', `${ic(0xf007)} root`)}${line}${cap('137,180,250', `${ic(0xf07b)} ~/src`)}${line}${cap('166,227,161', `${ic(0xe0a0)} main`)}` +
+        `<span class="pr"><span class="pclock">${ic(0xf017)} 4:23 PM</span></span></div><div>${t('108,112,134', '╰─')}${ok} ${cursor}</div>`;
+    }
+    case 'simple':
+      return `<div>${t('137,220,235', '~/src')} ${ok} ${cursor}</div>`;
+    default: {
+      const pl = (bg: string, text: string, next: string) => t(dark, text, bg) + t(bg, ic(0xe0b0), next);
+      return `<div>${t('245,169,127', ic(0xe0b6))}${pl('245,169,127', ` ${ic(0xf007)} root `, '243,139,168')}${pl('243,139,168', ` ${ic(0xf07b)} ~/src `, '249,226,175')}` +
+        `${t(dark, ` ${ic(0xe0a0)} main `, '249,226,175')}${t('249,226,175', ic(0xe0b4))}<span class="pr"><span class="pclock">${ic(0xf017)} 4:23 PM</span></span></div><div>${ok} ${cursor}</div>`;
+    }
+  }
+}
+
 // ---- text size changes, animated (Settings → Text size) ----
 /**
  * Once the terminal has its new size and the program has redrawn for it (quiet for a moment,
@@ -1853,6 +1901,30 @@ function openSettingsSheet() {
       return b;
     }));
 
+  // the shell prompt's look: a card per style, each with a small picture of it
+  const promptList = h('div', { class: 'prompt-styles' });
+  const pickPrompt = (id: string) => {
+    promptList.querySelectorAll('.ps-card').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.id === id));
+  };
+  for (const st of PROMPT_STYLES) {
+    const card = h('button', { class: 'ps-card', 'data-id': st.id },
+      h('div', { class: 'ps-head' }, h('b', {}, st.name), h('span', {}, st.note)));
+    const pic = h('div', { class: 'ps-pic' });
+    pic.innerHTML = promptPicture(st.id);
+    card.append(pic);
+    card.onclick = () => {
+      bridge.setPromptStyle(st.id);
+      pickPrompt(st.id);
+      // shells waiting at an empty prompt show it at once (a fresh prompt); the others at
+      // their next one
+      for (const x of sessions.values()) {
+        if (x.alive && x.edit.atPrompt && x.term.buffer.active.type === 'normal' && !x.edit.hasText()) x.input('\r');
+      }
+    };
+    promptList.append(card);
+  }
+  void bridge.getPromptStyle().then(pickPrompt);
+
   const toggle = (title: string, sub: string, checked: boolean, onChange: (v: boolean) => void) => {
     const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
     input.checked = checked;
@@ -1917,6 +1989,8 @@ function openSettingsSheet() {
       sample?.renderer.setOptions({ bnScale: v });
     }, savePrefs),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
+    h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Prompt style'),
+      h('div', { class: 's-sub' }, 'How the shell’s prompt looks.'), promptList),
     toggle('Notify when a task finishes', 'When an agent answers while you’re elsewhere.', notifyWhenDone, (v) => {
       notifyWhenDone = v;
       bridge.setNotifyWhenDone(v);
