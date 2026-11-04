@@ -151,17 +151,19 @@ __agy_ps_bar() {
     R+=("200;200;204|28;28;32| ${time} "$'\uf017'" ") && RK+=(time)
   fi
   # widths: each part plus its separator; the path shortened to leave room for the rule
-  local i t wl=0 wr=0
-  for i in "${L[@]}"; do t=${i##*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; wl=$(( wl + ${#t} + 1 )); done
-  for i in "${R[@]}"; do t=${i##*|}; wr=$(( wr + ${#t} + 1 )); done
+  # (rainbow draws a slanted separator per part; lean none — counted, its rule fell short)
+  local i t wl=0 wr=0 sep=1
+  [ "$kind" = lean ] && sep=0
+  for i in "${L[@]}"; do t=${i##*|}; t=${t/@PATH/}; t=${t/@BRANCH/$__agy_branch}; wl=$(( wl + ${#t} + sep )); done
+  for i in "${R[@]}"; do t=${i##*|}; wr=$(( wr + ${#t} + sep )); done
   # still too narrow: the right side's parts go, the time first (the folder keeps 10)
-  while (( ${#R[@]} > 0 )) && (( cols - 1 - wl - wr - 3 < 10 )); do
-    t=${R[-1]##*|}; wr=$(( wr - ${#t} - 1 )); unset 'R[-1]'
+  while (( ${#R[@]} > 0 )) && (( cols - wl - wr - 3 < 10 )); do
+    t=${R[-1]##*|}; wr=$(( wr - ${#t} - sep )); unset 'R[-1]'
   done
-  __agy_fit_path $(( cols - 1 - wl - wr - 3 ))
+  __agy_fit_path $(( cols - wl - wr - 3 ))
   __agy_txt=("$__agy_p" "$__agy_branch")
   wl=$(( wl + ${#__agy_p} ))
-  local fill=$(( cols - 1 - wl - wr - 2 ))
+  local fill=$(( cols - wl - wr - 2 ))
   (( fill < 1 )) && fill=1
   local rule
   printf -v rule '%*s' "$fill" ''

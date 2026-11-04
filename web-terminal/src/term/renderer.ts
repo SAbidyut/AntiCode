@@ -203,6 +203,7 @@ export class BanglaRenderer {
   private measureCtx = document.createElement('canvas').getContext('2d')!;
   private widthCache = new Map<string, number>();
   private cell!: IBufferCell;
+  private probe: IBufferCell | undefined;
   private frame = 0;
   private bufferKey = '';
   private lastBaseY = 0;
@@ -849,6 +850,21 @@ export class BanglaRenderer {
       const chars = c.getChars();
       const st = this.styleOf(c);
       const cp = chars.length ? chars.codePointAt(0)! : 32;
+      if ((cp === 0x2500 || cp === 0x2501) && w === 1) {
+        // A run of ─ (a rule line) as one span: cell-sized pieces at fractional x
+        // leave hairline gaps where the browser rounds their edges.
+        let n = 1;
+        for (; x + n < cols; n++) {
+          const nx = (this.probe = line.getCell(x + n, this.probe));
+          if (!nx || nx.getWidth() !== 1 || nx.getChars().codePointAt(0) !== cp || this.styleOf(nx).css !== st.css) break;
+        }
+        flushMono();
+        flushBn();
+        const t = cp === 0x2500 ? 'var(--bw)' : 'calc(var(--bw) * 2)';
+        html += `<span class="dg" style="width:${(n * cw).toFixed(2)}px;${st.css}background:linear-gradient(currentColor,currentColor) 0 50%/100% ${t} no-repeat;${bgOf(st.css)}"></span>`;
+        x += n - 1;
+        continue;
+      }
       if ((cp >= 0x2500 && cp <= 0x259f) || (cp >= 0xe0b0 && cp <= 0xe0bf)) {
         const d = this.drawn(cp, w, st.css);
         if (d) {
