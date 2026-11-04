@@ -440,7 +440,8 @@ export class TerminalSession {
   }
 
   /** Fit the terminal into the element's current size and tell the PTY if it changed. */
-  fit() {
+  /** ([now]: tell the program at once — a live pinch step — not after the usual 60 ms) */
+  fit(now = false) {
     const box = this.el.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;
     // The on-screen keyboard doesn't count: size the terminal as if it were closed.
@@ -455,11 +456,13 @@ export class TerminalSession {
     // (cancel a pending resize first: 14→15→14 px quickly must leave the PTY at 14)
     clearTimeout(this.resizeTimer);
     if (cols === this.ptyCols && rows === this.ptyRows) return;
-    this.resizeTimer = window.setTimeout(() => {
+    const tell = () => {
       this.ptyCols = cols;
       this.ptyRows = rows;
       this.bridge.resize(this.id, cols, rows);
-    }, 60);
+    };
+    if (now) tell();
+    else this.resizeTimer = window.setTimeout(tell, 60);
   }
 
   setFocused(f: boolean) {

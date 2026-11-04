@@ -580,7 +580,22 @@ export class BanglaRenderer {
     if (this.previewAnchor === 'split' || this.splitLine >= 0) this.schedule(); // (the gap follows)
     // the still copy of the last picture (while the terminal takes a new size) follows too
     const g = this.still;
-    if (g && px !== null) g.style.transform = `translateY(${(-this.stillPan).toFixed(1)}px) scale(${((px ?? this.opts.fontSize) / this.stillFont).toFixed(4)})`;
+    if (g && px !== null) {
+      const zg = px / this.stillFont;
+      const sp = this.stillSplit;
+      if (sp) {
+        // the gap is what the screen has at that size: header at the top, box at the bottom
+        const visible = this.el.clientHeight - 12;
+        const gap = visible / zg - sp.content;
+        const fits = gap >= sp.lh;
+        g.style.transformOrigin = fits ? '0 0' : `0 ${visible.toFixed(1)}px`;
+        for (const r of sp.lower) {
+          const y = (r.y + (fits ? gap : 0)).toFixed(2);
+          r.el.style.transform = r.x === null ? `translateY(${y}px)` : `translate(${r.x}, ${y}px)`;
+        }
+      }
+      g.style.transform = `translateY(${(-this.stillPan).toFixed(1)}px) scale(${zg.toFixed(4)})`;
+    }
   }
   /** (compat) a plain scale of the picture */
   previewZoom(scale: number | null) {
@@ -633,6 +648,7 @@ export class BanglaRenderer {
   private still: HTMLElement | null = null;
   private stillFont = 14;
   private stillPan = 0;
+  private stillSplit: { lower: { el: HTMLElement; x: string | null; y: number }[]; content: number; lh: number } | null = null;
   /** Keep the picture as it is now on screen while the real one changes underneath. */
   freezePicture() {
     this.dropGhost();
@@ -648,6 +664,24 @@ export class BanglaRenderer {
     // (the copy was drawn at this size; the pinch scales it from there)
     this.stillFont = this.opts.fontSize;
     this.stillPan = this.pan;
+    // An agent's chat layout (header at the top, input box at the bottom, a gap between): the
+    // copy keeps that while it's scaled — its lower part's places are noted, to move with the
+    // gap (else the box slid off the bottom as the copy grew).
+    this.stillSplit = null;
+    if (this.splitLine >= 0 && this.previewAnchor === 'split') {
+      const boundary = this.splitLine * this.lineHeight + this.splitGap - 0.5;
+      const lower: { el: HTMLElement; x: string | null; y: number }[] = [];
+      const vp = g.firstElementChild as HTMLElement | null;
+      for (const c of Array.from(vp?.children ?? []) as HTMLElement[]) {
+        const t = c.style.transform;
+        const m = /translateY\(([-\d.]+)px\)/.exec(t) ?? /translate\(([-\d.]+px),\s*([-\d.]+)px\)/.exec(t);
+        if (!m) continue;
+        const x = m.length > 2 ? m[1] : null;
+        const y = parseFloat(m.length > 2 ? m[2] : m[1]);
+        if (y >= boundary) lower.push({ el: c, x, y: y - this.splitGap });
+      }
+      this.stillSplit = { lower, content: this.contentRows * this.lineHeight, lh: this.lineHeight };
+    }
     this.el.append(g);
     this.still = g;
     this.zoomLayer.style.opacity = '0';
