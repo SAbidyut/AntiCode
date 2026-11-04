@@ -1,9 +1,10 @@
 // One terminal tab: headless xterm (VT parser + buffer) + BanglaRenderer + reader view + input.
 
-import { Terminal } from '@xterm/headless';
-import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
+import { Terminal, type IMarker } from '@xterm/headless';
+import { installWidths } from './conjuncts';
 import type { Bridge, SessionKind } from '../bridge';
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
+import { LineEditor, type Pos } from './lineedit';
 
 const RAW_KEEP = 64 * 1024;
 
@@ -47,10 +48,14 @@ export class TerminalSession {
   private sgrMouse = false;
   /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
   onLink?: (url: string, trusted: boolean) => void;
+  /** Count conjuncts the way a running program does (true) or the shell does (false). */
+  private setProgramWidths: (joined: boolean) => void;
   /** Where the shell is (OSC 7 from its prompt): a tapped file name is looked for there. */
   cwd = '';
   /** The folder the session was started in. */
   startDir = '';
+  /** The line being typed as a text field: tap to move the cursor, select, copy, cut. */
+  readonly edit: LineEditor;
 
   constructor(
     private bridge: Bridge,
@@ -60,9 +65,32 @@ export class TerminalSession {
   ) {
     this.title = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
-    this.term.loadAddon(new UnicodeGraphemesAddon() as never);
+    // conjuncts: the shell (and Claude Code) count them by letters, the Antigravity CLI as one
+    // character (see conjuncts.ts); its session starts with it running
+    this.setProgramWidths = installWidths(this.term);
+    this.setProgramWidths(kind === 'agy');
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
+    this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput);
+    this.renderer.onLinesRenumbered = () => {
+      if (this.edit.sel?.kind === 'screen') this.edit.clearSelection();
+    };
+    this.edit.onSelection = (sel, area) => {
+      this.edit.onChanged?.(sel);
+      if (!sel || (sel.kind === 'input' && !area)) return this.renderer.setSelection(null);
+      const ranges = [];
+      for (let line = sel.a.line; line <= sel.b.line; line++) {
+        if (sel.kind === 'screen') {
+          // (rows the renderer draws: it skips those far from the screen)
+          const many = sel.b.line - sel.a.line > 300; // (all of a long history: whole rows)
+          ranges.push({ line, x0: line === sel.a.line ? sel.a.x : 0, x1: line === sel.b.line ? sel.b.x : many ? this.term.cols : Math.max(1, this.edit.rowEnd(line)) });
+          continue;
+        }
+        const i = line - area!.top;
+        ranges.push({ line, x0: line === sel.a.line ? sel.a.x : area!.start[i], x1: line === sel.b.line ? sel.b.x : area!.end[i] });
+      }
+      this.renderer.setSelection({ ranges, a: sel.a, b: sel.b });
+    };
     this.loadMeta();
 
     this.el = document.createElement('div');
@@ -77,7 +105,13 @@ export class TerminalSession {
     fab.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>';
     fab.addEventListener('click', () => this.scrollToBottom());
     this.renderer.onScrolled = (up) => fab.classList.toggle('hidden', !up);
-    this.el.append(this.renderer.el, this.readerEl, fab);
+    // the reader view says what it is, and how to leave it
+    this.readerBadge = document.createElement('button');
+    this.readerBadge.className = 'reader-badge';
+    this.readerBadge.hidden = true;
+    this.readerBadge.textContent = 'Reader view  ✕';
+    this.readerBadge.addEventListener('click', () => this.toggleReader(false));
+    this.el.append(this.renderer.el, this.readerEl, fab, this.readerBadge);
 
     // Replies the terminal generates itself (cursor position reports, device attributes…)
     this.term.onData((d) => this.reply(d));
@@ -86,6 +120,7 @@ export class TerminalSession {
       this.saveModes();
       this.renderer.lastOutput = performance.now();
       this.renderer.scheduleEager();
+      this.edit.check();
       if (this.readerOpen) this.scheduleReader();
       this.onActivity?.();
     });
@@ -97,11 +132,15 @@ export class TerminalSession {
     });
     // Track cursor visibility (DECTCEM, CSI ? 25 h/l); headless xterm doesn't expose it.
     const track = (show: boolean) => (params: (number | number[])[]) => {
+      // (modes a restored session's replay sets itself: its own last word counts)
+      if (this.replaying) for (const p of params) if (typeof p === 'number') this.replaySet.add(p);
       if (params.some((p) => p === 25)) {
         this.renderer.cursorVisible = show;
         this.renderer.schedule();
       }
       if (params.some((p) => p === 1006)) this.sgrMouse = show; // how mouse reports look
+      // focus reports (CSI ? 1004 h): the program hears when its tab is in front or not
+      if (params.some((p) => p === 1004)) this.focusReports = show;
       return false; // let xterm handle it too
     };
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, track(true));
@@ -120,15 +159,12 @@ export class TerminalSession {
     this.term.parser.registerEscHandler({ final: 'c' }, showAgain(true));
     this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain(false));
     // OSC 7 ; file://host/path — the shell's folder (our prompt sends it)
+    // (only from our prompt — host "android-<token>", the path as it is: a remote shell over
+    // ssh, or some program's output, doesn't decide where tapped file names are looked for)
     this.term.parser.registerOscHandler(7, (data) => {
-      const m = /^file:\/\/[^/]*(\/.*)$/.exec(data);
-      if (m) {
-        try {
-          this.cwd = decodeURIComponent(m[1]);
-        } catch {
-          this.cwd = m[1];
-        }
-      }
+      const m = /^file:\/\/android(?:-([0-9A-Za-z]*))?(\/.*)$/.exec(data);
+      const token = this.bridge.linkToken();
+      if (m && (!token || m[1] === token)) this.cwd = m[2];
       return true;
     });
     // OSC 7770 ; <cmd> ; …  — from our scripts inside Ubuntu.
@@ -142,10 +178,32 @@ export class TerminalSession {
       const trusted = signed || !token;
       // (not again while a restored session's old output is replayed)
       if (cmd === 'open' && args.length && !this.replaying) this.onLink?.(args.join(';'), trusted);
-      else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
+      // The rest come from our prompt and scripts, signed the same way; printed by anything
+      // else they're ignored (they'd fake a clock, the agent layout, the widths …).
+      else if (!trusted) return true;
+      else if (cmd === 'rprompt') this.renderer.setRightLabel(args.join(';')); // the prompt's clock
+      else if (cmd === 'rnote') this.renderer.setRightLabel(args.join(';'), true); // its "took 5s"
+      else if (cmd === 'bar') this.renderer.markBarLine(); // its bar line (text drawn smaller)
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
-      else if (cmd === 'done') this.renderer.anchorBottom = false;
-      else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
+      else if (cmd === 'done') {
+        this.renderer.anchorBottom = false;
+        this.dropAccount(); // (the agent is gone: its label stays where it was)
+        this.setProgramWidths(false); // the shell's prompt: its way of counting
+        this.edit.atPrompt = true;
+      } else if (cmd === 'exec') {
+        // a command starts: by letters… (Antigravity counts conjuncts whole — its start script
+        // says "exec;agy" and runs the program itself, not the shell's agy wrapper)
+        this.setProgramWidths(args[0] === 'agy');
+        this.edit.atPrompt = false;
+        // the shell names it (ble.sh's hook): an agent gets the chat layout however its
+        // name was typed — a grey suggestion taken with →, the history's ↑ …
+        if (/^(agy|claude)$/.test(args[0] ?? '')) {
+          this.renderer.anchorBottom = true;
+          this.expectAccount(args[0]);
+        }
+      }
+      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined'); // …unless it's agy
+      else if (cmd === 'storage' && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
     // Colour queries (OSC 10/11/12 ; ?) — TUIs like the Antigravity CLI ask for the
@@ -178,7 +236,9 @@ export class TerminalSession {
     // OSC 52 clipboard copy (used by many TUIs).
     this.term.parser.registerOscHandler(52, (data) => {
       const b64 = data.split(';')[1];
-      if (b64 && b64 !== '?') {
+      // (not again while a restored session's old output is replayed: it would put long-gone
+      // text back on the clipboard)
+      if (b64 && b64 !== '?' && !this.replaying) {
         try {
           const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
           this.bridge.copyText(new TextDecoder().decode(bytes));
@@ -211,12 +271,86 @@ export class TerminalSession {
     this.accountTail = joined.slice(-200); // raw: an escape split across chunks still strips
   }
 
+  // ---- the account an agent is signed in with, shown by its header: on the
+  // plan's line of Claude Code's header ("Claude Max"), the first line of Antigravity's ----
+  // (kept while the agent runs: when it draws its header again — a turned phone, a new
+  // width — the label follows to the new header line)
+  private acct: { name: string; text: string; from: IMarker; until: number; placed: boolean; checked: number } | null = null;
+  private expectAccount(name: string) {
+    this.dropAccount();
+    const text = this.bridge.accountEmail(name);
+    const from = text ? this.term.registerMarker(0) : undefined;
+    if (from) this.acct = { name, text, from, until: performance.now() + 90_000, placed: false, checked: 0 };
+  }
+  private dropAccount() {
+    this.acct?.from.dispose();
+    this.acct = null;
+    clearTimeout(this.acctTimer);
+    this.acctTimer = 0;
+  }
+  private acctTimer = 0;
+  private placeAccount() {
+    const a = this.acct;
+    if (!a) return;
+    const now = performance.now();
+    const buf = this.term.buffer.active;
+    if (!a.placed && now > a.until) return this.dropAccount(); // (no header came)
+    if (buf.type !== 'normal') return;
+    if (now - a.checked < 250) {
+      // (a streaming reply: not on every piece — but once more after the last one)
+      if (!this.acctTimer) this.acctTimer = window.setTimeout(() => {
+        this.acctTimer = 0;
+        this.placeAccount();
+      }, 300);
+      return;
+    }
+    a.checked = now;
+    const text = (y: number) => buf.getLine(y)?.translateToString(true) ?? '';
+    const end = Math.min(buf.length, buf.baseY + buf.cursorY + 1);
+    // (from where the agent started; Claude Code: anywhere above the cursor — it clears the
+    // screen and draws itself anew for a new width, leaving that line elsewhere)
+    const start = a.name === 'claude' || a.from.isDisposed || a.from.line < 0 ? 0 : a.from.line;
+    let hit = -1;
+    if (a.name === 'claude') {
+      // the latest header ("Claude Code v…": drawn again for a new width, the old one may
+      // still be above), its plan line ("Claude Max") among the next lines
+      let title = -1;
+      for (let y = Math.max(0, end - 600); y < end; y++) if (/Claude Code v\d/.test(text(y))) title = y;
+      if (title < 0) return;
+      hit = title;
+      for (let y = title; y < Math.min(end, title + 5); y++) {
+        if (/\bClaude (Max|Pro|Team|Enterprise|API)\b/.test(text(y))) {
+          hit = y;
+          break;
+        }
+      }
+    } else {
+      if (a.from.isDisposed || a.from.line < 0) return;
+      for (let y = start + 1; y < Math.min(end, start + 16); y++) {
+        if (text(y).trim()) {
+          hit = y;
+          break;
+        }
+      }
+      if (hit < 0) return;
+    }
+    // right after that line's text ("Claude Max  ✉ you@gmail.com"), or after a header line
+    // next to it when that one has no room (never drawn over text)
+    const need = Math.ceil(a.text.length * 0.8) + 5;
+    const fits = (l: number) => l >= start && l < buf.length && text(l).trimEnd().length + 1 + need <= this.term.cols;
+    const at = [hit, hit + 1, hit + 2, hit - 1, hit - 2].find(fits) ?? hit;
+    if (this.renderer.accountLabelLine() === at) return; // (where it is already)
+    this.renderer.setRightLabel(a.text, false, true, at - (buf.baseY + buf.cursorY));
+    a.placed = true;
+  }
+
   write(data: Uint8Array) {
     if (this.kind === 'agy' && !this.accountSeen) this.spotAccount(data);
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;
-    this.term.write(data);
+    if (this.acct) this.term.write(data, () => this.placeAccount());
+    else this.term.write(data);
   }
 
   /** Diagnostics for bug reports: terminal state + the last output with escapes made visible. */
@@ -325,12 +459,61 @@ export class TerminalSession {
   /** User input → PTY. Jumps back to the live view. */
   input(data: string) {
     if (!this.alive) return;
+    // typing: a cursor walk stops, a selection goes (the line changes under it)
+    this.edit.cancel();
+    this.edit.clearSelection();
+    this.onTyped?.();
     this.trackInput(data);
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
       this.renderer.schedule();
     }
     this.bridge.write(this.id, data);
+  }
+
+  /** The user typed (or pasted) something. */
+  onTyped?: () => void;
+
+  /** Keys the app sends for the user (moving the cursor to a tap, a cut). */
+  private sendKeys(data: string) {
+    if (!this.alive) return;
+    if (this.renderer.scrollPx) {
+      this.renderer.scrollPx = 0;
+      this.renderer.schedule();
+    }
+    this.bridge.write(this.id, data);
+  }
+
+  /**
+   * The spot in the line being typed under a client point (null: not there; [loose]: the
+   * nearest row of it — a selection handle dragged past its first or last row).
+   */
+  /** The spot anywhere on the screen under a client point (selecting the output). */
+  screenSpot(clientX: number, clientY: number): Pos {
+    const { line } = this.renderer.cellAt(clientX, clientY);
+    return this.edit.screenSpot(line, this.renderer.colAt(clientX));
+  }
+
+  /**
+   * A tap here is on the line being typed or right by it (the prompt's own row above, one
+   * row of slack below): it brings up the keyboard. Elsewhere a tap only reads/clicks.
+   * No line editor found (a full-screen program, a command asking something): the rows
+   * around the cursor.
+   */
+  nearInput(clientX: number, clientY: number): boolean {
+    const { line } = this.renderer.cellAt(clientX, clientY);
+    const area = this.edit.area();
+    if (area) return line >= area.top - 1 && line <= area.bottom + 1;
+    const buf = this.term.buffer.active;
+    return Math.abs(line - (buf.baseY + buf.cursorY)) <= 2;
+  }
+
+  editSpot(clientX: number, clientY: number, loose = false): Pos | null {
+    const { line } = this.renderer.cellAt(clientX, clientY);
+    const area = this.edit.area();
+    if (!area) return null;
+    const l = loose ? Math.max(area.top, Math.min(area.bottom, line)) : line;
+    return this.edit.clamp(l, this.renderer.colAt(clientX), area);
   }
 
   /** Text from the compose box: bracketed paste for multi-line text, then Enter. */
@@ -365,7 +548,8 @@ export class TerminalSession {
   }
 
   /** Fit the terminal into the element's current size and tell the PTY if it changed. */
-  fit() {
+  /** ([now]: tell the program at once — a live pinch step — not after the usual 60 ms) */
+  fit(now = false) {
     const box = this.el.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;
     // The on-screen keyboard doesn't count: size the terminal as if it were closed.
@@ -380,11 +564,13 @@ export class TerminalSession {
     // (cancel a pending resize first: 14→15→14 px quickly must leave the PTY at 14)
     clearTimeout(this.resizeTimer);
     if (cols === this.ptyCols && rows === this.ptyRows) return;
-    this.resizeTimer = window.setTimeout(() => {
+    const tell = () => {
       this.ptyCols = cols;
       this.ptyRows = rows;
       this.bridge.resize(this.id, cols, rows);
-    }, 60);
+    };
+    if (now) tell();
+    else this.resizeTimer = window.setTimeout(tell, 60);
   }
 
   setFocused(f: boolean) {
@@ -442,23 +628,36 @@ export class TerminalSession {
     return this.matchAt(clientX, clientY, FILE_RE);
   }
 
-  /** The match of [re] in the (unwrapped) line under the point. */
+  /**
+   * The match of [re] in the (unwrapped) line under the point. Only the run of non-spaces
+   * around the point is searched (at most 1k characters each way): these patterns can start
+   * anywhere, and on a long line (minified code, base64) a tap took seconds.
+   */
   private matchAt(clientX: number, clientY: number, re: RegExp): string | null {
     const { x, line: at } = this.renderer.cellAt(clientX, clientY);
     const buf = this.term.buffer.active;
     let start = at;
-    while (start > 0 && buf.getLine(start)?.isWrapped) start--;
+    while (start > 0 && at - start < 16 && buf.getLine(start)?.isWrapped) start--;
     let text = '';
     let offset = -1;
-    for (let i = start; i < buf.length; i++) {
+    for (let i = start; i < buf.length && i - at <= 16; i++) {
       const line = buf.getLine(i);
       if (!line || (i > start && !line.isWrapped)) break;
       // x is a cell; the text has one char per letter cluster or wide character
       if (i === at) offset = text.length + line.translateToString(false, 0, x).length;
       text += line.translateToString(false);
     }
-    for (const m of text.matchAll(re)) {
-      if (offset >= m.index! && offset <= m.index! + m[0].length) return m[0];
+    if (offset < 0) return null;
+    const space = (c: string) => c === ' ' || c === '\t' || c === '\u00a0';
+    let a = offset;
+    let b = offset;
+    while (a > 0 && offset - a < 1024 && !space(text[a - 1])) a--;
+    while (b < text.length && b - offset < 1024 && !space(text[b])) b++;
+    if (a === b) return null;
+    const token = text.slice(a, b);
+    const at0 = offset - a;
+    for (const m of token.matchAll(re)) {
+      if (at0 >= m.index! && at0 <= m.index! + m[0].length) return m[0];
     }
     return null;
   }
@@ -469,9 +668,11 @@ export class TerminalSession {
     return this.readerOpen;
   }
 
+  private readerBadge: HTMLButtonElement;
   toggleReader(open = !this.readerOpen) {
     this.readerOpen = open;
     this.readerEl.hidden = !open;
+    this.readerBadge.hidden = !open;
     this.renderer.el.hidden = open;
     if (open) this.renderReader(true);
   }
@@ -531,6 +732,14 @@ export class TerminalSession {
     if (atBottom) el.scrollTop = el.scrollHeight;
   }
 
+  /** How many rows of the screen have something on them. */
+  filledRows(): number {
+    const buf = this.term.buffer.active;
+    let n = 0;
+    for (let y = 0; y < this.term.rows; y++) if (buf.getLine(buf.baseY + y)?.translateToString(true)) n++;
+    return n;
+  }
+
   /** Plain text of the whole buffer (for "copy all"). */
   allText(): string {
     return this.logicalLines().join('\n');
@@ -583,9 +792,25 @@ export class TerminalSession {
     if (!this.replaying) this.bridge.write(this.id, data);
   }
 
+  /**
+   * Focus reports (xterm's mode 1004): programs that ask are told when their tab comes to the
+   * front (CSI I) and when it goes (CSI O) — the app in the background, another tab, home.
+   */
+  private focusReports = false;
+  private inFront = false;
+  setInFront(on: boolean) {
+    if (on === this.inFront) return;
+    this.inFront = on;
+    if (this.focusReports && this.alive) this.reply(on ? '\x1b[I' : '\x1b[O');
+  }
+
+  /** Private modes (CSI ? n h/l) the replayed output set — its state of them is the latest. */
+  private replaySet = new Set<number>();
+
   /** A restored session: its saved output comes next (requests in it were answered then). */
   beginReplay() {
     this.replaying = true;
+    this.replaySet.clear();
     // draw it once, when it's all in — not flickering through the old screens
     this.renderer.paused = true;
     window.setTimeout(() => this.endReplayPause(), 4000); // in case the end never comes
@@ -618,13 +843,18 @@ export class TerminalSession {
     this.term.write('', () => {
       const m = this.term.modes;
       const mouseMode: Record<string, number> = { x10: 9, vt200: 1000, drag: 1002, any: 1003 };
+      // Only what the replay didn't set itself: the saved state can be older than the output
+      // (the page was closed while the program went on — Antigravity showed its cursor again
+      // then, and hiding it here left its input without a cursor for good: the program
+      // doesn't say again what it thinks is already so).
+      const seen = (...ps: number[]) => ps.some((p) => this.replaySet.has(p));
       let seq = '';
-      const lostAlt = alt === '1' && this.term.buffer.active.type !== 'alternate';
+      const lostAlt = alt === '1' && this.term.buffer.active.type !== 'alternate' && !seen(1049, 1047, 47);
       if (lostAlt) seq += '\x1b[?1049h';
-      if (bp === '1' && !m.bracketedPasteMode) seq += '\x1b[?2004h';
-      if (ac === '1' && !m.applicationCursorKeysMode) seq += '\x1b[?1h';
-      if (cur === '0' && this.renderer.cursorVisible) seq += '\x1b[?25l';
-      if (mouseMode[mouse] && m.mouseTrackingMode === 'none') seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
+      if (bp === '1' && !m.bracketedPasteMode && !seen(2004)) seq += '\x1b[?2004h';
+      if (ac === '1' && !m.applicationCursorKeysMode && !seen(1)) seq += '\x1b[?1h';
+      if (cur === '0' && this.renderer.cursorVisible && !seen(25)) seq += '\x1b[?25l';
+      if (mouseMode[mouse] && m.mouseTrackingMode === 'none' && !seen(9, 1000, 1002, 1003)) seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
       if (seq) this.term.write(seq);
       if (lostAlt && this.alive) {
         // its screen wasn't in the replay: a size change makes the program draw it again

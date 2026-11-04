@@ -246,7 +246,13 @@ class MainActivity : ComponentActivity() {
         })
 
         val serviceIntent = Intent(this, SessionService::class.java)
-        startService(serviceIntent)
+        // (rebuilt in the background — the WebView's renderer was killed while the app was out of
+        // sight — Android refuses startService; binding still creates the service)
+        try {
+            startService(serviceIntent)
+        } catch (_: IllegalStateException) {
+        } catch (_: SecurityException) {
+        }
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
         takeOpenSession(intent)
     }
@@ -749,7 +755,7 @@ class MainActivity : ComponentActivity() {
                         Log.i(SELFTEST, "kbcycle| before=$before after=$size resizes=[$resizes]")
                         if (resizes.isEmpty() && size == before.trim('"')) Log.i(SELFTEST, "SELFTEST_KBCYCLE_OK")
                         else Log.e(SELFTEST, "SELFTEST_KBCYCLE_FAIL")
-                        selftestClaudeInUi()
+                        selftestConjuncts()
                     }
                 }, 3000)
             }, 3000)
@@ -757,6 +763,31 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Phase 4: open Claude Code through the real web UI and check that it draws its screen. */
+    /**
+     * Phase 3f: conjunct widths. A command's output counts a conjunct by its letters (as the
+     * shell and Claude Code do); while `agy` runs — its marker, sent by the shell's `agy` —
+     * one cell, as the Antigravity CLI counts it (its tables line up).
+     */
+    private fun selftestConjuncts() {
+        Log.i(SELFTEST, "phase 3f: conjunct widths for commands and for agy")
+        web.evaluateJavascript("__selftest.send(\"clear; printf 'CL:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'; " +
+            "printf '\\\\e]7770;widths;%s;joined\\\\a' \\\"\$ANTICODE_LINK_TOKEN\\\"; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'\")", null)
+        main.postDelayed({
+            web.evaluateJavascript(
+                "(() => { const b = __selftest.session().term.buffer.active;" +
+                    " let r = ''; for (const p of ['CL:x', 'CJ:x']) { for (let i = 0; i < b.length; i++) {" +
+                    " const l = b.getLine(i); if (!l.translateToString(true).startsWith(p)) continue;" +
+                    " r += p.slice(0, 2); for (let x = 0; x < 14; x++) { const c = l.getCell(x).getChars(); if (c === 'y' || c === 'z') r += c + '@' + x; } break; } } return r; })()",
+            ) { r ->
+                Log.i(SELFTEST, "conjunct| $r")
+                // C L : x ক ্ ষ y অ্ যা z → by letters y in cell 6, z in 9; joined (agy) ক্ষ is one
+                // cell: y in 5, z in 8 (অ্যা starts with a vowel: two characters, not a conjunct)
+                if (r.trim('"') == "CLy@6z@9CJy@5z@8") Log.i(SELFTEST, "SELFTEST_CONJUNCT_OK") else Log.e(SELFTEST, "SELFTEST_CONJUNCT_FAIL")
+                selftestClaudeInUi()
+            }
+        }, 2500)
+    }
+
     private fun selftestClaudeInUi() {
         Log.i(SELFTEST, "phase 4: starting Claude Code in the real UI")
         web.evaluateJavascript("__selftest.open('claude')", null)
@@ -1076,6 +1107,28 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getNotifyWhenDone(): Boolean = service?.notifyWhenDone ?: true
 
+        /** Claude Code's full-screen view for new sessions (off: its classic, smoothly scrolled view). */
+        @JavascriptInterface
+        fun setClaudeFullscreen(on: Boolean) {
+            svc().ubuntu.claudeFullscreen = on
+        }
+
+        @JavascriptInterface
+        fun getClaudeFullscreen(): Boolean = service?.ubuntu?.claudeFullscreen ?: false
+
+        /** The shell prompt's look (Settings → Prompt style). */
+        @JavascriptInterface
+        fun setPromptStyle(style: String) {
+            svc().ubuntu.promptStyle = style
+        }
+
+        @JavascriptInterface
+        fun getPromptStyle(): String = service?.ubuntu?.promptStyle ?: "powerline"
+
+        /** The account (email) an agent ("claude" / "agy") is signed in with; "" if unknown. */
+        @JavascriptInterface
+        fun accountEmail(kind: String): String = service?.ubuntu?.accountEmail(kind) ?: ""
+
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface
         fun setKeyboardCompat(on: Boolean) {
@@ -1116,7 +1169,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         /** Shown in the app's panel as they are (pages and pictures). */
-        private val IN_APP_FILES = setOf("html", "htm", "xhtml", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp")
+        private val IN_APP_FILES = setOf("html", "htm", "xhtml", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif")
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024

@@ -4,6 +4,7 @@ import { TerminalSession } from './term/session';
 import { BanglaRenderer, THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
 import { hydrateIcons, icon } from './icons';
+import { attachRubberBand } from './rubberband';
 
 // ================================================================ prefs
 type ThemeName = 'midnight' | 'black' | 'dracula' | 'solarized' | 'paper';
@@ -24,6 +25,8 @@ interface Prefs {
   animations: boolean;
   /** Asked once (on the first session) to run without battery restrictions. */
   askedBackground: boolean;
+  /** Which layout the prefs were saved with (2: fixed text size, no pinch zoom). */
+  layout?: number;
 }
 /** Driven by the emulator self test (no system dialogs over the terminal then). */
 const SELFTEST = new URLSearchParams(location.search).has('selftest');
@@ -56,6 +59,15 @@ function loadPrefs(): Prefs {
   const legacy: Record<string, ThemeName> = { night: 'midnight', light: 'paper' };
   p.theme = legacy[p.theme] ?? p.theme;
   if (!(p.theme in THEMES)) p.theme = 'midnight';
+  // The text size is fixed now (no pinch zoom; Settings → Text size changes it): whatever
+  // size pinching left behind goes back to the standard one, once.
+  if ((p.layout ?? 0) < 2) {
+    p.fontSize = DEFAULT_PREFS.fontSize;
+    p.layout = 2;
+    try {
+      localStorage.setItem('prefs', JSON.stringify(p));
+    } catch { /* storage unavailable */ }
+  }
   return p;
 }
 function savePrefs() {
@@ -104,6 +116,7 @@ window.addEventListener('unhandledrejection', (e) => reportError(`unhandled reje
 const sessions = new Map<string, TerminalSession>();
 let accounts = { agy: '', claude: '' };
 let notifyWhenDone = true;
+let claudeFullscreen = false;
 let restored = false;
 let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
@@ -120,6 +133,27 @@ let navBottom = 0;
 let insetsMoving = false;
 /** The session showing the smart keyboard's word being composed. */
 let preeditOwner: TerminalSession | null = null;
+/** When the keyboard last sent ⌫ (it does before re-composing or replacing a word). */
+let imeDeletedAt = -1e9;
+/**
+ * The keyboard's ⌫s wait a moment (12 ms) for what comes with them: a tapped suggestion is
+ * ⌫ × the old word + the new word in one go. They then go out together and the screen waits
+ * for the program to finish redrawing — it showed every step ("Bahgladey", "Ban", "Banglad",
+ * "Bangladesh"), the word jumping about.
+ */
+let imeDels = 0;
+let imeDelsTimer = 0;
+function takeImeDels(): string {
+  clearTimeout(imeDelsTimer);
+  imeDelsTimer = 0;
+  const n = imeDels;
+  imeDels = 0;
+  return '\x7f'.repeat(n);
+}
+/** A replacement is under way: show its end, not its steps. */
+function holdForEdit(s: TerminalSession) {
+  s.renderer.holdForRedraw(450, 70);
+}
 
 const bridge: Bridge = createBridge({
   onOutput(id, data) {
@@ -170,19 +204,57 @@ const bridge: Bridge = createBridge({
     preeditOwner = s;
     // typing while reading the history: back to the prompt, where the word shows
     if (s.renderer.scrollPx > 0) s.scrollToBottom();
+    // the keyboard took letters back to compose them again (⌫ into a word): the word shows
+    // once the program has removed them — drawn now, it stood next to itself ("amiami")
+    const dels = takeImeDels();
+    if (dels) {
+      holdForEdit(s);
+      s.input(dels);
+    }
+    if (performance.now() - imeDeletedAt < 40) s.renderer.awaitEcho('deletes');
     s.renderer.setPreedit(text);
   },
   onImeText(text) {
-    if (!typingTarget()) return;
+    const s = typingTarget();
+    if (!s) return;
+    const dels = takeImeDels();
     // several lines at once (the keyboard's clipboard): a paste, not lines typed and run
     if (text.length > 1 && /[\r\n]/.test(text) && !latch.ctrl && !latch.alt) {
-      active!.paste(text);
+      if (dels) s.input(dels);
+      s.paste(text);
       return;
     }
-    active!.input(applyMods(text, consumeLatch()));
+    if (dels) {
+      // a word replaced (a suggestion): out in one piece, drawn once the program is done
+      holdForEdit(s);
+      s.input(dels + applyMods(text, consumeLatch()));
+      return;
+    }
+    // the word on screen was finished (space, a suggestion): it stays where it is until the
+    // program echoes it, instead of vanishing for a moment (not after ⌫s: that text goes
+    // where the program's cursor will be once they're done)
+    if (preeditOwner === s && s.renderer.preedit && !latch.ctrl && !latch.alt &&
+      performance.now() - imeDeletedAt > 40 && !/[\x00-\x1f]/.test(text)) {
+      s.renderer.awaitEcho('text', text);
+    }
+    s.input(applyMods(text, consumeLatch()));
   },
   onImeKey(keyCode, ctrl, alt, shift, ch) {
-    if (!typingTarget()) return;
+    const s = typingTarget();
+    if (!s) return;
+    if (keyCode === 67 && !ctrl && !alt && !shift && !latch.ctrl && !latch.alt) {
+      // ⌫ (KEYCODE_DEL): held a moment for what may come with it (see imeDels)
+      imeDeletedAt = performance.now();
+      imeDels++;
+      clearTimeout(imeDelsTimer);
+      imeDelsTimer = window.setTimeout(() => {
+        const d = takeImeDels();
+        if (d && sessions.get(s.id) === s) s.input(d);
+      }, 12);
+      return;
+    }
+    const dels = takeImeDels();
+    if (dels) s.input(dels); // (any other key: the ⌫s before it go first)
     const seq = androidKeySeq(keyCode, { ctrl: ctrl || latch.ctrl, alt: alt || latch.alt, shift }, active!.appCursor, ch ?? '');
     if (!seq) return; // e.g. Shift on its own: keep the Ctrl/Alt latch for the next key
     consumeLatch();
@@ -250,6 +322,9 @@ const bridge: Bridge = createBridge({
  * into the wrong place).
  */
 function settleComposing() {
+  // (⌫s the keyboard just sent go first)
+  const dels = takeImeDels();
+  if (dels) active?.input(dels);
   const s = preeditOwner;
   preeditOwner = null;
   if (s && s.renderer.preedit) {
@@ -375,7 +450,7 @@ async function reportLostSessions() {
         : 'If it keeps happening, lock AntiCode in Recents (long-press its card → Lock).'),
     h('div', { class: 'action-list' },
       action('terminal', lost.length === 1 ? 'Open it again' : 'Open them again', 'Fresh sessions of the same kind', async () => {
-        for (const l of lost) await newSession(l.kind);
+        for (const l of lost) await newSession(l.kind, l.dir ?? ''); // (in the folder it was started in)
       }),
       hostState.background === false ? action('shield', 'Allow running in the background', '', () => bridge.allowBackground()) : null,
       action('x', 'Not now', '', () => {}),
@@ -384,10 +459,14 @@ async function reportLostSessions() {
 }
 
 function activate(s: TerminalSession | null) {
-  if (s !== active) settleComposing();
+  if (s !== active) {
+    settleComposing();
+    endSelection();
+    consumeLatch(); // (a Ctrl latched in one tab doesn't turn the next tab's letter into ^C)
+  }
   for (const x of sessions.values()) {
     x.el.hidden = x !== s;
-    x.setFocused(false);
+    x.setFocused(x === s && keyboardShown);
     x.renderer.insetsMoving = x === s && insetsMoving;
   }
   active = s;
@@ -400,6 +479,7 @@ function activate(s: TerminalSession | null) {
   renderTabs(true);
   saveUiState();
   if (s) showSessionPill(s);
+  updateFront();
 }
 
 let pillTimer = 0;
@@ -517,6 +597,7 @@ function saveUiState() {
 
 function showHome() {
   settleComposing(); // (before the keyboard goes: hiding it would commit the word nowhere)
+  endSelection();
   screen = 'home';
   saveUiState();
   bridge.setActiveSession(''); // looking at no session: all of them may notify
@@ -524,7 +605,15 @@ function showHome() {
   bridge.hideKeyboard();
   keyboardShown = false;
   renderHome();
+  updateFront();
 }
+
+/** Which session is in front (programs that ask are told: focus reports). */
+function updateFront() {
+  const shown = !document.hidden && screen === 'term';
+  for (const x of sessions.values()) x.setInFront(shown && x === active);
+}
+document.addEventListener('visibilitychange', updateFront);
 /** The first appearance of the home screen: its parts rise in one after another. */
 function enterHome() {
   const home = $('#home');
@@ -539,6 +628,7 @@ function showTerm() {
   if (active) bridge.setActiveSession(active.id);
   document.body.dataset.screen = 'term';
   requestAnimationFrame(() => active?.fit());
+  updateFront();
 }
 
 function renderHome() {
@@ -633,12 +723,14 @@ function finishRenderHome() {
   renderHomeSessions();
 }
 
+/** A card's fold animation (kept here: older WebViews have no element.getAnimations). */
+const folding = new WeakMap<HTMLElement, Animation>();
 /** Shows / hides a home card; one that is done (permission given) folds away instead of vanishing. */
 function setCardShown(el: HTMLElement, show: boolean) {
   if (show) {
     if (el.dataset.folding) {
       delete el.dataset.folding;
-      for (const a of el.getAnimations()) a.cancel();
+      folding.get(el)?.cancel();
     }
     el.hidden = false;
     return;
@@ -654,6 +746,7 @@ function setCardShown(el: HTMLElement, show: boolean) {
   const to = { opacity: 0, height: '0px', paddingTop: '0px', paddingBottom: '0px', marginBottom: '0px' };
   el.style.overflow = 'hidden';
   const a = el.animate([from, to], { duration: 280, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' });
+  folding.set(el, a);
   const done = (hide: boolean) => {
     el.style.overflow = '';
     if (hide && el.dataset.folding) el.hidden = true;
@@ -797,17 +890,296 @@ kbd.addEventListener('paste', (e) => {
 });
 kbd.addEventListener('blur', () => active?.setFocused(false));
 
-// ================================================================ touch: tap, scroll (with inertia), pinch, long-press
+// ================================================================ the line being typed: select, cut, copy, paste
+// Long-press a word: it's selected where it is, with handles to drag and a bar, like any text
+// field — in the line being typed (an agent's input box, the shell's command line) Cut, Copy,
+// Paste, Select all; anywhere else Copy, Paste, Select all. (The reader view, all the text as
+// a page, is in the ⋮ menu.)
+let selBar: HTMLDivElement | null = null;
+let selOwner: TerminalSession | null = null;
+/** Where a bar without a selection (just Paste) was asked for. */
+let selBarAt: { x: number; y: number } | null = null;
+/** The bar is for the line being typed, or for the output (copy only). */
+let selBarKind: 'input' | 'screen' = 'input';
+
+function selectionBar(): HTMLDivElement {
+  if (selBar) return selBar;
+  const bar = h('div', { class: 'sel-bar', role: 'toolbar' });
+  for (const [act, label] of [['cut', 'Cut'], ['copy', 'Copy'], ['paste', 'Paste'], ['all', 'Select all']]) {
+    bar.append(h('button', { 'data-act': act }, label));
+  }
+  // (pointerdown default would take the focus: the keyboard closed)
+  bar.addEventListener('pointerdown', (e) => e.preventDefault());
+  bar.addEventListener('click', (e) => {
+    const act = (e.target as HTMLElement).closest('button')?.dataset.act;
+    if (act) void selectionAction(act);
+  });
+  bar.hidden = true;
+  document.body.append(bar);
+  return (selBar = bar);
+}
+
+function showSelectionBar(s: TerminalSession, at: { x: number; y: number } | null = null, kind = selBarKind) {
+  selOwner = s;
+  selBarAt = at;
+  selBarKind = kind;
+  const bar = selectionBar();
+  const picked = !!s.edit.sel;
+  const show = (act: string, on: boolean) => {
+    (bar.querySelector(`[data-act=${act}]`) as HTMLElement).hidden = !on;
+  };
+  show('cut', picked && kind === 'input');
+  show('copy', picked);
+  show('all', kind === 'screen' || s.edit.hasText());
+  bar.hidden = false;
+  placeSelectionBar();
+}
+
+/** Above the selection (below it when there's no room), on screen. */
+function placeSelectionBar() {
+  const s = selOwner;
+  if (!selBar || selBar.hidden || !s) return;
+  const at = selBarAt;
+  const r = s.renderer.selectionRect() ?? (at ? { left: at.x, right: at.x, top: at.y - 12, bottom: at.y + 12 } : null);
+  if (!r) return hideSelectionBar();
+  const bw = selBar.offsetWidth;
+  const bh = selBar.offsetHeight;
+  const x = Math.max(8, Math.min(window.innerWidth - bw - 8, (r.left + r.right) / 2 - bw / 2));
+  const top = $('#term').getBoundingClientRect().top + 52;
+  let y = r.top - bh - 8;
+  if (y < top) y = r.bottom + 8;
+  selBar.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+}
+
+function hideSelectionBar() {
+  if (selBar) selBar.hidden = true;
+  selBarAt = null;
+}
+
+/** The selection and its bar go. */
+function endSelection() {
+  const s = selOwner;
+  selOwner = null;
+  hideSelectionBar();
+  s?.edit.clearSelection();
+}
+
+async function selectionAction(act: string) {
+  const s = selOwner;
+  if (!s || !s.alive) return endSelection();
+  if (act === 'all') {
+    if (selBarKind === 'screen') s.edit.selectAllScreen();
+    else s.edit.selectAll();
+    showSelectionBar(s);
+    return;
+  }
+  const text = s.edit.selectedText();
+  if (act === 'copy') {
+    if (text) {
+      bridge.copyText(text);
+      toast('Copied');
+    }
+    endSelection();
+    return;
+  }
+  // the line is about to change: a word being composed goes in first, and the keyboard's
+  // copy of the line is dropped
+  settleComposing();
+  hideSelectionBar();
+  selOwner = null;
+  if (act === 'cut') {
+    if (text) bridge.copyText(text);
+    await s.edit.deleteSelection();
+  } else if (act === 'paste') {
+    const clip = await bridge.readClipboard();
+    if (!clip) {
+      s.edit.clearSelection();
+      toast('Nothing to paste');
+      return;
+    }
+    // pasting over a selection in the line being typed replaces it (the output's isn't
+    // touched: the clip goes where the cursor is)
+    if (s.edit.sel?.kind === 'input') await s.edit.deleteSelection();
+    else s.edit.clearSelection();
+    s.paste(clip);
+  }
+}
+
+// ================================================================ Android's fling
+// A fling goes as far and as long, and slows down along the same curve, as in any list on
+// the phone (Android's OverScroller): the terminal's scrolling feels like the rest of it.
+const MAX_FLING = 8; // px/ms — Android's fastest fling (8000 dp/s)
+const INFLEXION = 0.35;
+const DECEL = Math.log(0.78) / Math.log(0.9);
+const FLING_FRICTION = 0.015;
+const PHYSICAL = 9.80665 * 39.37 * 160 * 0.84; // gravity × inches per metre × dp per inch × feel
+/** How far (px) and how long (ms) a fling at [v] px/ms goes. */
+function flingPlan(v: number) {
+  const l = Math.log((INFLEXION * Math.abs(v) * 1000) / (FLING_FRICTION * PHYSICAL));
+  return {
+    duration: 1000 * Math.exp(l / (DECEL - 1)),
+    distance: FLING_FRICTION * PHYSICAL * Math.exp((DECEL / (DECEL - 1)) * l),
+  };
+}
+/** The share of a fling's distance covered at [t] (share of its time): Android's spline. */
+const SPLINE: number[] = (() => {
+  const p1 = 0.5 * INFLEXION;
+  const p2 = 1 - 1 * (1 - INFLEXION);
+  const out: number[] = [];
+  let xMin = 0;
+  for (let i = 0; i < 100; i++) {
+    const alpha = i / 100;
+    let xMax = 1;
+    let x = 0, coef = 0;
+    for (;;) {
+      x = xMin + (xMax - xMin) / 2;
+      coef = 3 * x * (1 - x);
+      const tx = coef * ((1 - x) * p1 + x * p2) + x * x * x;
+      if (Math.abs(tx - alpha) < 1e-5) break;
+      if (tx > alpha) xMax = x;
+      else xMin = x;
+    }
+    out.push(coef * ((1 - x) * 0.5 + x) + x * x * x);
+  }
+  out.push(1);
+  return out;
+})();
+function splineAt(t: number): number {
+  if (t >= 1) return 1;
+  const i = Math.floor(t * 100);
+  return SPLINE[i] + (t * 100 - i) * (SPLINE[i + 1] - SPLINE[i]);
+}
+
+// ================================================================ touch: tap, scroll (with inertia), long-press
 function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
-  let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0, vel = 0;
+  s.renderer.onSelectionDrawn = () => {
+    if (selOwner === s) placeSelectionBar();
+  };
+  s.edit.onChanged = (sel) => {
+    // gone by itself (the line was sent, the box moved): the bar and the selection's owner go
+    // with it, or a later tap would only "end" a selection that isn't there
+    if (!sel && selOwner === s) endSelection();
+  };
+  s.onTyped = () => {
+    if (selOwner === s) endSelection();
+  };
+  // dragging a handle: the finger is under it, below the text — aim a line higher
+  s.renderer.onHandle = (end, phase, x, y) => {
+    const sel = s.edit.sel;
+    if (!sel) return;
+    if (phase === 'down') {
+      if (selBar) selBar.hidden = true;
+      return;
+    }
+    if (phase === 'up') {
+      showSelectionBar(s);
+      return;
+    }
+    const ay = y - s.renderer.lineHeight * 0.9 - 8;
+    if (sel.kind === 'screen') {
+      const spot = s.screenSpot(x, ay);
+      s.edit.setScreenSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
+      return;
+    }
+    const spot = s.editSpot(x, ay, true);
+    if (spot) s.edit.setSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
+  };
+  let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0;
+  /** The long-press fired: until the finger lifts, nothing scrolls or taps. */
+  let pressed = false;
+  /** The finger's recent positions: a fling's speed is measured over them, not two events. */
+  let track: [number, number][] = [];
+  /**
+   * The finger's speed as it lifts (px/ms), measured the way Android does: a straight line
+   * fitted to its last ~100 ms — one touch event out of step (two in a frame, 1 ms apart)
+   * can't throw it — and none if it had stopped before lifting. Capped at Android's limit.
+   */
+  const flingSpeed = (now: number) => {
+    const recent = track.filter(([t]) => now - t <= 100);
+    if (recent.length < 3) return 0;
+    const t1 = recent[0][0];
+    const t2 = recent[recent.length - 1][0];
+    if (now - t2 > 50 || t2 - t1 < 20) return 0; // the finger stopped before letting go
+    let mt = 0, my = 0;
+    for (const [t, y] of recent) {
+      mt += t;
+      my += y;
+    }
+    mt /= recent.length;
+    my /= recent.length;
+    let num = 0, den = 0;
+    for (const [t, y] of recent) {
+      num += (t - mt) * (y - my);
+      den += (t - mt) * (t - mt);
+    }
+    if (!den) return 0;
+    return Math.max(-MAX_FLING, Math.min(MAX_FLING, num / den));
+  };
   let longTimer = 0, inertia = 0, caughtFling = false;
-  let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize;
+  /** Pulled past the top or bottom of the scrollback (px, the rubber band). */
+  let stretch = 0;
+  /** A drag: scrolls; past an end the content stretches, and pulling back undoes that first. */
+  const dragScroll = (dy: number, x: number, y: number) => {
+    if (s.term.buffer.active.type === 'alternate') {
+      scrollBy(dy, x, y);
+      return;
+    }
+    if (stretch && Math.sign(dy) !== Math.sign(stretch)) {
+      const back = Math.sign(dy) * Math.min(Math.abs(dy), Math.abs(stretch));
+      stretch += back;
+      dy -= back;
+      s.renderer.setOverscroll(stretch);
+      if (!dy) return;
+    }
+    if (s.renderer.scrollByPixels(dy)) return;
+    const max = s.renderer.maxOverscroll;
+    // the further it's pulled, the harder it gets
+    stretch = Math.max(-max, Math.min(max, stretch + dy * 0.55 * (1 - Math.abs(stretch) / max)));
+    s.renderer.setOverscroll(stretch);
+  };
+  const letGo = () => {
+    if (!stretch) return false;
+    stretch = 0;
+    s.renderer.releaseOverscroll();
+    return true;
+  };
+  // ---- two fingers: nothing ----
+  // The text size is fixed (Settings → Text size); a second finger only stops the gesture:
+  // from then until every finger is up, nothing scrolls (the first finger's bit of scrolling
+  // is undone) and nothing is tapped.
+  let multi = false;
+  /** Where the view was when the first finger came down. */
+  let downScroll = 0, downAt = 0;
+  const startMulti = () => {
+    multi = true;
+    clearTimeout(longTimer);
+    stopInertia();
+    if (stretch) {
+      stretch = 0;
+      s.renderer.setOverscroll(0);
+    }
+    if (performance.now() - downAt < 600 && s.renderer.scrollPx !== downScroll) {
+      s.renderer.scrollPx = downScroll;
+      s.renderer.schedule();
+    }
+  };
   const touches = new Map<number, { x: number; y: number }>();
 
   const stopInertia = () => {
     cancelAnimationFrame(inertia);
     inertia = 0;
+  };
+  // Full-screen programs (vim, less, Claude Code's full-screen view) scroll themselves: they
+  // get wheel steps, paced — at most 2 a frame, a short backlog — so a quick swipe doesn't
+  // bury them in events they redraw one by one (and then jump to catch up).
+  let wheelLines = 0, wheelFrame = 0, wheelX = 0, wheelY = 0;
+  const flushWheel = () => {
+    wheelFrame = 0;
+    const n = Math.max(-2, Math.min(2, wheelLines));
+    wheelLines -= n;
+    if (n) s.scrollLines(n, wheelX, wheelY);
+    if (wheelLines) wheelFrame = requestAnimationFrame(flushWheel);
   };
   /** Scroll by pixels. Scrollback moves pixel-smooth; full-screen apps get wheel steps. */
   const scrollBy = (px: number, x: number, y: number): boolean => {
@@ -817,114 +1189,183 @@ function bindTerminalGestures(s: TerminalSession) {
     const lines = Math.trunc(acc / lh);
     if (lines) {
       acc -= lines * lh;
-      s.scrollLines(lines, x, y);
+      wheelLines = Math.max(-12, Math.min(12, wheelLines + lines));
+      wheelX = x;
+      wheelY = y;
+      if (!wheelFrame) wheelFrame = requestAnimationFrame(flushWheel);
     }
     return true;
   };
+  /** A fling: as far, as long and along the same slowing curve as any list on the phone. */
   const startInertia = (v: number, x: number, y: number) => {
-    if (s.term.buffer.active.type === 'alternate') return;
-    let prev = performance.now();
+    const { duration, distance } = flingPlan(v);
+    if (!(duration > 0 && distance > 0 && Number.isFinite(distance))) return; // (never a broken number)
+    const dir = Math.sign(v);
+    const t0 = performance.now();
+    let done = 0;
     const step = (now: number) => {
-      const dt = Math.min(32, now - prev);
-      prev = now;
-      const moving = scrollBy(v * dt, x, y);
-      v *= Math.pow(0.95, dt / 16);
-      inertia = moving && Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
+      // (the first frame's time can be a little before the finger lifted: never below 0)
+      const k = Math.max(0, Math.min(1, (now - t0) / duration));
+      const at = splineAt(k) * distance;
+      const moving = scrollBy((at - done) * dir, x, y);
+      done = at;
+      // ran into the top or the bottom: a short bounce at the speed it had there
+      if (!moving && s.term.buffer.active.type !== 'alternate') {
+        const k2 = Math.min(1, k + 0.01);
+        s.renderer.bounce(((splineAt(k2) - splineAt(k)) * distance) / (0.01 * duration) * dir);
+        inertia = 0;
+        return;
+      }
+      inertia = k < 1 ? requestAnimationFrame(step) : 0;
     };
     inertia = requestAnimationFrame(step);
   };
 
   el.addEventListener('pointerdown', (e) => {
-    caughtFling = inertia !== 0; // a tap that only stops the scrolling isn't a tap
+    // A new touch with no other finger down starts afresh. A finger lifted somewhere the
+    // terminal didn't hear of (over the key bar, a system gesture) was left counted as down:
+    // every next touch looked like a second finger, and scrolling stopped for good.
+    if (e.isPrimary) {
+      touches.clear();
+      multi = false;
+    }
+    // (and the terminal hears where its fingers lift, wherever that is)
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch { /* not capturable: fine */ }
+    caughtFling = inertia !== 0 || wheelFrame !== 0; // a tap that only stops the scrolling isn't a tap
     stopInertia();
+    // (a full-screen program's queued scroll steps stop too)
+    cancelAnimationFrame(wheelFrame);
+    wheelFrame = 0;
+    wheelLines = 0;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (touches.size === 2) {
-      const [a, b] = [...touches.values()];
-      pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
-      font0 = pinchSize = prefs.fontSize;
-      clearTimeout(longTimer);
+    if (touches.size >= 2) {
+      if (!multi) startMulti();
       return;
     }
+    if (multi) return; // (one finger of two, still down)
+    downScroll = s.renderer.scrollPx;
+    downAt = performance.now();
     startX = e.clientX;
     startY = lastY = e.clientY;
     lastT = performance.now();
     acc = 0;
-    vel = 0;
+    track = [[lastT, e.clientY]];
     moved = false;
+    pressed = false;
     t0 = Date.now();
     clearTimeout(longTimer);
     longTimer = window.setTimeout(() => {
       if (!moved) {
+        // on the pinned input box (reading back in an agent): the line under it isn't what
+        // the finger is on — nothing to select there
+        const dock = s.renderer.dockRect();
+        if (dock && startY >= dock.top) return;
+        pressed = true;
         haptic();
-        s.toggleReader(true);
-        // the hint once; after that the gesture speaks for itself
-        let seen = false;
-        try {
-          seen = localStorage.getItem('readerHint') === '1';
-          localStorage.setItem('readerHint', '1');
-        } catch { /* no storage: show it */ }
-        if (!seen) toast('Reader view — select text to copy. Back to return.');
+        if (selOwner && selOwner !== s) endSelection();
+        // a word still being composed goes in first (Cut / Paste must find the selection)
+        settleComposing();
+        // the word under the finger is selected where it is, like in any app: in the line
+        // being typed (cut, paste over it too), anywhere else to copy
+        const spot = s.editSpot(startX, startY);
+        if (spot) {
+          if (!s.edit.selectWord(spot)) s.edit.clearSelection();
+          showSelectionBar(s, { x: startX, y: startY }, 'input');
+        } else {
+          if (!s.edit.selectScreenWord(s.screenSpot(startX, startY))) s.edit.clearSelection();
+          showSelectionBar(s, { x: startX, y: startY }, 'screen');
+        }
       }
     }, 650);
   });
   el.addEventListener('pointermove', (e) => {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (touches.size === 2 && pinch0) {
-      // Pinch: only scale the picture now (smooth); resize the terminal once at the end.
-      const [a, b] = [...touches.values()];
-      pinchSize = Math.round(Math.max(9, Math.min(28, font0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch0))));
-      s.renderer.previewZoom(pinchSize / font0);
-      moved = true;
-      return;
-    }
-    if (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8) {
+    if (multi) return; // (two fingers, or the one left down after the other lifted: nothing)
+    if (pressed) return; // (a word was just selected under the finger: it stays put)
+    if (!moved && (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8)) {
       moved = true;
       clearTimeout(longTimer);
+      // (scrolling starts from here, as on Android: the content doesn't jump by the 8 px it
+      // took to tell a scroll from a tap)
+      if (Math.abs(e.clientY - startY) > 8) lastY = startY + Math.sign(e.clientY - startY) * 8;
     }
     if (!moved) return;
     const now = performance.now();
     const dy = e.clientY - lastY;
-    const dt = Math.max(1, now - lastT);
-    vel = 0.7 * (dy / dt) + 0.3 * vel;
+    track.push([now, e.clientY]);
+    if (track.length > 24) track.shift();
     lastY = e.clientY;
     lastT = now;
-    scrollBy(dy, e.clientX, e.clientY);
+    dragScroll(dy, e.clientX, e.clientY);
   });
   const end = (e: PointerEvent) => {
     touches.delete(e.pointerId);
     clearTimeout(longTimer);
-    if (pinch0) {
-      if (touches.size === 0) {
-        pinch0 = 0;
-        s.renderer.previewZoom(null);
-        if (pinchSize !== prefs.fontSize) setFontSize(pinchSize, true);
-      }
+    if (multi) {
+      if (touches.size === 0) multi = false;
+      return; // (no fling, no tap)
+    }
+    if (e.type !== 'pointerup') {
+      letGo();
       return;
     }
-    if (e.type !== 'pointerup') return;
+    if (pressed) {
+      pressed = false;
+      return; // (the long-press did its work: no tap, no fling)
+    }
     if (moved) {
-      if (performance.now() - lastT < 80 && Math.abs(vel) > 0.2) startInertia(vel, e.clientX, e.clientY);
+      if (letGo()) return; // springs back instead of flinging on
+      const v = flingSpeed(performance.now());
+      if (Math.abs(v) > 0.1) startInertia(v, e.clientX, e.clientY);
       return;
     }
     if (caughtFling) return;
+    // a tap on the input box pinned at the bottom (while reading back): back to it
+    const dock = s.renderer.dockRect();
+    if (dock && e.clientY >= dock.top && Date.now() - t0 < 600) {
+      s.scrollToBottom();
+      focusTerminalKeyboard();
+      return;
+    }
     if (Date.now() - t0 < 600) {
+      if (selOwner) {
+        endSelection(); // a tap anywhere ends a selection (and does nothing else)
+        return;
+      }
+      // Programs that take taps themselves (mouse mode) or fill the screen get the tap as it
+      // is (not as a file to open — every row of a file manager has a file name on it).
+      const own = s.mouseTracking || s.term.buffer.active.type === 'alternate';
+      // a tap in the line being typed puts the cursor there, as in any text field
+      const spot = own ? null : s.editSpot(e.clientX, e.clientY);
+      if (spot) {
+        settleComposing();
+        void s.edit.moveCaret(spot);
+        focusTerminalKeyboard();
+        return;
+      }
       const url = s.urlAt(e.clientX, e.clientY);
       if (url) {
         bridge.openUrl(url); // the user tapped it
         return;
       }
-      const file = s.fileAt(e.clientX, e.clientY);
+      const file = own ? null : s.fileAt(e.clientX, e.clientY);
       if (file) {
         openTappedFile(s, file); // report.pdf, ~/site/index.html …
         return;
       }
       s.click(e.clientX, e.clientY);
-      focusTerminalKeyboard();
+      // the keyboard comes up for a tap on the prompt only, not anywhere on the screen
+      if (s.nearInput(e.clientX, e.clientY)) focusTerminalKeyboard();
     }
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
+  el.addEventListener('lostpointercapture', (e) => {
+    if (touches.has(e.pointerId)) end(e);
+  });
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     scrollBy(-e.deltaY, e.clientX, e.clientY);
@@ -950,9 +1391,98 @@ function fitSoon() {
   }, 250);
 }
 
+// ---- the shell prompt's styles (Settings → Prompt style; drawn by the shell, see bashrc) ----
+const PROMPT_STYLES: { id: string; name: string; note: string }[] = [
+  { id: 'powerline', name: 'Powerline', note: 'Pastel segments with rounded ends' },
+  { id: 'pure', name: 'Pure', note: 'One quiet line — how long a command took, on the right' },
+  { id: 'rainbow', name: 'Rainbow', note: 'Slanted colour blocks, a rule to the time' },
+  { id: 'lean', name: 'Lean', note: 'Rainbow’s line in coloured text only' },
+  { id: 'capsule', name: 'Capsule', note: 'Rounded capsules on a framed line' },
+  { id: 'simple', name: 'Simple', note: 'Just the folder and ❯' },
+];
+/** A small picture of a prompt style (HTML), as the shell draws it. */
+function promptPicture(id: string): string {
+  const ic = (cp: number) => `<i class="pi">${String.fromCodePoint(cp)}</i>`;
+  const t = (fg: string, text: string, bg = '') => `<span style="color:rgb(${fg})${bg ? `;background:rgb(${bg})` : ''}">${text}</span>`;
+  const dark = '30,30,46';
+  const ok = t('166,227,161', '❯');
+  const cursor = '<span class="pc"></span>';
+  switch (id) {
+    case 'pure':
+      return `<div>${t('116,169,233', '~/src')} ${t('140,200,120', 'main')} ${ok} ${cursor}<span class="pr">${t('138,143,163', '5s')}</span></div>`;
+    case 'rainbow': {
+      const seg = (bg: string, fg: string, text: string, next: string) =>
+        t(fg, text, bg) + t(bg, ic(0xe0bc), next);
+      const left = seg('58,58,64', '220,220,225', ` ${ic(0xf17c)} `, '38,100,190') +
+        seg('38,100,190', '240,244,250', ` ${ic(0xf07b)} ~/src `, '88,148,40') +
+        t('20,24,16', ` ${ic(0xe0a0)} main `, '88,148,40') + t('88,148,40', ic(0xe0bc));
+      const right = t('196,160,0', ic(0xe0ba)) + t('30,26,0', ` 5s ${ic(0xf252)} `, '196,160,0') +
+        t('200,200,204', ic(0xe0ba), '196,160,0') + t('28,28,32', ` 16:23 ${ic(0xf017)} `, '200,200,204');
+      return `<div class="pfill">${left}<span class="prule"></span>${right}</div><div>${ok} ${cursor}</div>`;
+    }
+    case 'lean':
+      return `<div class="pfill">${t('150,150,160', ` ${ic(0xf17c)} `)}${t('116,169,233', `${ic(0xf07b)} ~/src`)}${t('140,200,120', ` ${ic(0xe0a0)} main`)}` +
+        `<span class="prule"></span>${t('220,190,90', `5s ${ic(0xf252)} `)}${t('150,150,160', ` 16:23 ${ic(0xf017)}`)}</div><div>${ok} ${cursor}</div>`;
+    case 'capsule': {
+      const cap = (bg: string, text: string) => t(bg, ic(0xe0b6)) + t(dark, text, bg) + t(bg, ic(0xe0b4));
+      const line = t('108,112,134', '─');
+      return `<div>${t('108,112,134', '╭─')}${cap('203,166,247', `${ic(0xf007)} root`)}${line}${cap('137,180,250', `${ic(0xf07b)} ~/src`)}${line}${cap('166,227,161', `${ic(0xe0a0)} main`)}` +
+        `<span class="pr"><span class="pclock">${ic(0xf017)} 4:23 PM</span></span></div><div>${t('108,112,134', '╰─')}${ok} ${cursor}</div>`;
+    }
+    case 'simple':
+      return `<div>${t('137,220,235', '~/src')} ${ok} ${cursor}</div>`;
+    default: {
+      const pl = (bg: string, text: string, next: string) => t(dark, text, bg) + t(bg, ic(0xe0b0), next);
+      return `<div>${t('245,169,127', ic(0xe0b6))}${pl('245,169,127', ` ${ic(0xf007)} root `, '243,139,168')}${pl('243,139,168', ` ${ic(0xf07b)} ~/src `, '249,226,175')}` +
+        `${t(dark, ` ${ic(0xe0a0)} main `, '249,226,175')}${t('249,226,175', ic(0xe0b4))}<span class="pr"><span class="pclock">${ic(0xf017)} 4:23 PM</span></span></div><div>${ok} ${cursor}</div>`;
+    }
+  }
+}
+
+// ---- text size changes, animated (Settings → Text size) ----
+/**
+ * Once the terminal has its new size and the program has redrawn for it (quiet for a moment,
+ * or it's taking too long), [then] runs — on the frame that shows the new picture.
+ */
+function whenRedrawn(s: TerminalSession, quick: boolean, then: () => void) {
+  const t0 = performance.now();
+  // A full-screen redraw (agents clear the screen first, then draw in pieces with pauses):
+  // done once the screen is about as full as before, not at the first pause. The shell's
+  // prompt redraws at once.
+  const before = s.filledRows() / Math.max(1, s.term.rows);
+  const [minWait, quietFor, cap] = quick ? [45, 45, 600] : [160, 130, 1600];
+  const check = () => {
+    if (sessions.get(s.id) !== s) return;
+    const now = performance.now();
+    const quiet = now - s.renderer.lastOutput;
+    const full = s.filledRows() / Math.max(1, s.term.rows) >= before * 0.6 || now - t0 > cap * 0.6;
+    if ((now - t0 > minWait && quiet > quietFor && full) || now - t0 > cap) {
+      s.renderer.schedule();
+      requestAnimationFrame(() => requestAnimationFrame(then));
+    } else window.setTimeout(check, 16);
+  };
+  window.setTimeout(check, 20);
+}
+
+/**
+ * A new text size from Settings, without the jumps: the picture as it is stays on screen
+ * while the terminal takes the size and its program redraws, then fades into the new one.
+ */
+function zoomTo(size: number) {
+  const s = screen === 'term' && !document.hidden ? active : null;
+  if (!s || !prefs.animations || s.renderer.options.fontSize === size) {
+    setFontSize(size, true);
+    return;
+  }
+  s.renderer.freezePicture();
+  setFontSize(size, true);
+  whenRedrawn(s, false, () => s.renderer.revealPicture(220));
+}
+
 function setFontSize(size: number, persist: boolean, say = false) {
   prefs.fontSize = size;
-  for (const s of sessions.values()) s.renderer.setOptions({ fontSize: size });
+  // (a terminal already at this size isn't drawn again)
+  for (const s of sessions.values()) if (s.renderer.options.fontSize !== size) s.renderer.setOptions({ fontSize: size });
   active?.fit();
   if (persist) {
     savePrefs();
@@ -1049,6 +1579,7 @@ function sheetOpen() {
 }
 let sheetHideTimer = 0;
 function openSheet(title: string, ...content: Kid[]) {
+  endSelection(); // (its bar would float over the sheet and act on the terminal behind it)
   const sheet = $('#sheet');
   const backdrop = $('#sheet-backdrop');
   const body = sheet.querySelector('.sheet-body') as HTMLElement;
@@ -1301,7 +1832,10 @@ function newFolderRow(kind: SessionKind, parent: string) {
 function openMoreSheet() {
   const s = active;
   openSheet('', h('div', { class: 'action-list' },
-    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', '', () => s.toggleReader()),
+    s && action('book', s.isReaderOpen ? 'Back to terminal' : 'Reader view', '', () => {
+      endSelection();
+      s.toggleReader();
+    }),
     s && action('copy', 'Copy all text', '', () => {
       bridge.copyText(s.allText());
       toast('Copied');
@@ -1397,6 +1931,30 @@ function openSettingsSheet() {
       return b;
     }));
 
+  // the shell prompt's look: a card per style, each with a small picture of it
+  const promptList = h('div', { class: 'prompt-styles' });
+  const pickPrompt = (id: string) => {
+    promptList.querySelectorAll('.ps-card').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.id === id));
+  };
+  for (const st of PROMPT_STYLES) {
+    const card = h('button', { class: 'ps-card', 'data-id': st.id },
+      h('div', { class: 'ps-head' }, h('b', {}, st.name), h('span', {}, st.note)));
+    const pic = h('div', { class: 'ps-pic' });
+    pic.innerHTML = promptPicture(st.id);
+    card.append(pic);
+    card.onclick = () => {
+      bridge.setPromptStyle(st.id);
+      pickPrompt(st.id);
+      // shells waiting at an empty prompt show it at once (a fresh prompt); the others at
+      // their next one
+      for (const x of sessions.values()) {
+        if (x.alive && x.edit.atPrompt && x.term.buffer.active.type === 'normal' && !x.edit.hasText()) x.input('\r');
+      }
+    };
+    promptList.append(card);
+  }
+  void bridge.getPromptStyle().then(pickPrompt);
+
   const toggle = (title: string, sub: string, checked: boolean, onChange: (v: boolean) => void) => {
     const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
     input.checked = checked;
@@ -1454,13 +2012,15 @@ function openSettingsSheet() {
     range('Text size', 9, 28, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
       prefs.fontSize = v;
       sample?.renderer.setOptions({ fontSize: v });
-    }, () => setFontSize(prefs.fontSize, true, false)),
+    }, () => zoomTo(prefs.fontSize)),
     range('Bangla letter size', 0.8, 1.3, 0.05, prefs.bnScale, (v) => `${Math.round(v * 100)}%`, (v) => {
       prefs.bnScale = v;
       for (const s of sessions.values()) s.renderer.setOptions({ bnScale: v });
       sample?.renderer.setOptions({ bnScale: v });
     }, savePrefs),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
+    h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Prompt style'),
+      h('div', { class: 's-sub' }, 'How the shell’s prompt looks. The branch (main) shows inside a git project, the time a command took after one that ran 2 s or more.'), promptList),
     toggle('Notify when a task finishes', 'When an agent answers while you’re elsewhere.', notifyWhenDone, (v) => {
       notifyWhenDone = v;
       bridge.setNotifyWhenDone(v);
@@ -1479,6 +2039,10 @@ function openSettingsSheet() {
     // rarely needed: folded away
     h('details', { class: 'advanced' },
       h('summary', {}, h('span', {}, 'Advanced'), svg('chevron')),
+      toggle('Claude Code full-screen view', 'Claude’s own scrolling view. Off: its replies scroll like the rest of the terminal — smoother on a phone. For new Claude sessions.', claudeFullscreen, (v) => {
+        claudeFullscreen = v;
+        bridge.setClaudeFullscreen(v);
+      }),
       toggle('Keyboard compatibility mode', 'Smart keyboard off and keys type nothing or the wrong thing? Turn this on.', prefs.kbCompat, (v) => {
         prefs.kbCompat = v;
         savePrefs();
@@ -1524,6 +2088,12 @@ function applyTheme() {
 
 // ================================================================ wiring
 function bindChrome() {
+  // the home screen ends its scrolling like the terminal does (a stretch, a gentle bounce):
+  // the whole screen in portrait, each column in landscape
+  for (const sel of ['#home', '.home-main', '.home-side']) {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (el) attachRubberBand(el, () => prefs.animations);
+  }
   $('#home-btn').onclick = () => showHome();
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
@@ -1572,7 +2142,7 @@ async function boot() {
       home: () => showHome(),
       /** close the keyboard like the key bar's keyboard key */
       hideKeys: () => hideKeyboard(),
-      /** change the text size like a pinch does */
+      /** change the text size (as Settings does) */
       zoom: (px: number) => setFontSize(px, true),
       /** the active session, for tests */
       session: () => active,
@@ -1633,6 +2203,7 @@ async function boot() {
   console.info(`boot: fonts ready=${document.fonts.check(`${prefs.fontSize}px Kalpurush`, 'বাংলা')}`);
 
   notifyWhenDone = await bridge.getNotifyWhenDone();
+  claudeFullscreen = await bridge.getClaudeFullscreen();
   accounts = await bridge.getAccounts();
   renderHome();
 

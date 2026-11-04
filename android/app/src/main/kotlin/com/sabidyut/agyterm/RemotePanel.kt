@@ -65,6 +65,12 @@ class RemotePanel(
     private var localFile: java.io.File? = null
     /** "Open with another app" for a local file. */
     var openFileElsewhere: ((java.io.File) -> Unit)? = null
+    /**
+     * A new page replaced what was shown (a file after a dashboard, or the other way round):
+     * its history starts with it — Back must not step into the other kind of page (a file
+     * with file access off, or a web page while the panel still thinks it's showing a file).
+     */
+    private var freshHistory = false
     /** Unload the page a while after closing, so it doesn't poll in the background. */
     private val unload = Runnable {
         if (!isOpen) {
@@ -113,6 +119,11 @@ class RemotePanel(
             allowFileAccess = false
             allowContentAccess = false
             setSupportMultipleWindows(false)
+            // two fingers zoom pictures, text files and pages (a page that forbids it stays
+            // as it is); no +/− buttons over the content
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -154,6 +165,13 @@ class RemotePanel(
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
                 onRendererGone()
                 return true
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                if (freshHistory && url != null && url != "about:blank") {
+                    freshHistory = false
+                    view.clearHistory()
+                }
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -260,6 +278,7 @@ class RemotePanel(
         subtitleView.text = hostOf(url)
         if (url != startUrl || web.url == null) {
             startUrl = url
+            freshHistory = true
             web.loadUrl(url)
         }
         show()
@@ -279,6 +298,7 @@ class RemotePanel(
         subtitleView.text = subtitle
         val ext = file.name.substringAfterLast('.', "").lowercase()
         startUrl = Uri.fromFile(file).toString()
+        freshHistory = true
         if (ext in TEXT_FILES) {
             // plain text in the app's colours, wrapped, at a readable size
             val text = try {
@@ -303,6 +323,24 @@ class RemotePanel(
                     "<body style='margin:0;background:${hex(bg)};color:${hex(fg)}'>" +
                     "<pre style='margin:0;padding:14px 16px 40px;white-space:pre-wrap;overflow-wrap:anywhere;" +
                     "font:13px/1.55 monospace'>$esc</pre>",
+                "text/html", "utf-8", null,
+            )
+        } else if (ext in IMAGE_FILES) {
+            // a picture on its own page, fitted to the screen: pinch to zoom in (up to 10×),
+            // and it starts fitted again on the next file
+            val src = startUrl.replace("&", "&amp;").replace("'", "&#39;").replace("<", "&lt;")
+            val hex = String.format(java.util.Locale.ROOT, "#%06X", bg and 0xFFFFFF)
+            web.loadDataWithBaseURL(
+                startUrl,
+                "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1," +
+                    "minimum-scale=1,maximum-scale=10,user-scalable=yes'>" +
+                    "<style>html,body{margin:0;height:100%;background:$hex}" +
+                    "body{display:flex;align-items:center;justify-content:center}" +
+                    "img{display:block;max-width:100%;max-height:100%;object-fit:contain}" +
+                    "img.v{width:100%;height:auto}" +
+                    // (a transparent picture on a soft checkerboard, as image viewers show it)
+                    "img{background:repeating-conic-gradient(#ffffff10 0% 25%,transparent 0% 50%) 0 0/16px 16px}</style>" +
+                    "<img src='$src' alt=''" + (if (ext == "svg") " class=v" else "") + ">",
                 "text/html", "utf-8", null,
             )
         } else {
@@ -349,7 +387,9 @@ class RemotePanel(
     /** Back: inside the page first, then close the panel. */
     fun back(): Boolean {
         if (!isOpen) return false
-        if (web.canGoBack()) web.goBack() else close()
+        val list = web.copyBackForwardList()
+        val prev = if (list.currentIndex > 0) list.getItemAtIndex(list.currentIndex - 1)?.url else null
+        if (web.canGoBack() && prev != null && prev != "about:blank") web.goBack() else close()
         return true
     }
 
@@ -359,6 +399,8 @@ class RemotePanel(
 
     companion object {
         /** Shown as plain text (not as a page). */
+        /** Pictures: shown on their own page, fitted, to pinch-zoom. */
+        val IMAGE_FILES = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif")
         val TEXT_FILES = setOf("txt", "md", "markdown", "csv", "json", "log", "xml", "yaml", "yml", "py", "js", "ts", "sh", "c", "cpp", "java", "kt", "go", "rs", "css")
         private const val MAX_TEXT = 2 * 1024 * 1024
         private const val GOOGLE_SIGN_IN = "accounts.google.com"

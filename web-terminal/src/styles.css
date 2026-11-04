@@ -442,49 +442,100 @@ body[data-screen='home']::before {
 /* pinch-zoom preview: scale the drawn screen, resize the terminal once at the end */
 .term-zoom { position: absolute; left: 8px; right: 8px; top: 6px; transform-origin: 0 0; overflow: visible; will-change: transform; }
 .term-viewport { position: absolute; left: 0; top: 0; right: 0; height: 0; will-change: transform; }
+/* the picture as it was, fading into the new text size (see freezePicture) */
+.term-zoom.term-ghost { pointer-events: none; z-index: 1; }
 .term-row {
   position: absolute; left: 0; top: 0; right: 0;
   height: var(--lh); white-space: pre; overflow: visible;
   contain: layout style;
 }
-.term-row span { display: inline-block; height: var(--lh); vertical-align: top; }
-.term-row .bn { white-space: pre; overflow: visible; }
-.term-row .bn > .bi {
+.term-row span, .term-preedit span { display: inline-block; height: var(--lh); vertical-align: top; }
+.term-row .bn, .term-preedit .bn { white-space: pre; overflow: visible; }
+.term-row .bn > .bi, .term-preedit .bn > .bi {
   font-family: 'Kalpurush', sans-serif;
   font-size: var(--bn-fs);
   line-height: var(--lh);
   transform-origin: 0 50%;
   white-space: pre;
 }
-.term-row .bx { text-align: center; overflow: hidden; }
+.term-row .bx, .term-preedit .bx { text-align: center; overflow: hidden; }
 /* symbols from the fallback fonts are a bit wider than a cell: let them breathe, centred */
-.term-row .bx.sym { position: relative; z-index: 1; overflow: visible; display: inline-flex; justify-content: center; }
+.term-row .bx.sym, .term-preedit .bx.sym { position: relative; z-index: 1; overflow: visible; display: inline-flex; justify-content: center; }
 /* colour pieces inside one Bangla run must stay inline, or shaping breaks between them */
-.term-row .bi span { display: inline; height: auto; }
-.term-row .bx.pua { position: relative; z-index: 1; overflow: visible; text-align: left; font-family: 'AgySymbols', var(--mono); font-size: calc(var(--fs) * 0.92); }
+.term-row .bi span, .term-preedit .bi span { display: inline; height: auto; }
+.term-row .bx.pua, .term-preedit .bx.pua { position: relative; z-index: 1; overflow: visible; text-align: left; font-family: 'AgySymbols', var(--mono); font-size: calc(var(--fs) * 0.92); }
 /* glyphs drawn with CSS/SVG so they fill the whole cell (box drawing, blocks, powerline) */
-.term-row .dg { position: relative; z-index: 1; overflow: visible; }
-.term-row .dg svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.term-row .dg i { position: absolute; border: 0 solid currentColor; box-sizing: border-box; }
-.term-row .dg i.sh { left: 0; top: 0; right: 0; bottom: 0; background: currentColor; }
-.term-row .dg i.r-dr { left: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); right: 0; bottom: 0; border-top-width: var(--bw); border-left-width: var(--bw); border-top-left-radius: calc(var(--cw) * 0.75); }
-.term-row .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
-.term-row .dg i.r-ul { right: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); left: 0; top: 0; border-bottom-width: var(--bw); border-right-width: var(--bw); border-bottom-right-radius: calc(var(--cw) * 0.75); }
-.term-row .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
+.term-row .dg, .term-preedit .dg { position: relative; z-index: 1; overflow: visible; }
+.term-row .dg svg, .term-preedit .dg svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.term-row .dg i, .term-preedit .dg i { position: absolute; border: 0 solid currentColor; box-sizing: border-box; }
+/* a powerline glyph: one em of the pictures' glyph (11.5 px in a 21 px row), its baseline
+   where JetBrains Mono puts it, flush with its own side of the cell */
+.term-row .dg i.pf, .term-preedit .dg i.pf {
+  top: 0; width: calc(var(--lh) * 11.5 / 21); height: var(--lh);
+  font: normal 400 calc(var(--lh) * 11.5 / 21) / var(--lh) 'JetBrains Mono', monospace; white-space: pre;
+}
+.term-row .dg i.pf.l, .term-preedit .dg i.pf.l { left: 0; }
+.term-row .dg i.pf.r, .term-preedit .dg i.pf.r { right: 0; }
+.term-row .dg i.pf b, .term-preedit .dg i.pf b { font-family: 'AgySymbols'; font-weight: 400; }
+.term-row .dg i.sh, .term-preedit .dg i.sh { left: 0; top: 0; right: 0; bottom: 0; background: currentColor; }
+.term-row .dg i.r-dr, .term-preedit .dg i.r-dr { left: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); right: 0; bottom: 0; border-top-width: var(--bw); border-left-width: var(--bw); border-top-left-radius: calc(var(--cw) * 0.75); }
+.term-row .dg i.r-dl, .term-preedit .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
+.term-row .dg i.r-ul, .term-preedit .dg i.r-ul { right: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); left: 0; top: 0; border-bottom-width: var(--bw); border-right-width: var(--bw); border-bottom-right-radius: calc(var(--cw) * 0.75); }
+.term-row .dg i.r-ur, .term-preedit .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
+/* a prompt bar's text (OSC 7770;bar): sized to the row as in Settings' pictures of the
+   prompt styles (11.5 px text in a 21 px row), centred in the cells it takes */
+.term-row .cmp { font-size: calc(var(--lh) * 11.5 / 21); text-align: center; overflow: visible; }
 /* the prompt's clock, always at the right edge of its line */
 .term-row .rlabel {
-  position: absolute; right: 0; top: 0; z-index: 1;
-  display: inline-flex; align-items: center; gap: 0.45em; height: var(--lh);
-  padding: 0 0.75em; border-radius: calc(var(--lh) / 2);
-  background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
+  position: absolute; right: 0; top: calc(var(--lh) / 21); z-index: 1;
+  display: inline-flex; align-items: center; gap: 0.45em; height: calc(var(--lh) * 19 / 21);
+  padding: 0 0.75em; border-radius: calc(var(--lh) * 19 / 42);
+  /* (the clock's text as in Settings' pictures: 11 px in a 21 px row) */
+  background: #89b4fa; color: #1e1e2e; font-size: calc(var(--lh) * 11 / 21);
 }
+/* a prompt's plain note at the right edge (how long the last command took) */
+.term-row .rlabel.note { background: none; color: #8a8fa3; padding: 0 0.2em; font-size: calc(var(--fs) * 0.95); }
+/* the account an agent is signed in with, by its header */
+.term-row .rlabel.acct { background: rgba(137, 180, 250, 0.14); color: #a6b4d4; padding: 0 0.65em; gap: 0.4em; }
+.term-row .rlabel.acct b { color: #89b4fa; }
 .term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
+/* the smart keyboard's word, inserted at the cursor (what follows on the row moves aside) */
 .term-preedit {
   position: absolute; left: 0; top: 0; z-index: 2; height: var(--lh); line-height: var(--lh);
-  white-space: pre; pointer-events: none; padding-right: 1px;
-  background: var(--tbg, #000); text-decoration: underline; text-underline-offset: 3px;
-  border-right: 2px solid var(--accent);
+  white-space: pre; pointer-events: none;
+  background: var(--tbg, #000);
 }
+.term-preedit .pw { border-right: 2px solid var(--accent); padding-right: 1px; }
+.term-preedit u { text-decoration: underline; text-underline-offset: 3px; }
+/* text selected in the line being typed, and its two handles */
+.term-sel { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; }
+.term-sel[hidden] { display: none; }
+.term-sel i {
+  position: absolute; left: 0; top: 0; height: var(--lh);
+  background: var(--accent-2); opacity: 0.34; border-radius: 2px;
+}
+.sel-h {
+  position: absolute; left: 0; top: 0; width: 20px; height: 20px;
+  background: var(--accent-2); pointer-events: auto; touch-action: none;
+}
+.sel-h.a { margin-left: -20px; border-radius: 50% 0 50% 50%; }
+.sel-h.b { border-radius: 0 50% 50% 50%; }
+/* a finger-sized grip around the drop */
+.sel-h::before { content: ''; position: absolute; left: -14px; top: -8px; right: -14px; bottom: -16px; }
+.sel-bar {
+  position: fixed; left: 0; top: 0; z-index: 55; display: flex; padding: 4px;
+  background: var(--surface-3); border: 1px solid var(--line-strong); border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: sel-bar-in 0.14s var(--ease);
+}
+.sel-bar[hidden] { display: none; }
+.sel-bar button {
+  background: none; border: 0; color: var(--text); font: 500 14px var(--ui-font);
+  padding: 9px 13px; border-radius: 10px; white-space: nowrap;
+}
+.sel-bar button[hidden] { display: none; }
+.sel-bar button:active { background: var(--line-strong); }
+@keyframes sel-bar-in { from { opacity: 0; } to { opacity: 1; } }
 .term-cursor {
   position: absolute; left: 0; top: 0;
   width: var(--cw); height: var(--lh);
@@ -510,7 +561,7 @@ body[data-screen='home']::before {
 @keyframes blink { 0%, 45% { opacity: 0.85; } 55%, 100% { opacity: 0.15; } }
 
 .fab-bottom {
-  position: absolute; right: 14px; bottom: 14px; z-index: 3;
+  position: absolute; right: 14px; bottom: calc(14px + var(--dock-h, 0px)); z-index: 5;
   width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
   background: var(--surface-3); color: var(--text); border: 1px solid var(--line-strong);
   box-shadow: var(--shadow);
@@ -533,7 +584,9 @@ body[data-screen='home']::before {
 }
 .reader .rl { white-space: pre-wrap; word-break: break-word; }
 .reader a { color: var(--accent-2); }
+.reader-badge[hidden] { display: none; }
 .reader-badge {
+  color: var(--text);
   position: absolute; top: 10px; right: 12px; z-index: 2;
   display: inline-flex; align-items: center; gap: 6px; font: 600 12.5px var(--ui-font);
   padding: 6px 12px; border-radius: 99px; background: var(--surface-3); border: 1px solid var(--line-strong);
@@ -633,7 +686,7 @@ body[data-screen='home']::before {
 .fp-empty { color: var(--muted); font-size: 14px; margin: 10px 10px 14px; line-height: 1.5; }
 .fp-new { display: flex; gap: 8px; align-items: center; padding: 6px 4px; }
 .fp-new .text-input { flex: 1; min-width: 0; margin: 0; }
-.fp-new .btn { flex: none; height: 46px; padding: 0 18px; }
+.fp-new .btn { flex: none; width: auto; height: 46px; padding: 0 18px; }
 
 /* settings */
 .setting { padding: 12px 4px; border-bottom: 1px solid var(--line); }
@@ -795,4 +848,36 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   #session-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
   #session-pill i.on { background: var(--good); }
   #session-pill span { color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---- Settings → Prompt style: a card per style, with a small picture of it ---- */
+.prompt-styles { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ps-card {
+  display: block; width: 100%; text-align: left; padding: 10px 12px 12px; border-radius: 14px;
+  background: var(--surface-2); border: 1.5px solid transparent; color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+.ps-card.on { border-color: var(--accent); background: var(--surface-3); }
+.ps-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ps-head b { font: 650 14px var(--ui-font); }
+.ps-head span { font-size: 12px; color: var(--muted); }
+.ps-pic {
+  position: relative; background: #0d0f15; border-radius: 9px; padding: 8px 10px; overflow: hidden;
+  font: 11.5px/1.75 var(--mono); color: #cdd6f4; white-space: pre;
+}
+.ps-pic > div { position: relative; display: block; height: 21px; white-space: pre; }
+.ps-pic span { display: inline-block; height: 21px; line-height: 21px; }
+.ps-pic .pi { font-style: normal; font-family: 'AgySymbols', var(--mono); }
+.ps-pic .pc { width: 7px; height: 15px; background: #cdd6f4; opacity: 0.4; vertical-align: middle; }
+.ps-pic .pr { position: absolute; right: 0; top: 0; }
+.ps-pic .pclock { background: #89b4fa; color: #1e1e2e; border-radius: 10px; padding: 0 8px; height: 19px; line-height: 19px; font-size: 11px; margin-top: 1px; }
+.ps-pic > div.pfill { display: flex; }
+.ps-pic .prule { flex: 1; height: 1px; background: #585862; margin: 0 6px; align-self: center; }
+
+/* an agent's input box, pinned at the bottom while the conversation is scrolled back */
+.term-dock { position: absolute; left: 8px; right: 8px; bottom: 0; z-index: 4; background: var(--tbg, #000); }
+.term-dock[hidden] { display: none; }
+.term-dock::before {
+  content: ''; position: absolute; left: -8px; right: -8px; top: -22px; height: 22px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--tbg, #000));
 }

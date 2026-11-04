@@ -96,6 +96,14 @@ export interface Bridge {
   setSessionLabel(id: string, label: string): void;
   setNotifyWhenDone(on: boolean): void;
   getNotifyWhenDone(): Promise<boolean>;
+  /** Claude Code's own full-screen view for new sessions. */
+  setClaudeFullscreen(on: boolean): void;
+  getClaudeFullscreen(): Promise<boolean>;
+  /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
+  setPromptStyle(style: string): void;
+  getPromptStyle(): Promise<string>;
+  /** The account (email) an agent is signed in with; "" if unknown. */
+  accountEmail(kind: string): string;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string): void;
   getAccounts(): Promise<{ agy: string; claude: string }>;
@@ -118,7 +126,7 @@ export interface Bridge {
   /** Ask to run without battery restrictions (so Android doesn't stop the sessions). */
   allowBackground(): void;
   /** Sessions Android stopped while the app was gone; forget them once shown. */
-  getLostSessions(): Promise<{ kind: SessionKind; label: string }[]>;
+  getLostSessions(): Promise<{ kind: SessionKind; label: string; dir?: string }[]>;
   forgetLostSessions(): void;
   exitApp(): void;
 }
@@ -151,6 +159,11 @@ interface AndroidBridgeApi {
   setSessionLabel?(id: string, label: string): void;
   setNotifyWhenDone?(on: boolean): void;
   getNotifyWhenDone?(): boolean;
+  setClaudeFullscreen?(on: boolean): void;
+  getClaudeFullscreen?(): boolean;
+  setPromptStyle?(style: string): void;
+  getPromptStyle?(): string;
+  accountEmail?(kind: string): string;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string): void;
   getAccounts?(): string;
@@ -201,6 +214,17 @@ class AndroidHostBridge implements Bridge {
   setSessionLabel(id: string, label: string) { this.api.setSessionLabel?.(id, label); }
   setNotifyWhenDone(on: boolean) { this.api.setNotifyWhenDone?.(on); }
   async getNotifyWhenDone() { return this.api.getNotifyWhenDone?.() ?? true; }
+  setClaudeFullscreen(on: boolean) { this.api.setClaudeFullscreen?.(on); }
+  async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
+  setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
+  async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
+  accountEmail(kind: string) {
+    try {
+      return this.api.accountEmail?.(kind) ?? '';
+    } catch {
+      return '';
+    }
+  }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
   setAntigravityAccount(email: string) { this.api.setAntigravityAccount?.(email); }
   async getAccounts() {
@@ -221,7 +245,7 @@ class AndroidHostBridge implements Bridge {
   allowBackground() { this.api.allowBackground?.(); }
   async getLostSessions() {
     try {
-      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string }[];
+      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string; dir?: string }[];
     } catch {
       return [];
     }
@@ -301,6 +325,18 @@ class DevBridge implements Bridge {
   setSessionLabel() {}
   setNotifyWhenDone() {}
   async getNotifyWhenDone() { return true; }
+  setClaudeFullscreen() {}
+  async getClaudeFullscreen() { return false; }
+  setPromptStyle(style: string) {
+    try { localStorage.setItem('promptStyle', style); } catch { /* storage unavailable */ }
+  }
+  async getPromptStyle() {
+    try { return localStorage.getItem('promptStyle') ?? 'powerline'; } catch { return 'powerline'; }
+  }
+  accountEmail() {
+    return ''; // (no agent accounts in the browser)
+  }
+
   setThemeColors() {}
   setAntigravityAccount() {}
   async getAccounts() { return { agy: '', claude: '' }; }

@@ -35,6 +35,8 @@ class UbuntuManager private constructor(private val context: Context) {
     var onBusyChanged: (() -> Unit)? = null
 
     val rootfs: File get() = File(context.filesDir, "ubuntu")
+    /** Ubuntu's folder with the phone's own links resolved (how proot names it). */
+    private val rootfsReal: String by lazy { try { rootfs.canonicalPath } catch (_: Exception) { rootfs.absolutePath } }
     private val tmpDir: File get() = File(context.filesDir, "tmp")
     private val fakeProc: File get() = File(context.filesDir, "fakeproc")
     private val marker: File get() = File(context.filesDir, "ubuntu.installed")
@@ -49,6 +51,90 @@ class UbuntuManager private constructor(private val context: Context) {
         tmpDir.mkdirs()
         prepareLibs()
         syncGuestFiles()
+    }
+
+    /** Claude Code's own full-screen view (Settings → Advanced); off: its classic view. */
+    var claudeFullscreen: Boolean
+        get() = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).getBoolean("claudeFullscreen", false)
+        set(v) = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).edit().putBoolean("claudeFullscreen", v).apply()
+
+    /** The shell prompt's look (Settings → Prompt style): Ubuntu's ~/.config/agy-terminal/prompt. */
+    var promptStyle: String
+        get() = try {
+            File(rootfs, "root/.config/agy-terminal/prompt").readText().trim()
+        } catch (_: Exception) {
+            ""
+        }.takeIf { it in PROMPT_STYLES } ?: "powerline"
+        set(v) {
+            if (v !in PROMPT_STYLES) return
+            try {
+                val f = File(rootfs, "root/.config/agy-terminal/prompt")
+                f.parentFile?.mkdirs()
+                f.writeText("$v\n")
+            } catch (_: Exception) { /* not installed yet */ }
+        }
+
+    /**
+     * The account (email) an agent is signed in with, or "" when not known. Claude Code keeps it in ~/.claude.json. Antigravity shows it in its header
+     * (the app remembers it from there); before that, its account and token files under
+     * ~/.gemini are looked through for an email (a field, or the Google sign-in token's).
+     * Read from the files only — nothing goes over the network.
+     */
+    fun accountEmail(kind: String): String {
+        val home = File(rootfs, "root")
+        val email = try {
+            when (kind) {
+                "claude" -> claudeEmail(File(home, ".claude.json"))
+                // (the account its header showed, which the app remembers; else its files)
+                "agy" -> com.sabidyut.agyterm.Accounts.antigravity(context)?.takeIf { "@" in it }
+                    ?: agyEmail(File(home, ".gemini"))
+                else -> ""
+            }
+        } catch (_: Throwable) { // (an odd file — even one too big for memory — just means "unknown")
+            ""
+        }
+        return email.trim().takeIf { Regex("^[^\\s@]+@[^\\s@]+$").matches(it) } ?: ""
+    }
+
+    // ~/.claude.json also holds every project's history and can grow to many MB: it is read
+    // again only when it changed, and only the account's part is looked at
+    private var claudeSeen: Triple<Long, Long, String>? = null
+
+    private fun claudeEmail(f: File): String {
+        val modified = f.lastModified()
+        val size = f.length()
+        claudeSeen?.let { if (it.first == modified && it.second == size) return it.third }
+        if (!f.isFile || size > 64L * 1024 * 1024) return ""
+        val text = f.readText()
+        val at = text.indexOf("\"oauthAccount\"")
+        val email = if (at < 0) "" else Regex("\"emailAddress\"\\s*:\\s*\"([^\"]*)\"")
+            .find(text.substring(at, minOf(text.length, at + 4096)))?.groupValues?.get(1).orEmpty()
+        claudeSeen = Triple(modified, size, email)
+        return email
+    }
+
+    private fun agyEmail(dir: File): String {
+        if (!dir.isDirectory) return ""
+        val skip = setOf("brain", "skills", "plugins", "sidecars", "artifacts", "workflows", "global_workflows", "tmp", "history", "cache", "logs")
+        val names = Regex("account|oauth|cred|auth|token|user|login|session", RegexOption.IGNORE_CASE)
+        val field = Regex(""""(?:email|emailAddress|user_email|userEmail|active)"\s*:\s*"([^"\s@]+@[^"\s@]+\.[^"\s@]+)"""")
+        val jwt = Regex(""""id_token"\s*:\s*"([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.""")
+        val files = dir.walkTopDown().maxDepth(3)
+            .onEnter { it == dir || it.name !in skip }
+            .filter { it.isFile && it.length() in 1..262_144 && names.containsMatchIn(it.name) }
+            .take(40)
+        for (f in files) {
+            val text = try { f.readText() } catch (_: Exception) { continue }
+            field.find(text)?.let { return it.groupValues[1] }
+            jwt.find(text)?.let { m ->
+                try {
+                    val payload = String(android.util.Base64.decode(m.groupValues[2], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP))
+                    val e = JSONObject(payload).optString("email")
+                    if ("@" in e) return e
+                } catch (_: Exception) { /* not a sign-in token */ }
+            }
+        }
+        return ""
     }
 
     fun stateJson(): String = JSONObject()
@@ -160,7 +246,7 @@ class UbuntuManager private constructor(private val context: Context) {
                 val name = entry.name.removePrefix("./").trimEnd('/')
                 if (name.isEmpty()) continue
                 val dest = File(root, name)
-                if (!dest.canonicalPath.startsWith(root.canonicalPath)) continue // path traversal guard
+                if (!inside(root, dest)) continue // path traversal guard
                 when {
                     entry.isDirectory -> {
                         dest.mkdirs()
@@ -172,7 +258,8 @@ class UbuntuManager private constructor(private val context: Context) {
                         Os.symlink(entry.linkName, dest.absolutePath)
                     }
                     entry.isLink -> {
-                        hardLinks += dest to File(root, entry.linkName.removePrefix("./"))
+                        val target = File(root, entry.linkName.removePrefix("./"))
+                        if (inside(root, target)) hardLinks += dest to target
                     }
                     entry.isFile -> {
                         dest.parentFile?.mkdirs()
@@ -270,9 +357,19 @@ class UbuntuManager private constructor(private val context: Context) {
         write("etc/agy-terminal.bashrc", asset("bashrc"), 0x1a4)
         syncBlesh()
         // Hook the prompt/aliases into root's .bashrc (after Ubuntu's own PS1).
-        val bashrc = File(rootfs, "root/.bashrc")
+        // (~/.bashrc may be a link the user made — `ln -s ~/dotfiles/bashrc ~/.bashrc` — whose
+        // target is a path inside Ubuntu; a file that can't be written is left as it is)
+        var bashrc = File(rootfs, "root/.bashrc")
+        if (isSymlink(bashrc)) {
+            val t = try { Os.readlink(bashrc.absolutePath) } catch (_: Exception) { null }
+            if (t != null) bashrc = if (t.startsWith("/")) File(rootfs, t.removePrefix("/")) else File(bashrc.parentFile, t)
+        }
         val hook = "[ -f /etc/agy-terminal.bashrc ] && . /etc/agy-terminal.bashrc"
-        if (!bashrc.exists() || !bashrc.readText().contains(hook)) bashrc.appendText("\n$hook\n")
+        try {
+            if (!bashrc.exists() || !bashrc.readText().contains(hook)) bashrc.appendText("\n$hook\n")
+        } catch (e: Exception) {
+            android.util.Log.w("UbuntuManager", "couldn't hook ~/.bashrc", e)
+        }
         // ~/storage/* → the phone's folders (like Termux), dangling until access is granted.
         val storageDir = File(rootfs, "root/storage").apply { mkdirs() }
         for ((name, target) in com.sabidyut.agyterm.Storage.links) {
@@ -434,6 +531,10 @@ class UbuntuManager private constructor(private val context: Context) {
             "ANTICODE_LINK_TOKEN=$linkToken",
             timeZoneEnv(), // the phone's time, not UTC (the prompt's clock, `date`, logs)
         )
+        // Claude Code's full-screen view keeps its own scrollback: every swipe is a wheel event
+        // it answers by redrawing the whole screen — slow under proot on a phone. Its classic
+        // view writes to the terminal's scrollback, which the app scrolls smoothly itself.
+        if (!claudeFullscreen) args += "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"
         // the folder picked in the app: the login shell goes there first (profile.sh)
         if (cwd.isNotEmpty()) normalizeGuestPath(cwd)?.takeIf { it != "/root" }?.let { args += "ANTICODE_CWD=$it" }
         when (kind) {
@@ -537,7 +638,17 @@ class UbuntuManager private constructor(private val context: Context) {
             if (boundHost(next) == null) {
                 val f = File(rootfs, next.removePrefix("/"))
                 if (isSymlink(f)) {
-                    val t = try { Os.readlink(f.absolutePath) } catch (_: Exception) { return null }
+                    var t = try { Os.readlink(f.absolutePath) } catch (_: Exception) { return null }
+                    // a hard link made inside Ubuntu: proot keeps it as a link to a file in
+                    // Ubuntu's folder on the phone (an absolute phone path, not an Ubuntu one)
+                    // (proot writes it under the folder's real path — /data/data/… where the app
+                    // sees /data/user/0/… — so both spellings are recognised)
+                    for (root in listOf(rootfs.absolutePath, rootfsReal)) {
+                        if (t == root || t.startsWith("$root/")) {
+                            t = t.removePrefix(root).ifEmpty { "/" }
+                            break
+                        }
+                    }
                     val target = if (t.startsWith("/")) t else "$cur/$t"
                     val rest = parts.drop(i + 1).joinToString("/")
                     val n = normalizeGuestPath(if (rest.isEmpty()) target else "$target/$rest") ?: return null
@@ -566,9 +677,14 @@ class UbuntuManager private constructor(private val context: Context) {
             val noAccess = (onPhone && !com.sabidyut.agyterm.Storage.hasAccess(context)) || host?.isDirectory == true
             return json.put("error", if (noAccess) "noaccess" else "notfound").toString()
         }
+        // (the folder is resolved once; only entries that are links are followed — DCIM/Camera
+        // has thousands of pictures)
         val dirs = names.asSequence()
             .filter { !it.startsWith(".") }
-            .filter { hostPath(child(g, it))?.isDirectory == true }
+            .filter {
+                val f = File(host, it)
+                if (isSymlink(f)) hostPath(child(g, it))?.isDirectory == true else f.isDirectory
+            }
             .sortedWith(String.CASE_INSENSITIVE_ORDER)
             .take(2000)
             .toList()
@@ -600,7 +716,17 @@ class UbuntuManager private constructor(private val context: Context) {
         context.filesDir.absolutePath,
     )
 
+    /** [f] is [root] or under it, links resolved ("../ubuntu2/x" isn't, though it starts alike). */
+    private fun inside(root: File, f: File): Boolean {
+        val r = root.canonicalPath
+        val p = f.canonicalPath
+        return p == r || p.startsWith(r + File.separator)
+    }
+
     companion object {
+
+        val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
+        private const val UI_PREFS = "anticode-ui"
         private const val TAG = "UbuntuManager"
         const val UBUNTU_VERSION = "24.04"
         // Newest first; the installer falls back if a point release isn't published.

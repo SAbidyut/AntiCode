@@ -161,6 +161,8 @@ class TermSession(
         }
     }
 
+    private val DONE = "7770;done;${com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken}"
+
     private fun finishOsc() {
         val s = osc.toString("UTF-8")
         when {
@@ -168,7 +170,9 @@ class TermSession(
             // prompts) are not notifications
             s.startsWith("9;") && !OSC9_SUBCOMMAND.containsMatchIn(s) -> alert = s.substring(2)
             s.startsWith("777;notify;") -> alert = s.substring(11).split(';').filter { it.isNotBlank() }.joinToString(" — ")
-            s == "7770;done" -> promptAt = System.currentTimeMillis()
+            // (signed by the guest bashrc with the app's token, like every 7770 message: the
+            // same text printed by a program doesn't count as the prompt coming back)
+            s == DONE -> promptAt = System.currentTimeMillis()
         }
     }
 

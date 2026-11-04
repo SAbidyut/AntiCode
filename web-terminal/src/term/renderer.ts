@@ -16,6 +16,7 @@
 // seamlessly at any zoom level.
 
 import type { Terminal, IBufferCell, IBufferLine, IMarker } from '@xterm/headless';
+import { isRule } from './lineedit';
 
 export interface TermTheme {
   background: string;
@@ -181,12 +182,15 @@ interface Row {
   live: boolean;
 }
 
-const OVERSCAN = 3;
+/** Rows drawn beyond each edge of the screen: a fast fling never shows a row not yet drawn. */
+const OVERSCAN = 10;
 
 export class BanglaRenderer {
   /**
    * A floating keyboard is open: Android doesn't say where it is (it takes no room at the
-   * bottom), so the line being typed is kept in the upper half, where it usually isn't.
+   * bottom), so in a portrait shell the line being typed is kept in the upper half, where it
+   * usually isn't. (Not an agent's input box, which stays at the bottom, nor in landscape,
+   * where the keyboard floats over a part of a wide screen: it can be moved off the line.)
    */
   static floatingKeyboard = false;
   readonly el: HTMLDivElement;
@@ -201,6 +205,7 @@ export class BanglaRenderer {
   private measureCtx = document.createElement('canvas').getContext('2d')!;
   private widthCache = new Map<string, number>();
   private cell!: IBufferCell;
+  private probe: IBufferCell | undefined;
   private frame = 0;
   private bufferKey = '';
   private lastBaseY = 0;
@@ -218,34 +223,99 @@ export class BanglaRenderer {
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
   // `sig` is the line's text once the prompt was drawn on it: when the line no longer
   // reads the same (cleared, redrawn elsewhere after a zoom, overwritten) the label goes.
-  private rightLabels: { marker: IMarker; text: string; sig: string; born: number }[] = [];
+  private rightLabels: { marker: IMarker; text: string; sig: string; born: number; note: boolean; acct: boolean }[] = [];
 
   /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
-  setRightLabel(text: string) {
+  /** ([note]: plain grey text — a prompt's "5s" — not the clock's pill) */
+  /** ([acct]: an agent's signed-in account; [offset]: lines from the cursor's) */
+  setRightLabel(text: string, note = false, acct = false, offset = 0) {
     if (this.term.buffer.active.type !== 'normal') return;
-    const marker = this.term.registerMarker(0);
+    const marker = this.term.registerMarker(offset);
     if (!marker) return;
-    // a redraw of the same prompt replaces its label
+    // a redraw of the same prompt replaces its label (and there's one account label: it moves)
     this.rightLabels = this.rightLabels.filter((l) => {
-      const same = l.marker.isDisposed || l.marker.line === marker.line;
+      const same = l.marker.isDisposed || l.marker.line === marker.line || (acct && l.acct);
       if (same) l.marker.dispose();
       return !same;
     });
-    this.rightLabels.push({ marker, text: text.slice(0, 24), sig: '', born: performance.now() });
+    this.rightLabels.push({ marker, text: text.slice(0, acct ? 48 : 24), sig: '', born: performance.now(), note, acct });
     while (this.rightLabels.length > 300) this.rightLabels.shift()!.marker.dispose();
     this.schedule();
+  }
+
+  // ---- the prompt's bar lines (OSC 7770;bar): their text drawn smaller, as in Settings'
+  // pictures of the prompt styles (11.5 px text in a 21 px row) — the cells stay as they are
+  private barLines: { marker: IMarker; sig: string; born: number }[] = [];
+
+  /** The cursor's line is a prompt's bar line (OSC 7770;bar). */
+  markBarLine() {
+    if (this.term.buffer.active.type !== 'normal') return;
+    const marker = this.term.registerMarker(0);
+    if (!marker) return;
+    this.barLines = this.barLines.filter((b) => {
+      const same = b.marker.isDisposed || b.marker.line === marker.line;
+      if (same) b.marker.dispose();
+      return !same;
+    });
+    this.barLines.push({ marker, sig: '', born: performance.now() });
+    while (this.barLines.length > 300) this.barLines.shift()!.marker.dispose();
+    this.schedule();
+  }
+
+  /** The line of the account label (Claude Code's / Antigravity's header), -1 if none. */
+  accountLabelLine(): number {
+    const l = this.rightLabels.find((x) => x.acct && !x.marker.isDisposed);
+    return l ? l.marker.line : -1;
   }
 
   /** After a terminal reset the old buffers (and their markers) are gone. */
   clearLabels() {
     for (const l of this.rightLabels) l.marker.dispose();
     this.rightLabels = [];
+    for (const b of this.barLines) b.marker.dispose();
+    this.barLines = [];
     this.schedule();
   }
 
+  /**
+   * Whether a mark on a line still belongs to its prompt: the line's text once the prompt
+   * was drawn on it is remembered; when the line no longer starts with it (cleared,
+   * overwritten, the prompt redrawn elsewhere) the mark goes. Typing after a one-line
+   * prompt keeps it. A line that stayed empty: the prompt went elsewhere.
+   */
+  private stillPrompt(m: { marker: IMarker; sig: string; born: number }, text: string, now: number): boolean | null {
+    if (!m.sig) {
+      if (text.trim()) m.sig = text;
+      else if (now - m.born > 1500) return false;
+      else return null; // not drawn yet
+    } else if (!text.startsWith(m.sig)) return false;
+    return true;
+  }
+
+  /** Bar lines among first..last. */
+  private barsByLine(first: number, last: number): Set<number> {
+    const set = new Set<number>();
+    const buf = this.term.buffer.active;
+    if (buf.type !== 'normal' || !this.barLines.length) return set;
+    const now = performance.now();
+    this.barLines = this.barLines.filter((b) => {
+      if (b.marker.isDisposed) return false;
+      const line = b.marker.line;
+      if (line < first || line > last) return true;
+      const ok = this.stillPrompt(b, buf.getLine(line)?.translateToString(true) ?? '', now);
+      if (ok === false) {
+        b.marker.dispose();
+        return false;
+      }
+      if (ok) set.add(line);
+      return true;
+    });
+    return set;
+  }
+
   /** Labels of the lines first..last that still belong to their prompt. */
-  private labelsByLine(first: number, last: number): Map<number, string> {
-    const m = new Map<number, string>();
+  private labelsByLine(first: number, last: number): Map<number, { text: string; note: boolean; acct: boolean }> {
+    const m = new Map<number, { text: string; note: boolean; acct: boolean }>();
     const buf = this.term.buffer.active;
     if (buf.type !== 'normal') return m;
     const now = performance.now();
@@ -253,18 +323,13 @@ export class BanglaRenderer {
       if (l.marker.isDisposed) return false;
       const line = l.marker.line;
       if (line < first || line > last) return true; // checked when it's on screen
-      const text = buf.getLine(line)?.translateToString(true) ?? '';
-      if (!l.sig) {
-        if (text.trim()) l.sig = text; // the prompt has been drawn: remember it
-        else if (now - l.born > 1500) {
-          l.marker.dispose(); // its line stayed empty: the prompt went elsewhere
-          return false;
-        } else return true;
-      } else if (text !== l.sig) {
-        l.marker.dispose(); // cleared, overwritten, or the prompt was redrawn elsewhere
+      const ok = this.stillPrompt(l, buf.getLine(line)?.translateToString(true) ?? '', now);
+      if (ok === false) {
+        l.marker.dispose();
         return false;
       }
-      m.set(line, l.text);
+      if (!ok) return true; // not drawn yet
+      m.set(line, { text: l.text, note: l.note, acct: l.acct });
       return true;
     });
     return m;
@@ -292,9 +357,16 @@ export class BanglaRenderer {
    * it sits at the bottom (the prompt box right above the keys), like Claude Code.
    */
   anchorBottom = false;
+  /** The scrollback lost lines at its top (a full scrollback, a clear): line numbers moved. */
+  onLinesRenumbered?: () => void;
   /** Chat layout: rows from this line down are moved down by splitGap px (-1 = off). */
   private splitLine = -1;
   private splitGap = 0;
+  /**
+   * Chat layout with a scrollback: how far the view shows earlier lines at the top so the
+   * input box sits at the bottom, not above empty rows (px).
+   */
+  private lift = 0;
   /** True while the keyboard slides: follow it exactly, no easing. */
   insetsMoving = false;
   /** Lift the input line above a floating keyboard (not for the Settings preview). */
@@ -305,11 +377,117 @@ export class BanglaRenderer {
    */
   preedit = '';
   private preeditEl: HTMLSpanElement;
+  private preeditHtml = '';
   setPreedit(text: string) {
     if (text === this.preedit) return;
     this.preedit = text;
     this.schedule();
   }
+  /**
+   * Text the keyboard just sent, drawn (plainly) where it goes until the program echoes it
+   * — otherwise a finished word vanished for a moment on every space or suggestion tap.
+   */
+  private ghost = '';
+  /** Where the cursor was when the ghost / the hold began: either ends when it moves. */
+  private waitAt: { line: number; x: number; until: number } | null = null;
+  /** The keyboard took letters back (⌫ sent): the word being composed waits for them to go. */
+  private holdPreedit = false;
+  /** (call before setPreedit) */
+  awaitEcho(kind: 'text' | 'deletes', text = '') {
+    const buf = this.term.buffer.active;
+    this.ghost = kind === 'text' ? text : '';
+    this.holdPreedit = kind === 'deletes';
+    this.waitAt = { line: buf.baseY + buf.cursorY, x: buf.cursorX, until: performance.now() + 280 };
+    window.setTimeout(() => this.schedule(), 300);
+    this.schedule();
+  }
+  /**
+   * Text selected in the line being typed: a highlight per row, and a handle at each end to
+   * drag (see LineEditor).
+   */
+  private selection: { ranges: { line: number; x0: number; x1: number }[]; a: { line: number; x: number }; b: { line: number; x: number } } | null = null;
+  private selEl: HTMLDivElement | null = null;
+  private selBoxes: HTMLDivElement | null = null;
+  private selHandles: HTMLDivElement[] = [];
+  private selKey = '';
+  /** A selection handle is dragged (a = start, b = end). */
+  onHandle?: (end: 'a' | 'b', phase: 'down' | 'move' | 'up', clientX: number, clientY: number) => void;
+  /** Drawn (or moved with the screen): the app keeps its Copy / Paste bar next to it. */
+  onSelectionDrawn?: () => void;
+  setSelection(sel: BanglaRenderer['selection']) {
+    this.selection = sel;
+    this.schedule();
+  }
+  /** Where the selection is on the screen (client px), or null. */
+  selectionRect(): { left: number; top: number; right: number; bottom: number } | null {
+    if (!this.selection || !this.selBoxes || this.selEl?.hidden) return null;
+    let r: { left: number; top: number; right: number; bottom: number } | null = null;
+    for (const el of [...this.selBoxes.children, ...this.selHandles]) {
+      const b = el.getBoundingClientRect();
+      r = r ? { left: Math.min(r.left, b.left), top: Math.min(r.top, b.top), right: Math.max(r.right, b.right), bottom: Math.max(r.bottom, b.bottom) } : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+    }
+    return r;
+  }
+  /** Fractional cell column under a client x (a tap between two letters picks the nearer gap). */
+  colAt(clientX: number): number {
+    const rect = this.viewport.getBoundingClientRect();
+    return Math.max(0, Math.min(this.term.cols, (clientX - rect.left) / (this.cellWidth * this.zoom)));
+  }
+
+  private drawSelection(rowY: (i: number) => number, first: number, last: number) {
+    const sel = this.selection;
+    if (!sel) {
+      if (this.selEl && !this.selEl.hidden) {
+        this.selEl.hidden = true;
+        this.selKey = '';
+      }
+      return;
+    }
+    if (!this.selEl) {
+      const el = (this.selEl = document.createElement('div'));
+      el.className = 'term-sel';
+      this.selBoxes = document.createElement('div');
+      el.append(this.selBoxes);
+      for (const end of ['a', 'b'] as const) {
+        const h = document.createElement('div');
+        h.className = `sel-h ${end}`;
+        const report = (phase: 'down' | 'move' | 'up') => (e: PointerEvent) => {
+          // the screen's own gestures (scroll, tap) must not see a handle being dragged
+          e.stopPropagation();
+          if (phase === 'down') {
+            e.preventDefault();
+            h.setPointerCapture(e.pointerId);
+          } else if (!h.hasPointerCapture(e.pointerId)) return;
+          if (phase === 'up') h.releasePointerCapture(e.pointerId);
+          this.onHandle?.(end, phase, e.clientX, e.clientY);
+        };
+        h.addEventListener('pointerdown', report('down'));
+        h.addEventListener('pointermove', report('move'));
+        h.addEventListener('pointerup', report('up'));
+        h.addEventListener('pointercancel', report('up'));
+        this.selHandles.push(h);
+        el.append(h);
+      }
+      this.viewport.append(el);
+    }
+    this.selEl.hidden = false;
+    const cw = this.cellWidth;
+    const lh = this.lineHeight;
+    // (only the rows being drawn: a selection of a whole long history has thousands)
+    const key = `${sel.ranges.length > 60 ? sel.ranges.length : JSON.stringify(sel.ranges)}|${JSON.stringify(sel.a)}|${JSON.stringify(sel.b)}|${first}|${last}|${cw}|${lh}|${rowY(sel.a.line)}|${rowY(sel.b.line)}`;
+    if (key !== this.selKey) {
+      this.selKey = key;
+      this.selBoxes!.innerHTML = sel.ranges
+        .filter((r) => r.x1 > r.x0 && r.line >= first && r.line <= last)
+        .map((r) => `<i style="transform:translate(${(r.x0 * cw).toFixed(2)}px,${rowY(r.line)}px);width:${((r.x1 - r.x0) * cw).toFixed(2)}px"></i>`)
+        .join('');
+      const [ha, hb] = this.selHandles;
+      ha.style.transform = `translate(${(sel.a.x * cw).toFixed(2)}px, ${rowY(sel.a.line) + lh}px)`;
+      hb.style.transform = `translate(${(sel.b.x * cw).toFixed(2)}px, ${rowY(sel.b.line) + lh}px)`;
+    }
+    this.onSelectionDrawn?.();
+  }
+
   /** Called when the view leaves / returns to the bottom of the output. */
   onScrolled?: (scrolledUp: boolean) => void;
   private wasScrolled = false;
@@ -353,6 +531,7 @@ export class BanglaRenderer {
 
   /** Scroll by pixels (positive = back in history). Returns false at an edge. */
   scrollByPixels(px: number): boolean {
+    if (!Number.isFinite(px)) return false;
     const next = Math.max(0, Math.min(this.maxScroll(), this.scrollPx + px));
     const moved = next !== this.scrollPx;
     this.scrollPx = next;
@@ -360,12 +539,55 @@ export class BanglaRenderer {
     return moved;
   }
 
+  // ---- pulled past an end (the rubber band) ----
+  private overscroll = 0;
+  private overscrollAnim: Animation | null = null;
+  /** (older WebViews have no `translate` property: no stretch there, nothing breaks) */
+  private static canStretch = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '0 1px');
+  /** The most the content follows a pull past an end. */
+  get maxOverscroll() {
+    return Math.max(40, this.el.clientHeight * 0.12);
+  }
+  /** Scrolled into the top or bottom and still pulling: the content follows a little. */
+  setOverscroll(px: number) {
+    if (!BanglaRenderer.canStretch) return;
+    this.overscroll = px;
+    this.overscrollAnim?.cancel();
+    this.overscrollAnim = null;
+    this.zoomLayer.style.translate = px ? `0 ${px.toFixed(1)}px` : '';
+  }
+  /** Let go: it springs back. */
+  releaseOverscroll() {
+    const from = this.overscroll;
+    if (!from) return;
+    this.setOverscroll(0);
+    if (!this.opts.animate) return;
+    this.overscrollAnim = this.zoomLayer.animate([{ translate: `0 ${from.toFixed(1)}px` }, { translate: '0 0' }], {
+      duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+    });
+    this.overscrollAnim.id = 'overscroll';
+  }
+  /** A fling ran into an end at [v] px/ms: a short bounce. */
+  bounce(v: number) {
+    if (!this.opts.animate || !BanglaRenderer.canStretch) return;
+    // gentle: a hint that the end is here, not a jump
+    const lim = this.maxOverscroll * 0.45;
+    const amp = Math.max(-lim, Math.min(lim, v * 14));
+    if (Math.abs(amp) < 4) return;
+    this.setOverscroll(0);
+    this.overscrollAnim = this.zoomLayer.animate(
+      [{ translate: '0 0' }, { translate: `0 ${amp.toFixed(1)}px`, offset: 0.28 }, { translate: '0 0' }],
+      { duration: 460, easing: 'cubic-bezier(0.25, 0.8, 0.35, 1)' },
+    );
+    this.overscrollAnim.id = 'overscroll';
+  }
+
   /**
    * How far back the view can go: the whole scrollback, plus what the keyboard pan hides
    * at the top (with the keyboard up, the first lines would be out of reach otherwise).
    */
   private maxScroll(): number {
-    return this.term.buffer.active.baseY * this.lineHeight + this.pan;
+    return Math.max(0, this.term.buffer.active.baseY * this.lineHeight + this.pan - this.lift);
   }
 
   /** The session closed: no more frames, timers or markers. */
@@ -405,14 +627,49 @@ export class BanglaRenderer {
     this.schedule();
   }
 
-  /** Visual-only zoom while pinching (cheap); the real font size is set when it ends. */
-  previewZoom(scale: number | null) {
-    this.zoom = scale ?? 1;
-    this.zoomLayer.style.transitionDuration = '0s';
-    this.applyLayerTransform();
+  // ---- a new text size, shown without the jumps ----
+  // A text size change resizes the terminal: the text re-wraps, the program redraws (agents
+  // in several goes — half-drawn frames, a logo in pieces). Meanwhile a still copy of the
+  // picture as it was stays on top; once the program is done, it fades into the new one.
+  private still: HTMLElement | null = null;
+  /** Keep the picture as it is now on screen while the real one changes underneath. */
+  freezePicture() {
+    this.dropGhost();
+    const g = this.zoomLayer.cloneNode(true) as HTMLElement;
+    g.classList.add('term-ghost');
+    g.setAttribute('aria-hidden', 'true');
+    // its sizes stay the old ones when the screen's change — the line height too (it's
+    // inherited as a number: without it the text sat half a line below its colours)
+    for (const v of ['--cw', '--lh', '--fs', '--bn-fs', '--bw']) g.style.setProperty(v, this.el.style.getPropertyValue(v));
+    g.style.fontSize = `${this.opts.fontSize}px`;
+    g.style.lineHeight = `${this.lineHeight}px`;
+    this.el.append(g);
+    this.still = g;
+    this.zoomLayer.style.opacity = '0';
+  }
+  /** The new picture is ready: the still copy fades into it. */
+  revealPicture(ms = 300) {
+    const g = this.still;
+    this.still = null;
+    this.zoomLayer.style.opacity = '';
+    if (!g) return;
+    if (!this.opts.animate || ms <= 0) {
+      g.remove();
+      return;
+    }
+    const ease = 'cubic-bezier(0.33, 0, 0.2, 1)';
+    const out = g.animate([{ opacity: 1, filter: 'blur(0px)' }, { opacity: 0, filter: 'blur(1.5px)' }], { duration: ms, easing: ease, fill: 'forwards' });
+    out.onfinish = () => g.remove();
+    this.zoomLayer.animate([{ opacity: 0 }, { opacity: 1 }], { duration: ms, easing: ease });
+  }
+  /** (another size change while the last one is still fading: finish that at once) */
+  dropGhost() {
+    this.still?.remove();
+    this.still = null;
+    this.zoomLayer.style.opacity = '';
   }
 
-  /** Vertical pan of the whole screen (keeps the cursor above the keyboard) + pinch zoom. */
+  /** Vertical pan of the whole screen (keeps the cursor above the keyboard). */
   private pan = 0;
   private applyLayerTransform() {
     const t = `translateY(${(-this.pan).toFixed(1)}px)` + (this.zoom !== 1 ? ` scale(${this.zoom})` : '');
@@ -423,10 +680,15 @@ export class BanglaRenderer {
   /** Time of the last output (set by the session). */
   lastOutput = 0;
   private holdUntil = 0;
+  private holdQuiet = 60;
   private syncSince = 0;
-  /** After a resize, programs clear and redraw: keep the old picture until they're done. */
-  holdForRedraw(ms = 300) {
+  /**
+   * After a resize, programs clear and redraw: keep the old picture until they're done
+   * (output quiet for [quiet] ms, at most [ms]).
+   */
+  holdForRedraw(ms = 300, quiet = 60) {
     this.holdUntil = performance.now() + ms;
+    this.holdQuiet = quiet;
   }
   private shouldWait(): boolean {
     const now = performance.now();
@@ -435,8 +697,8 @@ export class BanglaRenderer {
       if (!this.syncSince) this.syncSince = now;
       if (now - this.syncSince < 250) return true;
     } else this.syncSince = 0;
-    // after a resize: wait until output has been quiet for 60 ms (at most holdForRedraw ms)
-    return now < this.holdUntil && now - this.lastOutput < 60;
+    // after a resize: wait until output has been quiet for a moment (at most holdForRedraw ms)
+    return now < this.holdUntil && now - this.lastOutput < this.holdQuiet;
   }
 
   private applyMetrics() {
@@ -560,6 +822,14 @@ export class BanglaRenderer {
     // door on a phone (Claude Code's welcome art is made of them).
     const shade = cp === 0x2591 ? 0.25 : cp === 0x2592 ? 0.5 : cp === 0x2593 ? 0.75 : 0;
     if (shade) return `<span class="dg" style="${width}${style}"><i class="sh" style="opacity:${shade}"></i></span>`;
+    // Powerline separators and rounded ends as the font draws them (as in Settings' pictures
+    // of the prompt styles): a band through the middle of the row — rounded nubs and small
+    // arrows on the bar, not ends as tall as the row. Sized to the row as the pictures are
+    // (11.5 px glyphs in a 21 px row), against the side of the bar they belong to.
+    if (cp >= 0xe0b0 && cp <= 0xe0bf) {
+      const side = (cp - 0xe0b0) % 4 < 2 ? 'l' : 'r';
+      return `<span class="dg" style="${width}${style}"><i class="pf ${side}"><b>${String.fromCodePoint(cp)}</b></i></span>`;
+    }
     const pl = POWERLINE[cp];
     if (pl) {
       const paint = pl.fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.2" vector-effect="non-scaling-stroke"';
@@ -568,8 +838,8 @@ export class BanglaRenderer {
     return null;
   }
 
-  /** Build the HTML for one buffer line. */
-  rowToHtml(line: IBufferLine | undefined, cols: number): string {
+  /** Build the HTML for one buffer line (from cell [from] on). */
+  rowToHtml(line: IBufferLine | undefined, cols: number, from = 0, bar = false): string {
     if (!line) return '';
     const cw = this.cellWidth;
     const cell = (this.cell = line.getCell(0, this.cell) ?? this.cell);
@@ -587,11 +857,16 @@ export class BanglaRenderer {
     let bnPieces: { css: string; text: string }[] = [];
     let bnCells = 0;
 
+    let monoCells = 0;
     const flushMono = () => {
       if (monoStyle === null) return;
-      html += monoStyle ? `<span style="${monoStyle}">${esc(monoText)}</span>` : esc(monoText);
+      if (bar) {
+        // a prompt bar's text, smaller, centred in the cells it takes (the grid stays)
+        html += `<span class="cmp" style="${monoStyle}width:${(monoCells * cw).toFixed(2)}px">${esc(monoText)}</span>`;
+      } else html += monoStyle ? `<span style="${monoStyle}">${esc(monoText)}</span>` : esc(monoText);
       monoStyle = null;
       monoText = '';
+      monoCells = 0;
     };
     const flushBn = () => {
       if (bnFont === null) return;
@@ -646,7 +921,7 @@ export class BanglaRenderer {
       bnCells += w;
     };
 
-    for (let x = 0; x < cols; x++) {
+    for (let x = from; x < cols; x++) {
       const c = line.getCell(x, cell);
       if (!c) break;
       const w = c.getWidth();
@@ -654,6 +929,21 @@ export class BanglaRenderer {
       const chars = c.getChars();
       const st = this.styleOf(c);
       const cp = chars.length ? chars.codePointAt(0)! : 32;
+      if ((cp === 0x2500 || cp === 0x2501) && w === 1) {
+        // A run of ─ (a rule line) as one span: cell-sized pieces at fractional x
+        // leave hairline gaps where the browser rounds their edges.
+        let n = 1;
+        for (; x + n < cols; n++) {
+          const nx = (this.probe = line.getCell(x + n, this.probe));
+          if (!nx || nx.getWidth() !== 1 || nx.getChars().codePointAt(0) !== cp || this.styleOf(nx).css !== st.css) break;
+        }
+        flushMono();
+        flushBn();
+        const t = cp === 0x2500 ? 'var(--bw)' : 'calc(var(--bw) * 2)';
+        html += `<span class="dg" style="width:${(n * cw).toFixed(2)}px;${st.css}background:linear-gradient(currentColor,currentColor) 0 50%/100% ${t} no-repeat;${bgOf(st.css)}"></span>`;
+        x += n - 1;
+        continue;
+      }
       if ((cp >= 0x2500 && cp <= 0x259f) || (cp >= 0xe0b0 && cp <= 0xe0bf)) {
         const d = this.drawn(cp, w, st.css);
         if (d) {
@@ -684,7 +974,9 @@ export class BanglaRenderer {
         continue;
       }
       flushBn();
-      if (cls === 'box' || (cls === 'mono' && w > 1)) {
+      // (on a prompt's bar line icons stay in the text's run: the piece — icon and text —
+      // is centred in its cells as one, with no gap opening between them)
+      if ((cls === 'box' || (cls === 'mono' && w > 1)) && !bar) {
         flushMono();
         // Nerd Font icons (private use area) are wider than a cell: let them spill into the
         // next cell (usually a space) instead of being clipped, like other terminals do.
@@ -696,11 +988,13 @@ export class BanglaRenderer {
       const text = cls === 'space' ? ' ' : chars;
       if (monoStyle === st.css) {
         monoText += text;
+        monoCells += w;
         continue;
       }
       flushMono();
       monoStyle = st.css;
       monoText = text;
+      monoCells = w;
     }
     flushMono();
     flushBn();
@@ -746,7 +1040,24 @@ export class BanglaRenderer {
     return trimmed;
   }
 
+  /** A suggestion's or placeholder's look: dim, or the shell's suggestion grey. */
+  private isDimCell(line: IBufferLine, x: number): boolean {
+    const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
+    if (!c) return false;
+    if (c.getChars() === '' || c.getChars() === ' ') return true; // (spaces go with it)
+    return !!c.isDim() || (c.isFgRGB() && c.getFgColor() === 0x6c7086);
+  }
+
   /** Cells up to the last one with text (wide characters count as two). */
+  /** Cells up to the line's last visible character (spaces don't count). */
+  private textEnd(line: IBufferLine, cols: number): number {
+    for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
+      const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
+      if (c && (c.getWidth() === 0 || c.getChars().trim() !== '')) return x + 1;
+    }
+    return 0;
+  }
+
   private usedCells(line: IBufferLine, cols: number): number {
     for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
       const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
@@ -793,8 +1104,11 @@ export class BanglaRenderer {
     // line number down: move the rendered rows along instead of rebuilding them.
     const reflowed = this.lastCols !== 0 && cols !== this.lastCols;
     this.lastCols = cols;
+    const gen0 = this.trimGen;
     const trimmed = this.checkTrim(buf.type === 'normal', reflowed);
     if (trimmed > 0) this.shiftRows(trimmed);
+    // (lines numbered anew: a selection of the output would now point at other text)
+    if (trimmed > 0 || this.trimGen !== gen0) this.onLinesRenumbered?.();
 
     // A different buffer (alt screen), a resize (reflow), or a trim we couldn't measure
     // invalidate the line → row mapping.
@@ -815,15 +1129,58 @@ export class BanglaRenderer {
     // when the lines were re-wrapped to a new width (zoom, rotation).
     const vm = this.viewMarker;
     if (reflowed && this.scrollPx > 0 && buf.type === 'normal' && vm && !vm.isDisposed && vm.line >= 0) {
-      this.scrollPx = (buf.baseY - vm.line - this.viewFrac) * lh;
+      this.scrollPx = (buf.baseY - vm.line - this.viewFrac) * lh - this.lift; // (topPx counts the lift)
       this.lastBaseY = buf.baseY;
     } else if (buf.baseY !== this.lastBaseY) {
       if (this.scrollPx > 0 && buf.baseY > this.lastBaseY) this.scrollPx += (buf.baseY - this.lastBaseY) * lh;
       this.lastBaseY = buf.baseY;
     }
+    // The last line drawn: the cursor's (plus one), or anything below it (a completion
+    // menu, a TUI's footer).
+    const visible = this.el.clientHeight - 12;
+    let lastY = buf.cursorY + 1;
+    for (let y = rows - 1; y > lastY; y--) {
+      if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
+        lastY = y;
+        break;
+      }
+    }
+    // Chat layout for agent sessions (Antigravity, Claude Code): the input box — from the
+    // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
+    // While the conversation is shorter than the screen its header stays at the top and a
+    // gap opens above the box. With earlier lines in the scrollback (a tall dialog that went
+    // away, a screen that grew) those fill the top instead: no empty rows under the box.
+    let splitLine = -1;
+    let splitGap = 0;
+    let lift = 0;
+    // (a floating keyboard too: the box stays at the bottom — the keyboard can be moved off it)
+    if (this.anchorBottom && buf.type === 'normal' && visible > 0) {
+      const free = visible - (lastY + 1) * lh;
+      if (free >= lh) {
+        let box = -1;
+        for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
+          if (isRule(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '')) {
+            box = y;
+            break;
+          }
+        }
+        if (box >= 0) {
+          lift = Math.min(free, buf.baseY * lh);
+          if (this.scrollPx === 0 && free - lift >= lh) {
+            splitLine = buf.baseY + box;
+            splitGap = free - lift;
+          }
+        }
+      }
+    }
+    if (lift !== this.lift) {
+      // reading back: the lines looked at stay where they are
+      if (this.scrollPx > 0) this.scrollPx -= lift - this.lift;
+      this.lift = lift;
+    }
     this.scrollPx = Math.max(0, Math.min(this.maxScroll(), this.scrollPx));
 
-    const topPx = buf.baseY * lh - this.scrollPx; // y of the first visible pixel row
+    const topPx = buf.baseY * lh - this.lift - this.scrollPx; // y of the first visible pixel row
     if (this.scrollPx > 0 && buf.type === 'normal') {
       const topLine = Math.max(0, Math.floor(topPx / lh));
       if (!vm || vm.isDisposed || vm.line !== topLine) {
@@ -835,8 +1192,12 @@ export class BanglaRenderer {
       vm.dispose();
       this.viewMarker = null;
     }
+    // Every line the screen can show: more than the terminal's rows when the picture is taller
+    // than they are — a pinch-zoom preview (scaled down), the keyboard pan, a screen that grew
+    // before the terminal was resized. Drawing only `rows` lines left those parts black.
+    const shown = Math.ceil((this.el.clientHeight / Math.max(0.25, this.zoom) + this.pan) / lh) + 1;
     const first = Math.max(0, Math.floor(topPx / lh) - OVERSCAN);
-    const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + rows + OVERSCAN);
+    const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + Math.max(rows, shown) + OVERSCAN);
 
     for (const [i, r] of this.rows) {
       if (i < first || i > last) {
@@ -847,33 +1208,6 @@ export class BanglaRenderer {
     const cursorLine = buf.baseY + buf.cursorY;
     const motion = !!this.opts.animate && buf.type === 'normal';
 
-    // The last line drawn: the cursor's (plus one), or anything below it (a completion
-    // menu, a TUI's footer).
-    const visible = this.el.clientHeight - 12;
-    let lastY = buf.cursorY + 1;
-    for (let y = rows - 1; y > lastY; y--) {
-      if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
-        lastY = y;
-        break;
-      }
-    }
-    // Chat layout for agent sessions (Antigravity, Claude Code): while the conversation is
-    // shorter than the screen, its header stays at the top and the input box — from the
-    // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
-    let splitLine = -1;
-    let splitGap = 0;
-    if (this.anchorBottom && !BanglaRenderer.floatingKeyboard && buf.type === 'normal' && buf.baseY === 0 && this.scrollPx === 0 && visible > 0) {
-      const free = visible - (lastY + 1) * lh;
-      if (free >= lh) {
-        for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
-          if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
-            splitLine = y;
-            break;
-          }
-        }
-        if (splitLine >= 0) splitGap = free;
-      }
-    }
     const rowY = (i: number) => i * lh + (splitLine >= 0 && i >= splitLine ? splitGap : 0);
     const splitMoved = splitLine !== this.splitLine || splitGap !== this.splitGap;
     if (splitMoved) {
@@ -882,8 +1216,25 @@ export class BanglaRenderer {
       for (const [i, r] of this.rows) r.el.style.transform = `translateY(${rowY(i)}px)`;
     }
     const canReveal = motion && !this.suppressReveal && this.scrollPx === 0;
+    // An agent's input box (the rule line above the prompt, the prompt, its footer) is
+    // erased and drawn again below each new piece of a reply — always on fresh lines. It is
+    // not new output: it must not fade in (it flickered), and its lines stay "unrevealed" so
+    // the reply that takes their place still fades in.
+    let boxTop = -1;
+    for (let y = cursorLine - 1; y >= Math.max(buf.baseY, cursorLine - 8); y--) {
+      if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
+        boxTop = y;
+        break;
+      }
+    }
+    // No box (a shell, a command's output): the line being typed — all of it, when it wraps
+    // — is seen as it's written; it never fades in (not even its first row, once the cursor
+    // wraps below it, nor "Done" finishing "Reading package lists... ").
+    let inputTop = cursorLine;
+    if (boxTop < 0) while (inputTop > buf.baseY && buf.getLine(inputTop)?.isWrapped) inputTop--;
     const revealed: HTMLDivElement[] = [];
     const labels = this.labelsByLine(first, last);
+    const bars = this.barsByLine(first, last);
     for (let i = first; i <= last; i++) {
       let r = this.rows.get(i);
       const live = i >= buf.baseY; // the live screen can still change; scrollback can't
@@ -893,8 +1244,17 @@ export class BanglaRenderer {
       let label = labels.get(i);
       // never cover text: only when the row leaves room at its right end (zoomed in,
       // re-wrapped, or a wide prompt bar → no clock on that row)
-      if (label && line && this.usedCells(line, cols) > cols - 13) label = undefined;
-      const html = this.rowToHtml(line, cols) + (label ? `<span class="rlabel"><b>\uf017</b>${esc(label)}</span>` : '');
+      // (the account's text is small: about 0.8 of a cell a letter)
+      const room = !label ? 0 : label.acct ? Math.ceil(label.text.length * 0.8) + 4 : label.note ? label.text.length + 3 : 13;
+      // (the account follows its line's text — "Claude Max  ✉ you@gmail.com" — the others
+      // sit at the right edge)
+      const end = label?.acct && line ? this.textEnd(line, cols) : 0;
+      if (label && line && (label.acct ? end + 1 : this.usedCells(line, cols)) > cols - room) label = undefined;
+      const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.acct
+        ? `<span class="rlabel acct" style="left:${((end + 1) * this.cellWidth).toFixed(1)}px;right:auto"><b>\uf0e0</b>${esc(label.text)}</span>`
+        : label.note
+        ? `<span class="rlabel note">${esc(label.text)}</span>`
+        : `<span class="rlabel"><b>\uf017</b>${esc(label.text)}</span>`);
       let el: HTMLDivElement | null = null;
       if (!r) {
         el = this.spare.pop() ?? document.createElement('div');
@@ -910,9 +1270,9 @@ export class BanglaRenderer {
       }
       // A line getting content for the first time is new output: let it fade in. Not the
       // line being typed on (that would make typing feel slow).
-      if (el && i > this.revealedUpTo && live && line?.translateToString(true)) {
+      if (el && i > this.revealedUpTo && (boxTop < 0 || i < boxTop) && live && line?.translateToString(true)) {
         this.revealedUpTo = i;
-        if (canReveal && i !== cursorLine) revealed.push(el);
+        if (canReveal && i < inputTop) revealed.push(el);
       }
     }
     this.suppressReveal = false;
@@ -942,9 +1302,10 @@ export class BanglaRenderer {
       const overflow = rows * lh - visible;
       const below = (lastY + 1) * lh - visible;
       let pan = 0;
-      if (splitLine >= 0) {
+      if (splitLine >= 0 || lift > 0) {
         pan = 0; // the chat layout already fits the screen
-      } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal') {
+      } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal' &&
+        !this.anchorBottom && this.el.clientHeight > this.el.clientWidth) {
         // the input line (and what's drawn under it) in the upper half of the screen (not in
         // full-screen programs — vim, less: their top half couldn't be scrolled back to)
         pan = Math.max(0, Math.min((lastY + 1) * lh - visible * 0.5, buf.cursorY * lh));
@@ -964,15 +1325,52 @@ export class BanglaRenderer {
 
     const showCursor = this.cursorVisible && this.scrollPx < lh;
     const wasShown = this.cursorEl.style.display !== 'none';
-    const composing = !!this.preedit && this.scrollPx < lh;
+    // the keyboard's text that the program hasn't echoed yet: shown until the cursor moves
+    let pre = this.preedit;
+    const w = this.waitAt;
+    if (w) {
+      const still = w.line === cursorLine && w.x === buf.cursorX && performance.now() < w.until;
+      if (!still) {
+        this.waitAt = null;
+        this.ghost = '';
+        this.holdPreedit = false;
+      } else if (this.holdPreedit) pre = ''; // ⌫ first: the word would show twice
+    }
+    const ghost = this.ghost;
+    const composing = !!(pre || ghost) && this.scrollPx < lh;
     this.cursorEl.style.display = showCursor && !composing ? 'block' : 'none';
     this.preeditEl.style.display = composing ? 'block' : 'none';
     if (composing) {
-      if (this.preeditEl.textContent !== this.preedit) this.preeditEl.textContent = this.preedit;
-      // near the right edge it moves left so the whole word stays on screen
-      const x0 = Math.min(buf.cursorX, cols - 1) * this.cellWidth;
-      const x = Math.max(0, Math.min(x0, cols * this.cellWidth - this.preeditEl.offsetWidth));
-      this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${rowY(cursorLine)}px)`;
+      const cw = this.cellWidth;
+      const cx = Math.min(buf.cursorX, cols);
+      const line = buf.getLine(cursorLine);
+      // What follows the cursor on its row moves aside, as the word is inserted there (else
+      // the word covered only part of it: "e" + "ami" over "echo hello" read "eami hello").
+      // A dim tail — a suggestion or placeholder that typing replaces — is just hidden.
+      const used = line ? this.usedCells(line, cols) : 0;
+      let end = used;
+      while (end > cx && line && this.isDimCell(line, end - 1)) end--;
+      const tail = end > cx ? this.rowToHtml(line, end, cx) : '';
+      const word = `<span class="pw">${esc(ghost)}${pre ? `<u>${esc(pre)}</u>` : ''}</span>`;
+      const set = (html: string) => {
+        if (html === this.preeditHtml) return;
+        this.preeditHtml = html;
+        this.preeditEl.innerHTML = html;
+      };
+      set(word + tail);
+      // (covers the row's own text after the cursor)
+      this.preeditEl.style.minWidth = `${(Math.max(0, used - cx) * cw).toFixed(2)}px`;
+      // a word that doesn't fit on the row goes to the start of the next one, as it will
+      // when typed (moving it left covered what was typed before it)
+      const wordPx = (this.preeditEl.firstElementChild as HTMLElement).offsetWidth;
+      const wraps = cx * cw + wordPx > cols * cw + 0.5 && cx > 0;
+      if (wraps) {
+        set(word);
+        this.preeditEl.style.minWidth = '';
+      }
+      const x = wraps ? 0 : cx * cw;
+      const y = rowY(wraps ? cursorLine + 1 : cursorLine);
+      this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${y}px)`;
     }
     if (showCursor) {
       // cursorX == cols while a line wrap is pending: keep it on the grid
@@ -983,9 +1381,13 @@ export class BanglaRenderer {
         // Typing moves it along its line: there it jumps at once (a glide trails behind the
         // letters and makes typing feel slow). It glides only to another line (after Enter).
         const sameLine = cursorLine === this.lastCursorLine;
+        // typing on past the end of the row (or ⌫ back over it): the line wraps — no slide
+        // diagonally across the text
+        const lower = Math.max(cursorLine, this.lastCursorLine);
+        const wrapped = Math.abs(cursorLine - this.lastCursorLine) === 1 && !!buf.getLine(lower)?.isWrapped;
         // … and when the screen itself slides (new line at the bottom, keyboard pan): the
         // cursor rides along inside it instead of a second, out-of-step glide (it dipped)
-        const far = !wasShown || sameLine || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved ||
+        const far = !wasShown || sameLine || wrapped || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved ||
           this.insetsMoving || slide || panEased;
         this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
         this.cursorEl.style.transform = t;
@@ -998,11 +1400,83 @@ export class BanglaRenderer {
       }
       this.cursorEl.classList.toggle('focused', this.focused);
     }
+    this.drawSelection(rowY, first, last);
+    this.drawDock(boxTop, buf.baseY + lastY, cursorLine);
     const scrolled = this.scrollPx >= lh;
     if (scrolled !== this.wasScrolled) {
       this.wasScrolled = scrolled;
       this.onScrolled?.(scrolled);
     }
+  }
+
+  // ---- an agent's input box stays put while the conversation scrolls ----
+  // Like a chat app: reading back through a reply, the box (the rule line above the prompt
+  // down to its footer) stays at the bottom, where it is when not scrolled; the conversation
+  // scrolls behind it. (It's a copy, drawn while scrolled back; the box itself is still in
+  // the terminal, where the program keeps drawing it.)
+  private dockEl: HTMLDivElement | null = null;
+  private dockRows: HTMLDivElement[] = [];
+  private dockHtml: string[] = [];
+  private dockCursor: HTMLDivElement | null = null;
+  private drawDock(boxTop: number, end: number, cursorLine: number) {
+    const buf = this.term.buffer.active;
+    const on = this.anchorBottom && buf.type === 'normal' && boxTop >= 0 && end >= boxTop && this.scrollPx > 0.5;
+    const host = this.el.parentElement;
+    if (!on) {
+      if (this.dockEl && !this.dockEl.hidden) {
+        this.dockEl.hidden = true;
+        host?.style.setProperty('--dock-h', '0px');
+      }
+      return;
+    }
+    if (!this.dockEl) {
+      this.dockEl = document.createElement('div');
+      this.dockEl.className = 'term-dock';
+      this.dockCursor = document.createElement('div');
+      this.dockCursor.className = 'term-cursor';
+      this.dockEl.append(this.dockCursor);
+      this.el.append(this.dockEl);
+    }
+    const lh = this.lineHeight;
+    const cols = this.term.cols;
+    const n = Math.min(12, end - boxTop + 1);
+    // where the box is when not scrolled (the zoom layer starts 6 px down)
+    this.dockEl.style.top = `${(6 + (boxTop - buf.baseY) * lh - this.pan + this.lift).toFixed(1)}px`;
+    for (let k = 0; k < n; k++) {
+      let r = this.dockRows[k];
+      if (!r) {
+        r = document.createElement('div');
+        r.className = 'term-row';
+        r.style.transform = `translateY(${k * lh}px)`;
+        this.dockEl.append(r);
+        this.dockRows[k] = r;
+      }
+      r.style.transform = `translateY(${k * lh}px)`;
+      const html = this.rowToHtml(buf.getLine(boxTop + k), cols);
+      if (this.dockHtml[k] !== html) {
+        this.dockHtml[k] = html;
+        r.innerHTML = html;
+      }
+    }
+    while (this.dockRows.length > n) {
+      this.dockRows.pop()!.remove();
+      this.dockHtml.pop();
+    }
+    const c = this.dockCursor!;
+    const inBox = this.cursorVisible && cursorLine >= boxTop && cursorLine < boxTop + n;
+    c.style.display = inBox ? 'block' : 'none';
+    if (inBox) {
+      c.style.transform = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${(cursorLine - boxTop) * lh}px)`;
+      c.classList.toggle('focused', this.focused);
+    }
+    this.dockEl.hidden = false;
+    // (the "back to the bottom" button sits above it)
+    const top = 6 + (boxTop - buf.baseY) * lh - this.pan + this.lift;
+    host?.style.setProperty('--dock-h', `${Math.max(0, this.el.clientHeight - top).toFixed(0)}px`);
+  }
+  /** The pinned input box on screen, if shown (a tap on it goes back to the bottom). */
+  dockRect(): DOMRect | null {
+    return this.dockEl && !this.dockEl.hidden ? this.dockEl.getBoundingClientRect() : null;
   }
 
   /** The cell under a client point: x/y relative to the visible screen, plus the buffer line. */
@@ -1021,15 +1495,6 @@ export class BanglaRenderer {
     const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY + this.scrollOffset));
     return { x, y, line };
   }
-}
-
-/** A horizontal rule drawn with box characters (the border of a TUI's input box). */
-function isRule(text: string): boolean {
-  const t = text.trim();
-  if (t.length < 8) return false;
-  let n = 0;
-  for (const ch of t) if ('─━╌╍┄┅═'.includes(ch)) n++;
-  return n / t.length >= 0.8;
 }
 
 /** Bengali vowel signs, virama, candrabindu/anusvara/visarga, nukta, au length mark. */

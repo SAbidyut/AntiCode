@@ -155,7 +155,16 @@ class SessionService : Service() {
         ubuntu.onBusyChanged = { mainHandler.post { updateForeground() } }
         createChannel()
         // after the UI had its start: unpack the helper files once, ahead of the first launch
-        mainHandler.postDelayed({ Thread({ ubuntu.prepare() }, "ubuntu-prepare").start() }, 1500)
+        // (a failure here must not take the app down: launch() tries again and says what's wrong)
+        mainHandler.postDelayed({
+            Thread({
+                try {
+                    ubuntu.prepare()
+                } catch (e: Throwable) {
+                    android.util.Log.w("SessionService", "preparing Ubuntu failed", e)
+                }
+            }, "ubuntu-prepare").start()
+        }, 1500)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -229,7 +238,7 @@ class SessionService : Service() {
     fun saveLive() {
         val arr = org.json.JSONArray()
         for (s in sessions.values.sortedBy { it.createdAt }) {
-            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label))
+            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label).put("dir", s.startDir))
         }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LIVE, arr.toString()).apply()
     }
