@@ -1039,6 +1039,15 @@ export class BanglaRenderer {
   }
 
   /** Cells up to the last one with text (wide characters count as two). */
+  /** Cells up to the line's last visible character (spaces don't count). */
+  private textEnd(line: IBufferLine, cols: number): number {
+    for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
+      const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
+      if (c && (c.getWidth() === 0 || c.getChars().trim() !== '')) return x + 1;
+    }
+    return 0;
+  }
+
   private usedCells(line: IBufferLine, cols: number): number {
     for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
       const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
@@ -1223,9 +1232,12 @@ export class BanglaRenderer {
       // re-wrapped, or a wide prompt bar → no clock on that row)
       // (the account's text is small: about 0.8 of a cell a letter)
       const room = !label ? 0 : label.acct ? Math.ceil(label.text.length * 0.8) + 4 : label.note ? label.text.length + 3 : 13;
-      if (label && line && this.usedCells(line, cols) > cols - room) label = undefined;
+      // (the account follows its line's text — "Claude Max  ✉ you@gmail.com" — the others
+      // sit at the right edge)
+      const end = label?.acct && line ? this.textEnd(line, cols) : 0;
+      if (label && line && (label.acct ? end + 1 : this.usedCells(line, cols)) > cols - room) label = undefined;
       const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.acct
-        ? `<span class="rlabel acct"><b>\uf0e0</b>${esc(label.text)}</span>`
+        ? `<span class="rlabel acct" style="left:${((end + 1) * this.cellWidth).toFixed(1)}px;right:auto"><b>\uf0e0</b>${esc(label.text)}</span>`
         : label.note
         ? `<span class="rlabel note">${esc(label.text)}</span>`
         : `<span class="rlabel"><b>\uf017</b>${esc(label.text)}</span>`);

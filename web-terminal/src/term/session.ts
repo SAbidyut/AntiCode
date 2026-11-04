@@ -285,10 +285,10 @@ export class TerminalSession {
       const t = buf.getLine(y)?.translateToString(true) ?? '';
       const hit = a.name === 'claude' ? /\bClaude (Max|Pro|Team|Enterprise|API)\b/.test(t) : y > start && t.trim() !== '';
       if (!hit) continue;
-      // that line, or a header line next to it with room at its right end (the label is
-      // never drawn over text)
+      // right after that line's text ("Claude Max  ✉ you@gmail.com"), or after a header line
+      // next to it when that one has no room (never drawn over text)
       const need = Math.ceil(a.text.length * 0.8) + 5;
-      const fits = (l: number) => l >= start && l < buf.length && (buf.getLine(l)?.translateToString(true).length ?? 0) + need <= this.term.cols;
+      const fits = (l: number) => l >= start && l < buf.length && (buf.getLine(l)?.translateToString(true).trimEnd().length ?? 0) + 1 + need <= this.term.cols;
       const at = [y, y + 1, y + 2, y - 1, y - 2].find(fits) ?? y;
       this.renderer.setRightLabel(a.text, false, true, at - (buf.baseY + buf.cursorY));
       a.from.dispose();
