@@ -322,8 +322,17 @@ agy() { printf '\e]7770;widths;joined\a'; command agy "$@"; }
 # ---------------------------------------------------------------- ble.sh look & attach
 if [[ ${BLE_VERSION-} ]]; then
   bleopt char_width_mode=west          # same widths as the app's renderer, no terminal probing
-  # suggestions after a short pause, not on every key (each key costs more under proot)
-  bleopt complete_auto_delay=120
+  # Typing stays quick under proot, where every file check and every program started is slow:
+  # - grey suggestions come from the history only. The completion system behind the other
+  #   kind runs programs (git, apt …) and lists every command in $PATH at each pause, and
+  #   the keys typed meanwhile waited. (Tab still completes as before.)
+  blehook/eval-after-load complete '_ble_complete_auto_source=(history)'
+  # - the history search is cheap and gives way to the next key: the suggestion shows with
+  #   the letter typed, not a moment later as a separate redraw
+  bleopt complete_auto_delay=30
+  # - no file checks for every word typed (a stat per word, per key; on /storage each is
+  #   slow), and no second redraw when they ran late
+  bleopt highlight_filename=
   bleopt highlight_timeout_sync=20 complete_timeout_auto=800 2>/dev/null
   bleopt complete_menu_style=align-nowrap
   bleopt edit_abell= edit_vbell=       # no beeps or flashes
@@ -335,10 +344,13 @@ if [[ ${BLE_VERSION-} ]]; then
   bleopt canvas_winch_action=redraw-prev
   bleopt prompt_eol_mark=$'\e[38;2;108;112;134m⏎\e[m'
   ble-face auto_complete='fg=#6c7086'
-  ble-face command_builtin='fg=#f38ba8' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'
-  ble-face command_alias='fg=#89dceb' command_keyword='fg=#89b4fa'
-  ble-face syntax_quoted='fg=#a6e3a1' syntax_comment='fg=#6c7086' syntax_error='fg=#1e1e2e,bg=#f38ba8'
-  ble-face filename_directory='underline,fg=#89b4fa' region='bg=#45475a'
+  # Calm colours: a command that exists is green (cd, echo … too — not red as if wrong); a
+  # word not (yet) a command is soft red text, not a red block flashing behind every
+  # half-typed word.
+  ble-face command_builtin='fg=#a6e3a1' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'
+  ble-face command_alias='fg=#a6e3a1' command_keyword='fg=#89b4fa'
+  ble-face syntax_quoted='fg=#f9e2af' syntax_comment='fg=#6c7086' syntax_error='fg=#eba0ac'
+  ble-face region='bg=#45475a'
   # ⌫ removes a whole letter cluster — a letter with its vowel signs, a conjunct (ক্ষ) —
   # like Claude Code and the app's Bangla keyboard do (ble.sh itself removes one code point).
   function ble/widget/anticode-delete-backward-cluster {
