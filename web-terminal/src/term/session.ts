@@ -159,11 +159,12 @@ export class TerminalSession {
     this.term.parser.registerEscHandler({ final: 'c' }, showAgain(true));
     this.term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, showAgain(false));
     // OSC 7 ; file://host/path — the shell's folder (our prompt sends it)
-    // (only from our prompt — host "android", the path as it is: a remote shell over ssh, or
-    // some program's output, doesn't decide where tapped file names are looked for)
+    // (only from our prompt — host "android-<token>", the path as it is: a remote shell over
+    // ssh, or some program's output, doesn't decide where tapped file names are looked for)
     this.term.parser.registerOscHandler(7, (data) => {
-      const m = /^file:\/\/android(\/.*)$/.exec(data);
-      if (m) this.cwd = m[1];
+      const m = /^file:\/\/android(?:-([0-9A-Za-z]*))?(\/.*)$/.exec(data);
+      const token = this.bridge.linkToken();
+      if (m && (!token || m[1] === token)) this.cwd = m[2];
       return true;
     });
     // OSC 7770 ; <cmd> ; …  — from our scripts inside Ubuntu.
@@ -177,8 +178,11 @@ export class TerminalSession {
       const trusted = signed || !token;
       // (not again while a restored session's old output is replayed)
       if (cmd === 'open' && args.length && !this.replaying) this.onLink?.(args.join(';'), trusted);
-      else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
-      else if (cmd === 'rnote') this.renderer.setRightLabel(rest.join(';'), true); // its "took 5s"
+      // The rest come from our prompt and scripts, signed the same way; printed by anything
+      // else they're ignored (they'd fake a clock, the agent layout, the widths …).
+      else if (!trusted) return true;
+      else if (cmd === 'rprompt') this.renderer.setRightLabel(args.join(';')); // the prompt's clock
+      else if (cmd === 'rnote') this.renderer.setRightLabel(args.join(';'), true); // its "took 5s"
       else if (cmd === 'bar') this.renderer.markBarLine(); // its bar line (text drawn smaller)
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
       else if (cmd === 'done') {
@@ -188,17 +192,17 @@ export class TerminalSession {
       } else if (cmd === 'exec') {
         // a command starts: by letters… (Antigravity counts conjuncts whole — its start script
         // says "exec;agy" and runs the program itself, not the shell's agy wrapper)
-        this.setProgramWidths(rest[0] === 'agy');
+        this.setProgramWidths(args[0] === 'agy');
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
-        if (/^(agy|claude)$/.test(rest[0] ?? '')) {
+        if (/^(agy|claude)$/.test(args[0] ?? '')) {
           this.renderer.anchorBottom = true;
-          this.expectAccount(rest[0]);
+          this.expectAccount(args[0]);
         }
       }
-      else if (cmd === 'widths') this.setProgramWidths(rest[0] === 'joined'); // …unless it's agy
-      else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
+      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined'); // …unless it's agy
+      else if (cmd === 'storage' && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
     // Colour queries (OSC 10/11/12 ; ?) — TUIs like the Antigravity CLI ask for the

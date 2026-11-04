@@ -28,6 +28,10 @@ clear() { command clear "$@"; __agy_prompted=; }
 reset() { command reset "$@"; __agy_prompted=; }
 
 __agy_style_file="$HOME/.config/agy-terminal/prompt"
+# The app's messages (OSC 7770: the prompt's clock, "a command started" …) carry the token
+# the app gave this shell: the same text printed by anything else — `cat` of a file, a
+# program's output — is ignored, so it can't fake a clock, the agent layout or widths.
+__agy_tok=${ANTICODE_LINK_TOKEN:-}
 
 # ---------------------------------------------------------------- git branch (no subprocess)
 __agy_git_branch() {
@@ -132,14 +136,14 @@ __agy_folder_need() {
 # (on the first line of a style with coloured blocks: tells the app to draw that line's text
 # at the size of the Settings pictures — smaller than the terminal's text, the blocks as
 # tall as now)
-__agy_bar='\[\e]7770;bar\a\]'
+__agy_bar="\[\e]7770;bar;${__agy_tok}\a\]"
 
 __agy_prompt() {
   local status=$?
   __agy_in_prompt=1
   # tell the app the command is done (its "task finished" notification), and where the
   # shell is (OSC 7: a file name tapped in the terminal is looked for here)
-  printf '\e]7770;done\a\e]7;file://android%s\a' "${PWD//[[:cntrl:]]/}"
+  printf '\e]7770;done;%s\a\e]7;file://android-%s%s\a' "$__agy_tok" "$__agy_tok" "${PWD//[[:cntrl:]]/}"
 
   local style=powerline
   [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
@@ -149,14 +153,18 @@ __agy_prompt() {
   path=${path//[[:cntrl:]]/?}
   __agy_txt=()
   __agy_path=$path
-  # a blank line between the last output and the prompt (not on the first prompt)
-  local gap=
-  [ -n "$__agy_prompted" ] && gap='\n'
+  local cols=${COLUMNS:-80}
+  # ble.sh runs this again when the width changes: the same prompt, drawn anew where it was
+  local redraw=
+  [[ ${BLE_VERSION-} ]] && [ -z "$__agy_t0" ] && [ -n "$__agy_cols" ] && [ "$cols" != "$__agy_cols" ] && redraw=1
+  # A blank line between the last output and the prompt (not on the first prompt, nor after
+  # clear). Printed here, not part of PS1: Ctrl-L draws PS1 again at the top of a cleared
+  # screen, and a blank line there pushed the prompt down a row.
+  [ -n "$__agy_prompted" ] && [ -z "$redraw" ] && printf '\n'
   __agy_prompted=1
   local ok='166;227;161' bad='243;139;168'
   local mark=$ok
   (( status != 0 )) && mark=$bad
-  local cols=${COLUMNS:-80}
   # how long the command took (its start noted by PS0 / ble.sh): shown from 2 s
   local took=
   if [ -n "$__agy_t0" ]; then
@@ -166,8 +174,8 @@ __agy_prompt() {
     elif (( d >= 2 )); then took="${d}s"
     fi
     __agy_took=$took
-  elif [[ ${BLE_VERSION-} ]] && [ "$cols" != "$__agy_cols" ]; then
-    took=$__agy_took # ble.sh draws the prompt again for a new width: the same command's time
+  elif [ -n "$redraw" ]; then
+    took=$__agy_took # (drawn again for a new width: the same command's time)
   else
     __agy_took=
   fi
@@ -182,7 +190,7 @@ __agy_prompt() {
       (( room < cols / 2 )) && room=$(( cols / 2 ))
       __agy_fit_path "$room"
       __agy_txt=("$__agy_p")
-      PS1="${gap}${title}\[\e[38;2;137;220;235m\]\${__agy_txt[0]}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+      PS1="${title}\[\e[38;2;137;220;235m\]\${__agy_txt[0]}\[\e[0m\] \[\e[38;2;${mark}m\]❯\[\e[0m\] "
       ;;
     *)
       # the branch as shown: a long one cut to a quarter of the width (at least 8 cells)
@@ -213,8 +221,8 @@ __agy_ps_pure() {
   local line="\[\e[38;2;116;169;233m\]\${__agy_txt[0]}"
   [ -n "$__agy_b" ] && line+=" \[\e[38;2;140;200;120m\]\${__agy_txt[1]}"
   local note=
-  [ -n "$took" ] && note="\[\e]7770;rnote;${took}\a\]"
-  PS1="${gap}${note}${title}${line} \[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  [ -n "$took" ] && note="\[\e]7770;rnote;${__agy_tok};${took}\a\]"
+  PS1="${note}${title}${line} \[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
 # rainbow / lean — the first line runs to the right edge: on the left the system, the folder
@@ -304,7 +312,7 @@ __agy_ps_bar() {
   # (lean has no blocks: its text stays the terminal's size)
   local bar=
   [ "$kind" = rainbow ] && bar=$__agy_bar
-  PS1="${gap}${bar}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${bar}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
 # capsule — rounded capsules with a short line between, framed: ╭─ … on top, ╰─❯ below; the
@@ -332,7 +340,7 @@ __agy_ps_capsule() {
   __agy_fit_path $(( room - w ))
   __agy_txt=("$__agy_p" "$__agy_b")
   local rclock=
-  [ -n "$clock" ] && rclock="\[\e]7770;rprompt;${clock}\a\]"
+  [ -n "$clock" ] && rclock="\[\e]7770;rprompt;${__agy_tok};${clock}\a\]"
   local frame='108;112;134' line="\[\e[38;2;108;112;134m\]╭─" bg tx k=0
   for i in "${C[@]}"; do
     bg=${i%%|*}; tx=${i#*|}
@@ -341,7 +349,7 @@ __agy_ps_capsule() {
     line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b6'"\[\e[48;2;${bg}m\e[38;2;30;30;46m\]${tx}\[\e[0m\e[38;2;${bg}m\]"$'\ue0b4'
   done
   line+="\[\e[0m\]"
-  PS1="${gap}${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${frame}m\]╰─\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${frame}m\]╰─\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
 # powerline — pastel segments with rounded ends; the clock at the right edge (the app draws
@@ -373,7 +381,7 @@ __agy_ps_powerline() {
   if (( room - width < __agy_need )) && [[ ${segs[1]} == *@BRANCH* ]]; then unset 'segs[1]'; segs=("${segs[@]}"); __agy_width; fi
   __agy_fit_path $(( room - width ))
 
-  [ -n "$clock" ] && rclock="\[\e]7770;rprompt;${clock}\a\]"
+  [ -n "$clock" ] && rclock="\[\e]7770;rprompt;${__agy_tok};${clock}\a\]"
 
   local fg='30;30;46' line= n=${#segs[@]} bg next
   for (( i = 0; i < n; i++ )); do
@@ -391,13 +399,13 @@ __agy_ps_powerline() {
   done
 
   # window title (shown on the app's tab) + segments + input line
-  PS1="${gap}${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 PROMPT_COMMAND=__agy_prompt
 # a command starts (the app's "task finished" notification waits for the prompt again); its
 # start time is noted for the prompt's "took 5s" (the empty slice prints nothing — the
 # arithmetic sets the variable)
-PS0=$'\e]7770;exec\a''${PS0:0:$((__agy_t0=SECONDS,0))}'
+PS0=$'\e]7770;exec;'"${__agy_tok}"$'\a''${PS0:0:$((__agy_t0=SECONDS,0))}'
 
 # ---------------------------------------------------------------- agents on demand
 # Typing 'agy' or 'claude' before they are installed installs them first.
@@ -413,7 +421,7 @@ command_not_found_handle() {
 # Antigravity counts a Bangla conjunct (ক্ষ) as one character, as Unicode 15.1 does; the shell
 # and other programs (Claude Code too) count its letters. The terminal draws it the program's
 # way, so the program's tables and input line come out right (back to letters at the prompt).
-agy() { printf '\e]7770;widths;joined\a'; command agy "$@"; }
+agy() { printf '\e]7770;widths;%s;joined\a' "$__agy_tok"; command agy "$@"; }
 
 # ---------------------------------------------------------------- ble.sh look & attach
 if [[ ${BLE_VERSION-} ]]; then
@@ -484,7 +492,7 @@ if [[ ${BLE_VERSION-} ]]; then
     local w=${1#"${1%%[![:space:]]*}"}
     w=${w%%[[:space:]]*}
     w=${w//[[:cntrl:];]/}
-    printf '\e]7770;exec;%s\a' "${w:0:40}"
+    printf '\e]7770;exec;%s;%s\a' "$__agy_tok" "${w:0:40}"
     __agy_t0=$SECONDS
   }
   blehook PREEXEC+='__agy_preexec "$1"' 2>/dev/null

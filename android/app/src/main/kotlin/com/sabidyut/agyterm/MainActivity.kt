@@ -771,7 +771,7 @@ class MainActivity : ComponentActivity() {
     private fun selftestConjuncts() {
         Log.i(SELFTEST, "phase 3f: conjunct widths for commands and for agy")
         web.evaluateJavascript("__selftest.send(\"clear; printf 'CL:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'; " +
-            "printf '\\\\e]7770;widths;joined\\\\a'; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'\")", null)
+            "printf '\\\\e]7770;widths;%s;joined\\\\a' \\\"\$ANTICODE_LINK_TOKEN\\\"; printf 'CJ:x\\u0995\\u09cd\\u09b7y\\u0985\\u09cd\\u09af\\u09bez\\\\n'\")", null)
         main.postDelayed({
             web.evaluateJavascript(
                 "(() => { const b = __selftest.session().term.buffer.active;" +

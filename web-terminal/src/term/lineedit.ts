@@ -205,11 +205,39 @@ export class LineEditor {
       const s = line === a.line ? a.x : area.start[i];
       const e = line === b.line ? Math.min(b.x, Math.max(area.end[i], a.line === line ? a.x : 0)) : area.end[i];
       n += this.units(line, s, e);
-      // to the next row: a line break, or the space the program wrapped at (none when the
-      // row simply continues, as the shell's long lines do)
-      if (line < b.line && !this.buf.getLine(line + 1)?.isWrapped) n++;
+      // to the next row: a line break or the space the program wrapped at is a step; a row
+      // that simply goes on (the shell's long lines, a long word cut at the box's edge) isn't
+      if (line < b.line && this.rowBreak(line, area)) n++;
     }
     return fwd ? n : -n;
+  }
+
+  /**
+   * What lies between a row of the area and the next one: '' — the row simply goes on (the
+   * shell's long command lines; in a box, a long word or link cut at its right edge), ' ' — the
+   * box wrapped at a space (a long row), '\n' — a new line (a short row).
+   */
+  private rowBreak(line: number, area: Area): '' | ' ' | '\n' {
+    if (!area.box || this.buf.getLine(line + 1)?.isWrapped) return '';
+    const i = line - area.top;
+    const end = area.end[i];
+    if (end >= this.term.cols - 2 && i + 1 < area.start.length) {
+      // a letter in the box's last column (Claude Code's text runs to cols − 2; a row wrapped
+      // at a space ends sooner) and one at the start of the next row: a word cut in two
+      const last = this.charAt(line, end - 1);
+      const first = this.charAt(line + 1, area.start[i + 1]);
+      if (last.trim() && first.trim()) return '';
+    }
+    return end >= this.term.cols - 16 ? ' ' : '\n';
+  }
+
+  /** The character drawn in a cell (the start of a wide one), '' for none. */
+  private charAt(y: number, x: number): string {
+    const line = this.buf.getLine(y);
+    if (!line || x < 0) return '';
+    let c = line.getCell(x, this.cell);
+    if (c && c.getWidth() === 0 && x > 0) c = line.getCell(x - 1, this.cell);
+    return c?.getChars() ?? '';
   }
 
   /** Letters (clusters) starting in cells [s, e) of a line. */
@@ -428,12 +456,7 @@ export class LineEditor {
       const s = line === sel.a.line ? sel.a.x : area.start[i];
       const e = line === sel.b.line ? sel.b.x : area.end[i];
       out += this.buf.getLine(line)?.translateToString(true, s, Math.max(s, e)) ?? '';
-      if (line < sel.b.line) {
-        if (this.buf.getLine(line + 1)?.isWrapped) continue;
-        // a box's row that ran to its right edge was wrapped at a space; a short one ended
-        // with a new line
-        out += area.box && area.end[i] >= this.term.cols - 16 ? ' ' : '\n';
-      }
+      if (line < sel.b.line) out += this.rowBreak(line, area);
     }
     return out;
   }
