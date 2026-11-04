@@ -555,100 +555,11 @@ export class BanglaRenderer {
     this.schedule();
   }
 
-  /**
-   * Pinch zoom, the picture's part: [px] is the text size the fingers ask for; the picture is
-   * scaled from the size it's drawn at (the terminal takes the new size when the fingers
-   * lift). It's scaled about the point that keeps the cursor where it will be once the
-   * terminal has the new size — so letting go doesn't move anything:
-   * - a shell: the terminal keeps the cursor's row while it fits, else the cursor ends on the
-   *   last row (and a full screen grows from the bottom);
-   * - an agent's input box, at the bottom: the bottom stays;
-   * - full-screen programs and history being read: the top stays.
-   */
-  previewSize(px: number | null) {
-    const z = px === null ? 1 : px / this.opts.fontSize;
-    if (Math.abs(z - 1) <= 0.0005) {
-      this.zoom = 1;
-      this.zoomLayer.style.transformOrigin = '';
-    } else {
-      if (this.zoom === 1) this.previewAnchor = this.pickAnchor();
-      this.zoom = z;
-      this.zoomLayer.style.transformOrigin = `0 ${this.anchorY(z).toFixed(1)}px`;
-    }
-    this.zoomLayer.style.transitionDuration = '0s';
-    this.applyLayerTransform();
-    if (this.previewAnchor === 'split' || this.splitLine >= 0) this.schedule(); // (the gap follows)
-    // the still copy of the last picture (while the terminal takes a new size) follows too
-    const g = this.still;
-    if (g && px !== null) {
-      const zg = px / this.stillFont;
-      const sp = this.stillSplit;
-      if (sp) {
-        // the gap is what the screen has at that size: header at the top, box at the bottom
-        const visible = this.el.clientHeight - 12;
-        const gap = visible / zg - sp.content;
-        const fits = gap >= sp.lh;
-        g.style.transformOrigin = fits ? '0 0' : `0 ${visible.toFixed(1)}px`;
-        for (const r of sp.lower) {
-          const y = (r.y + (fits ? gap : 0)).toFixed(2);
-          r.el.style.transform = r.x === null ? `translateY(${y}px)` : `translate(${r.x}, ${y}px)`;
-        }
-      }
-      g.style.transform = `translateY(${(-this.stillPan).toFixed(1)}px) scale(${zg.toFixed(4)})`;
-    }
-  }
-  /** (compat) a plain scale of the picture */
-  previewZoom(scale: number | null) {
-    this.previewSize(scale === null ? null : this.opts.fontSize * scale);
-  }
-  private previewAnchor: 'top' | 'bottom' | 'cursor' | 'split' = 'top';
-  /** Rows drawn down to the last one with something on it (from the last render). */
-  private contentRows = 0;
-  /** Where the cursor's middle is drawn (zoom layer px), from the last render. */
-  private cursorLayerY = 0;
-  private pickAnchor(): 'top' | 'bottom' | 'cursor' | 'split' {
-    const buf = this.term.buffer.active;
-    if (buf.type === 'alternate' || this.scrollPx > 0) return 'top';
-    // an agent: header at the top, input box at the bottom (the chat layout's gap between)
-    if (this.anchorBottom) return 'split';
-    return 'cursor';
-  }
-  /** The scale's fixed point (zoom layer px) for the scale [z]. */
-  private anchorY(z: number): number {
-    const visible = this.el.clientHeight - 12;
-    if (this.previewAnchor === 'top') return this.pan;
-    if (this.previewAnchor === 'bottom') return this.pan + visible;
-    if (this.previewAnchor === 'split') {
-      // while it all fits at that size, from the top (the gap above the input box takes up
-      // the rest — see render); once it doesn't, the input box stays at the bottom
-      const fits = !this.pan && (this.contentRows + 1) * this.lineHeight * z <= visible && this.term.buffer.active.baseY === 0;
-      return fits ? this.pan : this.pan + visible;
-    }
-    // where the cursor's row will be at the new size: xterm keeps it while it fits, moves it
-    // to the last row when it doesn't; a full screen with history above it grows from below
-    const buf = this.term.buffer.active;
-    const rows = this.term.rows;
-    const rows2 = Math.max(1, Math.round(rows / z));
-    const y = buf.cursorY;
-    let y2 = y;
-    if (rows2 < rows) y2 = Math.min(y, rows2 - 1);
-    else if (y >= rows - 1 && buf.baseY > 0) y2 = y + Math.min(buf.baseY, rows2 - rows);
-    const lh = this.lineHeight;
-    const from = this.cursorLayerY; // its middle now
-    const to = (y2 + 0.5) * lh * z; // its middle then, at the new size
-    // a point p goes to oy + z (p - oy): pick oy so that [from] lands on [to]
-    const oy = (to - z * from) / (1 - z);
-    return Math.max(-20 * visible, Math.min(20 * visible, oy));
-  }
-
   // ---- a new text size, shown without the jumps ----
   // A text size change resizes the terminal: the text re-wraps, the program redraws (agents
   // in several goes — half-drawn frames, a logo in pieces). Meanwhile a still copy of the
   // picture as it was stays on top; once the program is done, it fades into the new one.
   private still: HTMLElement | null = null;
-  private stillFont = 14;
-  private stillPan = 0;
-  private stillSplit: { lower: { el: HTMLElement; x: string | null; y: number }[]; content: number; lh: number } | null = null;
   /** Keep the picture as it is now on screen while the real one changes underneath. */
   freezePicture() {
     this.dropGhost();
@@ -660,28 +571,6 @@ export class BanglaRenderer {
     for (const v of ['--cw', '--lh', '--fs', '--bn-fs', '--bw']) g.style.setProperty(v, this.el.style.getPropertyValue(v));
     g.style.fontSize = `${this.opts.fontSize}px`;
     g.style.lineHeight = `${this.lineHeight}px`;
-    g.style.transformOrigin = this.zoomLayer.style.transformOrigin || '0 0';
-    // (the copy was drawn at this size; the pinch scales it from there)
-    this.stillFont = this.opts.fontSize;
-    this.stillPan = this.pan;
-    // An agent's chat layout (header at the top, input box at the bottom, a gap between): the
-    // copy keeps that while it's scaled — its lower part's places are noted, to move with the
-    // gap (else the box slid off the bottom as the copy grew).
-    this.stillSplit = null;
-    if (this.splitLine >= 0 && this.previewAnchor === 'split') {
-      const boundary = this.splitLine * this.lineHeight + this.splitGap - 0.5;
-      const lower: { el: HTMLElement; x: string | null; y: number }[] = [];
-      const vp = g.firstElementChild as HTMLElement | null;
-      for (const c of Array.from(vp?.children ?? []) as HTMLElement[]) {
-        const t = c.style.transform;
-        const m = /translateY\(([-\d.]+)px\)/.exec(t) ?? /translate\(([-\d.]+px),\s*([-\d.]+)px\)/.exec(t);
-        if (!m) continue;
-        const x = m.length > 2 ? m[1] : null;
-        const y = parseFloat(m.length > 2 ? m[2] : m[1]);
-        if (y >= boundary) lower.push({ el: c, x, y: y - this.splitGap });
-      }
-      this.stillSplit = { lower, content: this.contentRows * this.lineHeight, lh: this.lineHeight };
-    }
     this.el.append(g);
     this.still = g;
     this.zoomLayer.style.opacity = '0';
@@ -701,14 +590,14 @@ export class BanglaRenderer {
     out.onfinish = () => g.remove();
     this.zoomLayer.animate([{ opacity: 0 }, { opacity: 1 }], { duration: ms, easing: ease });
   }
-  /** (a new pinch while the last change is still fading: finish it at once) */
+  /** (another size change while the last one is still fading: finish that at once) */
   dropGhost() {
     this.still?.remove();
     this.still = null;
     this.zoomLayer.style.opacity = '';
   }
 
-  /** Vertical pan of the whole screen (keeps the cursor above the keyboard) + pinch zoom. */
+  /** Vertical pan of the whole screen (keeps the cursor above the keyboard). */
   private pan = 0;
   private applyLayerTransform() {
     const t = `translateY(${(-this.pan).toFixed(1)}px)` + (this.zoom !== 1 ? ` scale(${this.zoom})` : '');
@@ -1175,11 +1064,8 @@ export class BanglaRenderer {
     // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
     let splitLine = -1;
     let splitGap = 0;
-    this.contentRows = lastY + 1;
     if (this.anchorBottom && !BanglaRenderer.floatingKeyboard && buf.type === 'normal' && buf.baseY === 0 && this.scrollPx === 0 && visible > 0) {
-      // (pinching: the gap is what the screen will have at that size — the header stays at
-      // the top, the input box at the bottom, as they will be once the size is taken)
-      const free = (this.previewAnchor === 'split' && this.zoom !== 1 ? visible / this.zoom : visible) - (lastY + 1) * lh;
+      const free = visible - (lastY + 1) * lh;
       if (free >= lh) {
         for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
           if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
@@ -1294,7 +1180,6 @@ export class BanglaRenderer {
     }
     this.applyLayerTransform();
 
-    this.cursorLayerY = rowY(cursorLine) - topPx + lh / 2;
     const showCursor = this.cursorVisible && this.scrollPx < lh;
     const wasShown = this.cursorEl.style.display !== 'none';
     // the keyboard's text that the program hasn't echoed yet: shown until the cursor moves

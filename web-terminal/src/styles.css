@@ -444,22 +444,6 @@ body[data-screen='home']::before {
 .term-viewport { position: absolute; left: 0; top: 0; right: 0; height: 0; will-change: transform; }
 /* the picture as it was, fading into the new text size (see freezePicture) */
 .term-zoom.term-ghost { pointer-events: none; z-index: 1; }
-/* the text size while pinching */
-#zoom-chip {
-  position: absolute; left: 50%; top: 14px; z-index: 30; pointer-events: none;
-  display: flex; align-items: baseline; gap: 8px; padding: 7px 16px 7px 14px;
-  background: rgba(20, 22, 30, 0.9); color: var(--text); border-radius: 99px;
-  border: 1px solid var(--line-strong); box-shadow: var(--shadow);
-  font: 600 15px var(--ui-font); font-variant-numeric: tabular-nums;
-  opacity: 0; transform: translate(-50%, -6px) scale(0.92);
-  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease);
-}
-#zoom-chip.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
-#zoom-chip b { font: 700 12px var(--mono); color: var(--accent); letter-spacing: 0.5px; }
-#zoom-chip small { font-size: 11px; color: var(--muted); font-weight: 500; }
-#zoom-chip.pop span { animation: zoom-pop 0.22s var(--ease); }
-@keyframes zoom-pop { 40% { transform: scale(1.18); } }
-#zoom-chip span { display: inline-block; min-width: 1.4em; text-align: center; }
 .term-row {
   position: absolute; left: 0; top: 0; right: 0;
   height: var(--lh); white-space: pre; overflow: visible;

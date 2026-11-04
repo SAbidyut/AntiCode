@@ -25,6 +25,8 @@ interface Prefs {
   animations: boolean;
   /** Asked once (on the first session) to run without battery restrictions. */
   askedBackground: boolean;
+  /** Which layout the prefs were saved with (2: fixed text size, no pinch zoom). */
+  layout?: number;
 }
 /** Driven by the emulator self test (no system dialogs over the terminal then). */
 const SELFTEST = new URLSearchParams(location.search).has('selftest');
@@ -57,6 +59,15 @@ function loadPrefs(): Prefs {
   const legacy: Record<string, ThemeName> = { night: 'midnight', light: 'paper' };
   p.theme = legacy[p.theme] ?? p.theme;
   if (!(p.theme in THEMES)) p.theme = 'midnight';
+  // The text size is fixed now (no pinch zoom; Settings → Text size changes it): whatever
+  // size pinching left behind goes back to the standard one, once.
+  if ((p.layout ?? 0) < 2) {
+    p.fontSize = DEFAULT_PREFS.fontSize;
+    p.layout = 2;
+    try {
+      localStorage.setItem('prefs', JSON.stringify(p));
+    } catch { /* storage unavailable */ }
+  }
   return p;
 }
 function savePrefs() {
@@ -993,7 +1004,52 @@ async function selectionAction(act: string) {
   }
 }
 
-// ================================================================ touch: tap, scroll (with inertia), pinch, long-press
+// ================================================================ Android's fling
+// A fling goes as far and as long, and slows down along the same curve, as in any list on
+// the phone (Android's OverScroller): the terminal's scrolling feels like the rest of it.
+const MAX_FLING = 8; // px/ms — Android's fastest fling (8000 dp/s)
+const INFLEXION = 0.35;
+const DECEL = Math.log(0.78) / Math.log(0.9);
+const FLING_FRICTION = 0.015;
+const PHYSICAL = 9.80665 * 39.37 * 160 * 0.84; // gravity × inches per metre × dp per inch × feel
+/** How far (px) and how long (ms) a fling at [v] px/ms goes. */
+function flingPlan(v: number) {
+  const l = Math.log((INFLEXION * Math.abs(v) * 1000) / (FLING_FRICTION * PHYSICAL));
+  return {
+    duration: 1000 * Math.exp(l / (DECEL - 1)),
+    distance: FLING_FRICTION * PHYSICAL * Math.exp((DECEL / (DECEL - 1)) * l),
+  };
+}
+/** The share of a fling's distance covered at [t] (share of its time): Android's spline. */
+const SPLINE: number[] = (() => {
+  const p1 = 0.5 * INFLEXION;
+  const p2 = 1 - 1 * (1 - INFLEXION);
+  const out: number[] = [];
+  let xMin = 0;
+  for (let i = 0; i < 100; i++) {
+    const alpha = i / 100;
+    let xMax = 1;
+    let x = 0, coef = 0;
+    for (;;) {
+      x = xMin + (xMax - xMin) / 2;
+      coef = 3 * x * (1 - x);
+      const tx = coef * ((1 - x) * p1 + x * p2) + x * x * x;
+      if (Math.abs(tx - alpha) < 1e-5) break;
+      if (tx > alpha) xMax = x;
+      else xMin = x;
+    }
+    out.push(coef * ((1 - x) * 0.5 + x) + x * x * x);
+  }
+  out.push(1);
+  return out;
+})();
+function splineAt(t: number): number {
+  if (t >= 1) return 1;
+  const i = Math.floor(t * 100);
+  return SPLINE[i] + (t * 100 - i) * (SPLINE[i + 1] - SPLINE[i]);
+}
+
+// ================================================================ touch: tap, scroll (with inertia), long-press
 function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
   s.renderer.onSelectionDrawn = () => {
@@ -1031,17 +1087,30 @@ function bindTerminalGestures(s: TerminalSession) {
   /** The finger's recent positions: a fling's speed is measured over them, not two events. */
   let track: [number, number][] = [];
   /**
-   * Fling speed (px/ms) from the last ~100 ms of the drag — touch events can come 1 ms apart
-   * (two in one frame), and the speed between just those two was huge: the text flew across
-   * everything and slammed into the end. Capped like a phone's lists.
+   * The finger's speed as it lifts (px/ms), measured the way Android does: a straight line
+   * fitted to its last ~100 ms — one touch event out of step (two in a frame, 1 ms apart)
+   * can't throw it — and none if it had stopped before lifting. Capped at Android's limit.
    */
   const flingSpeed = (now: number) => {
     const recent = track.filter(([t]) => now - t <= 100);
-    if (recent.length < 2) return 0;
-    const [t1, y1] = recent[0];
-    const [t2, y2] = recent[recent.length - 1];
-    if (now - t2 > 60 || t2 - t1 < 20) return 0; // the finger stopped before letting go
-    return Math.max(-3.5, Math.min(3.5, (y2 - y1) / (t2 - t1)));
+    if (recent.length < 3) return 0;
+    const t1 = recent[0][0];
+    const t2 = recent[recent.length - 1][0];
+    if (now - t2 > 50 || t2 - t1 < 20) return 0; // the finger stopped before letting go
+    let mt = 0, my = 0;
+    for (const [t, y] of recent) {
+      mt += t;
+      my += y;
+    }
+    mt /= recent.length;
+    my /= recent.length;
+    let num = 0, den = 0;
+    for (const [t, y] of recent) {
+      num += (t - mt) * (y - my);
+      den += (t - mt) * (t - mt);
+    }
+    if (!den) return 0;
+    return Math.max(-MAX_FLING, Math.min(MAX_FLING, num / den));
   };
   let longTimer = 0, inertia = 0, caughtFling = false;
   /** Pulled past the top or bottom of the scrollback (px, the rubber band). */
@@ -1071,71 +1140,17 @@ function bindTerminalGestures(s: TerminalSession) {
     s.renderer.releaseOverscroll();
     return true;
   };
-  // ---- pinch: the text size, live ----
-  // Two fingers down: from then until both are up again it's a pinch, nothing else — the
-  // first finger's bit of scrolling is undone, and the finger left down after the other
-  // lifts doesn't scroll. The terminal takes the size while the fingers move:
-  // - at the shell's prompt each whole size as it comes (the shell redraws in a moment);
-  // - with a program running (an agent clears its screen and redraws it all, slowly on a
-  //   phone) whenever the fingers rest a moment, and every ~0.35 s while they keep going.
-  // Each change happens under a still copy of the picture, which gives way only once the new
-  // picture is complete (never a half-drawn frame); in between, the picture scales by the
-  // little that's left, about the point that keeps things where the new size puts them. When
-  // the fingers lift the size is (nearly) there already: under half a size settles.
-  let pinching = false;
-  let pinch0 = 0;
-  /** The size the fingers ask for (fractional), and the whole size shown in the chip. */
-  let pinchTarget = prefs.fontSize, pinchShown = prefs.fontSize;
-  /** The size when the current two fingers came down (a finger can lift and come back). */
-  let pinchBase = prefs.fontSize;
+  // ---- two fingers: nothing ----
+  // The text size is fixed (Settings → Text size); a second finger only stops the gesture:
+  // from then until every finger is up, nothing scrolls (the first finger's bit of scrolling
+  // is undone) and nothing is tapped.
+  let multi = false;
   /** Where the view was when the first finger came down. */
   let downScroll = 0, downAt = 0;
-  /** A size change under way (its still copy up); when the last one ended. */
-  let stepping = false, stepEnded = 0, pinchEnded = false, zoomGen = 0, restTimer = 0;
-  const fingersApart = () => {
-    const [a, b] = [...touches.values()];
-    return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
-  };
-  /** The shell's prompt is up (it redraws at once); anything else redraws at its own pace. */
-  const quickRedraw = () => s.term.buffer.active.type === 'normal' && s.edit.atPrompt && !s.renderer.anchorBottom;
-  /** Take the size the fingers are at now (if it's a new one), under a still copy. */
-  const zoomStep = () => {
-    if (stepping) return;
-    const want = Math.round(pinchTarget);
-    if (want === s.renderer.options.fontSize) {
-      if (pinchEnded) finishPinch();
-      return;
-    }
-    const gen = zoomGen;
-    stepping = true;
-    s.renderer.freezePicture();
-    s.renderer.setOptions({ fontSize: want }); // (this terminal now; the others at the end)
-    s.fit(true);
-    s.renderer.previewSize(pinchTarget);
-    whenRedrawn(s, quickRedraw(), () => {
-      if (gen !== zoomGen) return;
-      s.renderer.previewSize(pinchTarget); // (about the new layout's fixed point)
-      s.renderer.revealPicture(0); // (the new picture is complete: it simply takes over)
-      stepping = false;
-      stepEnded = performance.now();
-      if (pinching) {
-        // (the fingers went on meanwhile: keep up)
-        if (quickRedraw() || Math.abs(pinchTarget - s.renderer.options.fontSize) >= 1.5) zoomStep();
-      } else zoomStep();
-    });
-  };
-  const finishPinch = () => {
-    pinchEnded = false;
-    const final = s.renderer.options.fontSize;
-    animateSize(s, pinchTarget, final, 160, () => {
-      if (prefs.fontSize !== final) setFontSize(final, true); // (the other terminals, and saved)
-    });
-  };
-  const startPinch = () => {
-    pinching = true;
+  const startMulti = () => {
+    multi = true;
     clearTimeout(longTimer);
     stopInertia();
-    // what the first finger did a moment before the second came down: undone, at once
     if (stretch) {
       stretch = 0;
       s.renderer.setOverscroll(0);
@@ -1144,41 +1159,6 @@ function bindTerminalGestures(s: TerminalSession) {
       s.renderer.scrollPx = downScroll;
       s.renderer.schedule();
     }
-    cancelZoomAnim();
-    s.renderer.dropGhost(); // (the last size change still under way: done)
-    zoomGen++;
-    stepping = pinchEnded = false;
-    pinchTarget = pinchShown = pinchBase = s.renderer.options.fontSize;
-    pinch0 = fingersApart();
-    showZoomChip(pinchTarget, false);
-  };
-  const movePinch = () => {
-    pinchTarget = Math.max(MIN_FONT, Math.min(MAX_FONT, pinchBase * (fingersApart() / pinch0)));
-    s.renderer.previewSize(pinchTarget);
-    const size = Math.round(pinchTarget);
-    if (size !== pinchShown) {
-      pinchShown = size;
-      navigator.vibrate?.(3); // a light tick at each size, like a dial
-      showZoomChip(size, true);
-    }
-    if (stepping) return;
-    if (quickRedraw()) {
-      zoomStep();
-      return;
-    }
-    // a program: when the fingers rest a moment, or every ~0.35 s while they keep moving
-    clearTimeout(restTimer);
-    restTimer = window.setTimeout(() => {
-      if (pinching) zoomStep();
-    }, 150);
-    if (performance.now() - stepEnded > 350 && Math.abs(pinchTarget - s.renderer.options.fontSize) >= 1.5) zoomStep();
-  };
-  const endPinch = () => {
-    pinching = false;
-    clearTimeout(restTimer);
-    hideZoomChip();
-    pinchEnded = true;
-    zoomStep(); // (the last size, if it isn't there yet — then it settles)
   };
   const touches = new Map<number, { x: number; y: number }>();
 
@@ -1212,20 +1192,25 @@ function bindTerminalGestures(s: TerminalSession) {
     }
     return true;
   };
+  /** A fling: as far, as long and along the same slowing curve as any list on the phone. */
   const startInertia = (v: number, x: number, y: number) => {
-    let prev = performance.now();
+    const { duration, distance } = flingPlan(v);
+    const dir = Math.sign(v);
+    const t0 = performance.now();
+    let done = 0;
     const step = (now: number) => {
-      const dt = Math.min(32, now - prev);
-      prev = now;
-      const moving = scrollBy(v * dt, x, y);
-      // ran into the top or the bottom: a short bounce, like any list on the phone
+      const k = Math.min(1, (now - t0) / duration);
+      const at = splineAt(k) * distance;
+      const moving = scrollBy((at - done) * dir, x, y);
+      done = at;
+      // ran into the top or the bottom: a short bounce at the speed it had there
       if (!moving && s.term.buffer.active.type !== 'alternate') {
-        s.renderer.bounce(v);
+        const k2 = Math.min(1, k + 0.01);
+        s.renderer.bounce(((splineAt(k2) - splineAt(k)) * distance) / (0.01 * duration) * dir);
         inertia = 0;
         return;
       }
-      v *= Math.pow(0.945, dt / 16);
-      inertia = moving && Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
+      inertia = k < 1 ? requestAnimationFrame(step) : 0;
     };
     inertia = requestAnimationFrame(step);
   };
@@ -1239,16 +1224,10 @@ function bindTerminalGestures(s: TerminalSession) {
     wheelLines = 0;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size >= 2) {
-      if (touches.size > 2) return; // (a third finger: nothing)
-      if (!pinching) startPinch();
-      else {
-        // a finger lifted mid-pinch and came back: carry on from where it is
-        pinchBase = pinchTarget;
-        pinch0 = fingersApart();
-      }
+      if (!multi) startMulti();
       return;
     }
-    if (pinching) return; // (one finger of a pinch, still down)
+    if (multi) return; // (one finger of two, still down)
     downScroll = s.renderer.scrollPx;
     downAt = performance.now();
     startX = e.clientX;
@@ -1279,13 +1258,13 @@ function bindTerminalGestures(s: TerminalSession) {
   el.addEventListener('pointermove', (e) => {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pinching) {
-      if (touches.size === 2) movePinch();
-      return; // (the finger left down after the other lifted: nothing)
-    }
-    if (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8) {
+    if (multi) return; // (two fingers, or the one left down after the other lifted: nothing)
+    if (!moved && (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8)) {
       moved = true;
       clearTimeout(longTimer);
+      // (scrolling starts from here, as on Android: the content doesn't jump by the 8 px it
+      // took to tell a scroll from a tap)
+      if (Math.abs(e.clientY - startY) > 8) lastY = startY + Math.sign(e.clientY - startY) * 8;
     }
     if (!moved) return;
     const now = performance.now();
@@ -1299,8 +1278,8 @@ function bindTerminalGestures(s: TerminalSession) {
   const end = (e: PointerEvent) => {
     touches.delete(e.pointerId);
     clearTimeout(longTimer);
-    if (pinching) {
-      if (touches.size === 0) endPinch();
+    if (multi) {
+      if (touches.size === 0) multi = false;
       return; // (no fling, no tap)
     }
     if (e.type !== 'pointerup') {
@@ -1310,7 +1289,7 @@ function bindTerminalGestures(s: TerminalSession) {
     if (moved) {
       if (letGo()) return; // springs back instead of flinging on
       const v = flingSpeed(performance.now());
-      if (Math.abs(v) > 0.2) startInertia(v, e.clientX, e.clientY);
+      if (Math.abs(v) > 0.1) startInertia(v, e.clientX, e.clientY);
       return;
     }
     if (caughtFling) return;
@@ -1371,37 +1350,7 @@ function fitSoon() {
   }, 250);
 }
 
-// ---- text size changes, animated (pinch, Settings) ----
-const MIN_FONT = 9;
-const MAX_FONT = 28;
-let zoomAnim = 0;
-function cancelZoomAnim() {
-  cancelAnimationFrame(zoomAnim);
-  zoomAnim = 0;
-}
-/** The picture eases from one text size to another (what's left of a pinch, settling). */
-function animateSize(s: TerminalSession, from: number, to: number, ms: number, done: () => void) {
-  cancelZoomAnim();
-  if (!prefs.animations || Math.abs(from - to) < 0.01) {
-    s.renderer.previewSize(null);
-    done();
-    return;
-  }
-  const t0 = performance.now();
-  const step = (now: number) => {
-    const k = Math.min(1, (now - t0) / ms);
-    const e = 1 - Math.pow(1 - k, 3); // ease out
-    s.renderer.previewSize(from + (to - from) * e);
-    if (k < 1) zoomAnim = requestAnimationFrame(step);
-    else {
-      zoomAnim = 0;
-      s.renderer.previewSize(null);
-      done();
-    }
-  };
-  zoomAnim = requestAnimationFrame(step);
-}
-
+// ---- text size changes, animated (Settings → Text size) ----
 /**
  * Once the terminal has its new size and the program has redrawn for it (quiet for a moment,
  * or it's taking too long), [then] runs — on the frame that shows the new picture.
@@ -1441,31 +1390,9 @@ function zoomTo(size: number) {
   whenRedrawn(s, false, () => s.renderer.revealPicture(220));
 }
 
-let zoomChipTimer = 0;
-/** The text size while pinching, at the top of the terminal. */
-function showZoomChip(size: number, changed: boolean) {
-  let chip = document.getElementById('zoom-chip');
-  if (!chip) {
-    chip = h('div', { id: 'zoom-chip' }, h('b', {}, 'Aa'), h('span', {}), h('small', {}, 'px'));
-    $('#sessions').append(chip);
-  }
-  clearTimeout(zoomChipTimer);
-  chip.querySelector('span')!.textContent = String(size);
-  chip.classList.add('show');
-  if (changed) {
-    chip.classList.remove('pop');
-    void chip.offsetWidth; // (restart the pop)
-    chip.classList.add('pop');
-  }
-}
-function hideZoomChip() {
-  clearTimeout(zoomChipTimer);
-  zoomChipTimer = window.setTimeout(() => document.getElementById('zoom-chip')?.classList.remove('show'), 450);
-}
-
 function setFontSize(size: number, persist: boolean, say = false) {
   prefs.fontSize = size;
-  // (a terminal already at this size — the one just pinched — isn't drawn again)
+  // (a terminal already at this size isn't drawn again)
   for (const s of sessions.values()) if (s.renderer.options.fontSize !== size) s.renderer.setOptions({ fontSize: size });
   active?.fit();
   if (persist) {
@@ -2096,7 +2023,7 @@ async function boot() {
       home: () => showHome(),
       /** close the keyboard like the key bar's keyboard key */
       hideKeys: () => hideKeyboard(),
-      /** change the text size like a pinch does */
+      /** change the text size (as Settings does) */
       zoom: (px: number) => setFontSize(px, true),
       /** the active session, for tests */
       session: () => active,
