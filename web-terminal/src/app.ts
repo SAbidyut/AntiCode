@@ -1195,6 +1195,7 @@ function bindTerminalGestures(s: TerminalSession) {
   /** A fling: as far, as long and along the same slowing curve as any list on the phone. */
   const startInertia = (v: number, x: number, y: number) => {
     const { duration, distance } = flingPlan(v);
+    if (!(duration > 0 && distance > 0 && Number.isFinite(distance))) return; // (never a broken number)
     const dir = Math.sign(v);
     const t0 = performance.now();
     let done = 0;
@@ -1216,6 +1217,17 @@ function bindTerminalGestures(s: TerminalSession) {
   };
 
   el.addEventListener('pointerdown', (e) => {
+    // A new touch with no other finger down starts afresh. A finger lifted somewhere the
+    // terminal didn't hear of (over the key bar, a system gesture) was left counted as down:
+    // every next touch looked like a second finger, and scrolling stopped for good.
+    if (e.isPrimary) {
+      touches.clear();
+      multi = false;
+    }
+    // (and the terminal hears where its fingers lift, wherever that is)
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch { /* not capturable: fine */ }
     caughtFling = inertia !== 0 || wheelFrame !== 0; // a tap that only stops the scrolling isn't a tap
     stopInertia();
     // (a full-screen program's queued scroll steps stop too)
@@ -1325,6 +1337,9 @@ function bindTerminalGestures(s: TerminalSession) {
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
+  el.addEventListener('lostpointercapture', (e) => {
+    if (touches.has(e.pointerId)) end(e);
+  });
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     scrollBy(-e.deltaY, e.clientX, e.clientY);

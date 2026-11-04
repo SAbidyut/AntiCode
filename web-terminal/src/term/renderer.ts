@@ -460,6 +460,7 @@ export class BanglaRenderer {
 
   /** Scroll by pixels (positive = back in history). Returns false at an edge. */
   scrollByPixels(px: number): boolean {
+    if (!Number.isFinite(px)) return false;
     const next = Math.max(0, Math.min(this.maxScroll(), this.scrollPx + px));
     const moved = next !== this.scrollPx;
     this.scrollPx = next;
