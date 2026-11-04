@@ -1071,39 +1071,71 @@ function bindTerminalGestures(s: TerminalSession) {
     s.renderer.releaseOverscroll();
     return true;
   };
-  let pinch0 = 0, font0 = prefs.fontSize;
-  /** The text size the fingers ask for (fractional), and the whole size shown in the chip. */
-  let pinchTarget = prefs.fontSize, pinchShown = prefs.fontSize;
-  /** A size change is under way (the terminal resized, its program redrawing). */
-  let stepping = false, pinchEnded = false, zoomGen = 0;
-  /**
-   * The next whole size for the terminal, if the fingers have moved on to one: a still copy
-   * of the picture covers the change (and the program's half-drawn frames) until the new one
-   * is complete. Once the fingers have lifted and the size is reached, what's left of the
-   * scale (under half a size) settles.
-   */
-  const zoomStep = () => {
-    const want = Math.round(pinchTarget);
-    if (want !== s.renderer.options.fontSize) {
-      const gen = zoomGen;
-      stepping = true;
-      s.renderer.freezePicture();
-      s.renderer.setOptions({ fontSize: want }); // (this terminal now; the others at the end)
-      s.fit();
-      s.renderer.previewSize(pinchTarget);
-      whenRedrawn(s, () => {
-        if (gen !== zoomGen) return;
-        // (at once: a fade between two layouts showed both — the input line twice)
-        s.renderer.revealPicture(0);
-        stepping = false;
-        zoomStep();
-      });
+  // ---- pinch: the text size ----
+  // Two fingers down: from then until both are up again it's a pinch, nothing else — the
+  // first finger's bit of scrolling is undone, and the finger left down after the other
+  // lifts doesn't scroll (it did: the screen jumped about after every pinch). The picture
+  // scales with the fingers; the terminal takes the new size once, when they lift.
+  let pinching = false;
+  let pinch0 = 0;
+  /** The size the picture is drawn at, and the one the fingers ask for (fractional). */
+  let font0 = prefs.fontSize, pinchTarget = prefs.fontSize, pinchShown = prefs.fontSize;
+  /** The size when the current two fingers came down (a finger can lift and come back). */
+  let pinchBase = prefs.fontSize;
+  /** Where the view was when the first finger came down. */
+  let downScroll = 0, downAt = 0;
+  let zoomGen = 0;
+  const fingersApart = () => {
+    const [a, b] = [...touches.values()];
+    return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+  };
+  const startPinch = () => {
+    pinching = true;
+    clearTimeout(longTimer);
+    stopInertia();
+    // what the first finger did a moment before the second came down: undone, at once
+    if (stretch) {
+      stretch = 0;
+      s.renderer.setOverscroll(0);
+    }
+    if (performance.now() - downAt < 600 && s.renderer.scrollPx !== downScroll) {
+      s.renderer.scrollPx = downScroll;
+      s.renderer.schedule();
+    }
+    cancelZoomAnim();
+    s.renderer.dropGhost(); // (the last size change still fading in: done)
+    zoomGen++;
+    font0 = pinchTarget = pinchShown = pinchBase = s.renderer.options.fontSize;
+    pinch0 = fingersApart();
+    showZoomChip(font0, false);
+  };
+  const movePinch = () => {
+    pinchTarget = Math.max(MIN_FONT, Math.min(MAX_FONT, pinchBase * (fingersApart() / pinch0)));
+    s.renderer.previewSize(pinchTarget);
+    const size = Math.round(pinchTarget);
+    if (size !== pinchShown) {
+      pinchShown = size;
+      navigator.vibrate?.(3); // a light tick at each size, like a dial
+      showZoomChip(size, true);
+    }
+  };
+  const endPinch = () => {
+    pinching = false;
+    hideZoomChip();
+    const final = Math.round(pinchTarget);
+    if (final === font0) {
+      animateSize(s, pinchTarget, font0, 180, () => {}); // (no change after all: back as it was)
       return;
     }
-    if (!pinchEnded) return;
-    pinchEnded = false;
-    animateSize(s, pinchTarget, want, 200, () => {
-      if (prefs.fontSize !== want) setFontSize(want, true);
+    // The picture stays exactly as the fingers left it (a still copy) while the terminal takes
+    // the size and its program redraws underneath — however it does that, in however many
+    // goes — then it gives way to the new picture.
+    const gen = ++zoomGen;
+    s.renderer.freezePicture();
+    s.renderer.previewSize(null);
+    setFontSize(final, true);
+    whenRedrawn(s, () => {
+      if (gen === zoomGen) s.renderer.revealPicture(200);
     });
   };
   const touches = new Map<number, { x: number; y: number }>();
@@ -1164,22 +1196,19 @@ function bindTerminalGestures(s: TerminalSession) {
     wheelFrame = 0;
     wheelLines = 0;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (touches.size === 2) {
-      letGo(); // a second finger: a pull past the end springs back (it stayed shifted)
-      const [a, b] = [...touches.values()];
-      pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
-      cancelZoomAnim();
-      s.renderer.dropGhost(); // (the last size change still fading in: done)
-      zoomGen++; // (and what it was still waiting for)
-      stepping = false;
-      pinchEnded = false;
-      font0 = s.renderer.options.fontSize;
-      pinchTarget = font0;
-      pinchShown = font0;
-      clearTimeout(longTimer);
-      showZoomChip(font0, false);
+    if (touches.size >= 2) {
+      if (touches.size > 2) return; // (a third finger: nothing)
+      if (!pinching) startPinch();
+      else {
+        // a finger lifted mid-pinch and came back: carry on from where it is
+        pinchBase = pinchTarget;
+        pinch0 = fingersApart();
+      }
       return;
     }
+    if (pinching) return; // (one finger of a pinch, still down)
+    downScroll = s.renderer.scrollPx;
+    downAt = performance.now();
     startX = e.clientX;
     startY = lastY = e.clientY;
     lastT = performance.now();
@@ -1208,22 +1237,9 @@ function bindTerminalGestures(s: TerminalSession) {
   el.addEventListener('pointermove', (e) => {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (touches.size === 2 && pinch0) {
-      // Pinch: the text size follows the fingers — the terminal takes each whole size as it
-      // comes (as fast as its program can redraw), and in between the picture scales by the
-      // little that's left, so it moves smoothly and ends where it is when the fingers lift.
-      const [a, b] = [...touches.values()];
-      pinchTarget = Math.max(MIN_FONT, Math.min(MAX_FONT, font0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch0)));
-      s.renderer.previewSize(pinchTarget);
-      const size = Math.round(pinchTarget);
-      if (size !== pinchShown) {
-        pinchShown = size;
-        navigator.vibrate?.(3); // a light tick at each size, like a dial
-        showZoomChip(size, true);
-      }
-      if (!stepping) zoomStep();
-      moved = true;
-      return;
+    if (pinching) {
+      if (touches.size === 2) movePinch();
+      return; // (the finger left down after the other lifted: nothing)
     }
     if (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8) {
       moved = true;
@@ -1241,14 +1257,9 @@ function bindTerminalGestures(s: TerminalSession) {
   const end = (e: PointerEvent) => {
     touches.delete(e.pointerId);
     clearTimeout(longTimer);
-    if (pinch0) {
-      if (touches.size === 0) {
-        pinch0 = 0;
-        pinchEnded = true;
-        hideZoomChip();
-        if (!stepping) zoomStep();
-      }
-      return;
+    if (pinching) {
+      if (touches.size === 0) endPinch();
+      return; // (no fling, no tap)
     }
     if (e.type !== 'pointerup') {
       letGo();
@@ -1356,14 +1367,14 @@ function animateSize(s: TerminalSession, from: number, to: number, ms: number, d
 function whenRedrawn(s: TerminalSession, then: () => void) {
   const t0 = performance.now();
   // A full-screen redraw (agents clear the screen first, then draw in pieces with pauses):
-  // done once the screen has about as much on it as before, not at the first pause.
-  const before = s.filledRows();
+  // done once the screen is about as full as before, not at the first pause.
+  const before = s.filledRows() / Math.max(1, s.term.rows);
   const check = () => {
     if (sessions.get(s.id) !== s) return;
     const now = performance.now();
     const quiet = now - s.renderer.lastOutput;
-    const full = s.filledRows() >= before * 0.6 || now - t0 > 700;
-    if ((now - t0 > 150 && quiet > 110 && full) || now - t0 > 1300) {
+    const full = s.filledRows() / Math.max(1, s.term.rows) >= before * 0.6 || now - t0 > 900;
+    if ((now - t0 > 160 && quiet > 130 && full) || now - t0 > 1600) {
       s.renderer.schedule();
       requestAnimationFrame(() => requestAnimationFrame(then));
     } else window.setTimeout(check, 25);
