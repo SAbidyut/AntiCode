@@ -1071,7 +1071,41 @@ function bindTerminalGestures(s: TerminalSession) {
     s.renderer.releaseOverscroll();
     return true;
   };
-  let pinch0 = 0, font0 = prefs.fontSize, pinchSize = prefs.fontSize, pinchScale = 1;
+  let pinch0 = 0, font0 = prefs.fontSize;
+  /** The text size the fingers ask for (fractional), and the whole size shown in the chip. */
+  let pinchTarget = prefs.fontSize, pinchShown = prefs.fontSize;
+  /** A size change is under way (the terminal resized, its program redrawing). */
+  let stepping = false, pinchEnded = false, zoomGen = 0;
+  /**
+   * The next whole size for the terminal, if the fingers have moved on to one: a still copy
+   * of the picture covers the change (and the program's half-drawn frames) until the new one
+   * is complete. Once the fingers have lifted and the size is reached, what's left of the
+   * scale (under half a size) settles.
+   */
+  const zoomStep = () => {
+    const want = Math.round(pinchTarget);
+    if (want !== s.renderer.options.fontSize) {
+      const gen = zoomGen;
+      stepping = true;
+      s.renderer.freezePicture();
+      s.renderer.setOptions({ fontSize: want }); // (this terminal now; the others at the end)
+      s.fit();
+      s.renderer.previewSize(pinchTarget);
+      whenRedrawn(s, () => {
+        if (gen !== zoomGen) return;
+        // (at once: a fade between two layouts showed both — the input line twice)
+        s.renderer.revealPicture(0);
+        stepping = false;
+        zoomStep();
+      });
+      return;
+    }
+    if (!pinchEnded) return;
+    pinchEnded = false;
+    animateSize(s, pinchTarget, want, 200, () => {
+      if (prefs.fontSize !== want) setFontSize(want, true);
+    });
+  };
   const touches = new Map<number, { x: number; y: number }>();
 
   const stopInertia = () => {
@@ -1136,10 +1170,14 @@ function bindTerminalGestures(s: TerminalSession) {
       pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
       cancelZoomAnim();
       s.renderer.dropGhost(); // (the last size change still fading in: done)
-      font0 = pinchSize = prefs.fontSize;
-      pinchScale = 1;
+      zoomGen++; // (and what it was still waiting for)
+      stepping = false;
+      pinchEnded = false;
+      font0 = s.renderer.options.fontSize;
+      pinchTarget = font0;
+      pinchShown = font0;
       clearTimeout(longTimer);
-      showZoomChip(pinchSize, false);
+      showZoomChip(font0, false);
       return;
     }
     startX = e.clientX;
@@ -1171,21 +1209,19 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!touches.has(e.pointerId)) return;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.size === 2 && pinch0) {
-      // Pinch: the picture follows the fingers smoothly (not in whole text-size steps); the
-      // terminal takes the new size once the fingers lift.
+      // Pinch: the text size follows the fingers — the terminal takes each whole size as it
+      // comes (as fast as its program can redraw), and in between the picture scales by the
+      // little that's left, so it moves smoothly and ends where it is when the fingers lift.
       const [a, b] = [...touches.values()];
-      const r = Math.hypot(a.x - b.x, a.y - b.y) / pinch0;
-      // past the smallest / largest size it still gives a little, harder the further
-      const lo = 9 / font0;
-      const hi = 28 / font0;
-      pinchScale = r < lo ? lo - (lo - r) * 0.25 : r > hi ? hi + (r - hi) * 0.25 : r;
-      s.renderer.previewZoom(pinchScale);
-      const size = Math.round(Math.max(9, Math.min(28, font0 * r)));
-      if (size !== pinchSize) {
-        pinchSize = size;
+      pinchTarget = Math.max(MIN_FONT, Math.min(MAX_FONT, font0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinch0)));
+      s.renderer.previewSize(pinchTarget);
+      const size = Math.round(pinchTarget);
+      if (size !== pinchShown) {
+        pinchShown = size;
         navigator.vibrate?.(3); // a light tick at each size, like a dial
         showZoomChip(size, true);
       }
+      if (!stepping) zoomStep();
       moved = true;
       return;
     }
@@ -1208,11 +1244,9 @@ function bindTerminalGestures(s: TerminalSession) {
     if (pinch0) {
       if (touches.size === 0) {
         pinch0 = 0;
+        pinchEnded = true;
         hideZoomChip();
-        // the picture settles on the size it's going to be, then the text takes that size
-        const target = pinchSize / font0;
-        if (pinchSize === prefs.fontSize) animateZoom(s, pinchScale, 1, 220, () => s.renderer.previewZoom(null));
-        else animateZoom(s, pinchScale, target, 110, () => zoomTo(pinchSize));
+        if (!stepping) zoomStep();
       }
       return;
     }
@@ -1285,16 +1319,18 @@ function fitSoon() {
 }
 
 // ---- text size changes, animated (pinch, Settings) ----
+const MIN_FONT = 9;
+const MAX_FONT = 28;
 let zoomAnim = 0;
 function cancelZoomAnim() {
   cancelAnimationFrame(zoomAnim);
   zoomAnim = 0;
 }
-/** The pinch picture eases from one scale to another. */
-function animateZoom(s: TerminalSession, from: number, to: number, ms: number, done: () => void) {
+/** The picture eases from one text size to another (what's left of a pinch, settling). */
+function animateSize(s: TerminalSession, from: number, to: number, ms: number, done: () => void) {
   cancelZoomAnim();
-  if (!prefs.animations || Math.abs(from - to) < 0.002) {
-    s.renderer.previewZoom(to === 1 ? null : to);
+  if (!prefs.animations || Math.abs(from - to) < 0.01) {
+    s.renderer.previewSize(null);
     done();
     return;
   }
@@ -1302,10 +1338,11 @@ function animateZoom(s: TerminalSession, from: number, to: number, ms: number, d
   const step = (now: number) => {
     const k = Math.min(1, (now - t0) / ms);
     const e = 1 - Math.pow(1 - k, 3); // ease out
-    s.renderer.previewZoom(from + (to - from) * e);
+    s.renderer.previewSize(from + (to - from) * e);
     if (k < 1) zoomAnim = requestAnimationFrame(step);
     else {
       zoomAnim = 0;
+      s.renderer.previewSize(null);
       done();
     }
   };
@@ -1313,31 +1350,40 @@ function animateZoom(s: TerminalSession, from: number, to: number, ms: number, d
 }
 
 /**
- * A new text size for the terminals, without the jumps: the picture as it is stays on
- * screen while the terminal takes the size and its program redraws (an agent does it in
- * several goes), then it fades into the new picture.
+ * Once the terminal has its new size and the program has redrawn for it (quiet for a moment,
+ * or it's taking too long), [then] runs — on the frame that shows the new picture.
+ */
+function whenRedrawn(s: TerminalSession, then: () => void) {
+  const t0 = performance.now();
+  // A full-screen redraw (agents clear the screen first, then draw in pieces with pauses):
+  // done once the screen has about as much on it as before, not at the first pause.
+  const before = s.filledRows();
+  const check = () => {
+    if (sessions.get(s.id) !== s) return;
+    const now = performance.now();
+    const quiet = now - s.renderer.lastOutput;
+    const full = s.filledRows() >= before * 0.6 || now - t0 > 700;
+    if ((now - t0 > 150 && quiet > 110 && full) || now - t0 > 1300) {
+      s.renderer.schedule();
+      requestAnimationFrame(() => requestAnimationFrame(then));
+    } else window.setTimeout(check, 25);
+  };
+  window.setTimeout(check, 40);
+}
+
+/**
+ * A new text size from Settings, without the jumps: the picture as it is stays on screen
+ * while the terminal takes the size and its program redraws, then fades into the new one.
  */
 function zoomTo(size: number) {
   const s = screen === 'term' && !document.hidden ? active : null;
   if (!s || !prefs.animations || s.renderer.options.fontSize === size) {
-    s?.renderer.previewZoom(null);
     setFontSize(size, true);
     return;
   }
   s.renderer.freezePicture();
-  s.renderer.previewZoom(null); // (the real picture, hidden under it, back to scale 1)
   setFontSize(size, true);
-  // the program has had the new size and gone quiet (or it's taking too long): show it
-  const t0 = performance.now();
-  const check = () => {
-    const now = performance.now();
-    if (sessions.get(s.id) !== s) return;
-    if ((now - t0 > 240 && now - s.renderer.lastOutput > 130) || now - t0 > 1500) {
-      s.renderer.schedule();
-      requestAnimationFrame(() => requestAnimationFrame(() => s.renderer.revealPicture()));
-    } else window.setTimeout(check, 30);
-  };
-  window.setTimeout(check, 60);
+  whenRedrawn(s, () => s.renderer.revealPicture(220));
 }
 
 let zoomChipTimer = 0;
@@ -1364,7 +1410,8 @@ function hideZoomChip() {
 
 function setFontSize(size: number, persist: boolean, say = false) {
   prefs.fontSize = size;
-  for (const s of sessions.values()) s.renderer.setOptions({ fontSize: size });
+  // (a terminal already at this size — the one just pinched — isn't drawn again)
+  for (const s of sessions.values()) if (s.renderer.options.fontSize !== size) s.renderer.setOptions({ fontSize: size });
   active?.fit();
   if (persist) {
     savePrefs();

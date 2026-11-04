@@ -621,6 +621,14 @@ export class TerminalSession {
     if (atBottom) el.scrollTop = el.scrollHeight;
   }
 
+  /** How many rows of the screen have something on them. */
+  filledRows(): number {
+    const buf = this.term.buffer.active;
+    let n = 0;
+    for (let y = 0; y < this.term.rows; y++) if (buf.getLine(buf.baseY + y)?.translateToString(true)) n++;
+    return n;
+  }
+
   /** Plain text of the whole buffer (for "copy all"). */
   allText(): string {
     return this.logicalLines().join('\n');
