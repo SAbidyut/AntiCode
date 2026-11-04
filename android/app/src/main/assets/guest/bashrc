@@ -63,6 +63,10 @@ __agy_fit_path() {
   (( ${#__agy_p} <= $1 )) || __agy_p=${path##*/}
 }
 
+# (on a bar style's first line: tells the app to draw that line's text at the size of the
+# Settings pictures — smaller than the terminal's text, the coloured bars as tall as now)
+__agy_bar='\[\e]7770;bar\a\]'
+
 __agy_prompt() {
   local status=$?
   __agy_in_prompt=1
@@ -204,7 +208,7 @@ __agy_ps_bar() {
     prev=$bg
   done
   line+="\[\e[0m\]"
-  PS1="${gap}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${gap}${__agy_bar}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
 # capsule — rounded capsules with a short line between, framed: ╭─ … on top, ╰─❯ below; the
@@ -242,7 +246,7 @@ __agy_ps_capsule() {
     line+="\[\e[0m\e[38;2;${bg}m\]"$'\ue0b6'"\[\e[48;2;${bg}m\e[38;2;30;30;46m\]${tx}\[\e[0m\e[38;2;${bg}m\]"$'\ue0b4'
   done
   line+="\[\e[0m\]"
-  PS1="${gap}${rclock}${title}${line}\n\[\e[38;2;${frame}m\]╰─\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${gap}${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${frame}m\]╰─\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
 # powerline — pastel segments with rounded ends; the clock at the right edge (the app draws
@@ -295,7 +299,7 @@ __agy_ps_powerline() {
   done
 
   # window title (shown on the app's tab) + segments + input line
-  PS1="${gap}${rclock}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  PS1="${gap}${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 PROMPT_COMMAND=__agy_prompt
 # a command starts (the app's "task finished" notification waits for the prompt again); its

@@ -240,11 +240,68 @@ export class BanglaRenderer {
     this.schedule();
   }
 
+  // ---- the prompt's bar lines (OSC 7770;bar): their text drawn smaller, as in Settings'
+  // pictures of the prompt styles (11.5 px text in a 21 px row) — the cells stay as they are
+  private barLines: { marker: IMarker; sig: string; born: number }[] = [];
+
+  /** The cursor's line is a prompt's bar line (OSC 7770;bar). */
+  markBarLine() {
+    if (this.term.buffer.active.type !== 'normal') return;
+    const marker = this.term.registerMarker(0);
+    if (!marker) return;
+    this.barLines = this.barLines.filter((b) => {
+      const same = b.marker.isDisposed || b.marker.line === marker.line;
+      if (same) b.marker.dispose();
+      return !same;
+    });
+    this.barLines.push({ marker, sig: '', born: performance.now() });
+    while (this.barLines.length > 300) this.barLines.shift()!.marker.dispose();
+    this.schedule();
+  }
+
   /** After a terminal reset the old buffers (and their markers) are gone. */
   clearLabels() {
     for (const l of this.rightLabels) l.marker.dispose();
     this.rightLabels = [];
+    for (const b of this.barLines) b.marker.dispose();
+    this.barLines = [];
     this.schedule();
+  }
+
+  /**
+   * Whether a mark on a line still belongs to its prompt: the line's text once the prompt
+   * was drawn on it is remembered; when the line no longer starts with it (cleared,
+   * overwritten, the prompt redrawn elsewhere) the mark goes. Typing after a one-line
+   * prompt keeps it. A line that stayed empty: the prompt went elsewhere.
+   */
+  private stillPrompt(m: { marker: IMarker; sig: string; born: number }, text: string, now: number): boolean | null {
+    if (!m.sig) {
+      if (text.trim()) m.sig = text;
+      else if (now - m.born > 1500) return false;
+      else return null; // not drawn yet
+    } else if (!text.startsWith(m.sig)) return false;
+    return true;
+  }
+
+  /** Bar lines among first..last. */
+  private barsByLine(first: number, last: number): Set<number> {
+    const set = new Set<number>();
+    const buf = this.term.buffer.active;
+    if (buf.type !== 'normal' || !this.barLines.length) return set;
+    const now = performance.now();
+    this.barLines = this.barLines.filter((b) => {
+      if (b.marker.isDisposed) return false;
+      const line = b.marker.line;
+      if (line < first || line > last) return true;
+      const ok = this.stillPrompt(b, buf.getLine(line)?.translateToString(true) ?? '', now);
+      if (ok === false) {
+        b.marker.dispose();
+        return false;
+      }
+      if (ok) set.add(line);
+      return true;
+    });
+    return set;
   }
 
   /** Labels of the lines first..last that still belong to their prompt. */
@@ -257,19 +314,12 @@ export class BanglaRenderer {
       if (l.marker.isDisposed) return false;
       const line = l.marker.line;
       if (line < first || line > last) return true; // checked when it's on screen
-      const text = buf.getLine(line)?.translateToString(true) ?? '';
-      if (!l.sig) {
-        if (text.trim()) l.sig = text; // the prompt has been drawn: remember it
-        else if (now - l.born > 1500) {
-          l.marker.dispose(); // its line stayed empty: the prompt went elsewhere
-          return false;
-        } else return true;
-      } else if (!text.startsWith(l.sig)) {
-        // cleared, overwritten, or the prompt was redrawn elsewhere (typing after a one-line
-        // prompt keeps it: the line still starts with the prompt)
+      const ok = this.stillPrompt(l, buf.getLine(line)?.translateToString(true) ?? '', now);
+      if (ok === false) {
         l.marker.dispose();
         return false;
       }
+      if (!ok) return true; // not drawn yet
       m.set(line, { text: l.text, note: l.note });
       return true;
     });
@@ -773,7 +823,7 @@ export class BanglaRenderer {
   }
 
   /** Build the HTML for one buffer line (from cell [from] on). */
-  rowToHtml(line: IBufferLine | undefined, cols: number, from = 0): string {
+  rowToHtml(line: IBufferLine | undefined, cols: number, from = 0, bar = false): string {
     if (!line) return '';
     const cw = this.cellWidth;
     const cell = (this.cell = line.getCell(0, this.cell) ?? this.cell);
@@ -791,11 +841,16 @@ export class BanglaRenderer {
     let bnPieces: { css: string; text: string }[] = [];
     let bnCells = 0;
 
+    let monoCells = 0;
     const flushMono = () => {
       if (monoStyle === null) return;
-      html += monoStyle ? `<span style="${monoStyle}">${esc(monoText)}</span>` : esc(monoText);
+      if (bar) {
+        // a prompt bar's text, smaller, centred in the cells it takes (the grid stays)
+        html += `<span class="cmp" style="${monoStyle}width:${(monoCells * cw).toFixed(2)}px">${esc(monoText)}</span>`;
+      } else html += monoStyle ? `<span style="${monoStyle}">${esc(monoText)}</span>` : esc(monoText);
       monoStyle = null;
       monoText = '';
+      monoCells = 0;
     };
     const flushBn = () => {
       if (bnFont === null) return;
@@ -909,17 +964,19 @@ export class BanglaRenderer {
         // next cell (usually a space) instead of being clipped, like other terminals do.
         const pua = cp >= 0xe000 && cp <= 0xf8ff;
         const sym = !pua && cp >= 0x2100 && cp <= 0x2bff;
-        html += `<span class="bx${pua ? ' pua' : sym ? ' sym' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
+        html += `<span class="bx${pua ? ' pua' : sym ? ' sym' : ''}${bar ? ' cmp' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
         continue;
       }
       const text = cls === 'space' ? ' ' : chars;
       if (monoStyle === st.css) {
         monoText += text;
+        monoCells += w;
         continue;
       }
       flushMono();
       monoStyle = st.css;
       monoText = text;
+      monoCells = w;
     }
     flushMono();
     flushBn();
@@ -1131,6 +1188,7 @@ export class BanglaRenderer {
     if (boxTop < 0) while (inputTop > buf.baseY && buf.getLine(inputTop)?.isWrapped) inputTop--;
     const revealed: HTMLDivElement[] = [];
     const labels = this.labelsByLine(first, last);
+    const bars = this.barsByLine(first, last);
     for (let i = first; i <= last; i++) {
       let r = this.rows.get(i);
       const live = i >= buf.baseY; // the live screen can still change; scrollback can't
@@ -1141,7 +1199,7 @@ export class BanglaRenderer {
       // never cover text: only when the row leaves room at its right end (zoomed in,
       // re-wrapped, or a wide prompt bar → no clock on that row)
       if (label && line && this.usedCells(line, cols) > cols - (label.note ? label.text.length + 3 : 13)) label = undefined;
-      const html = this.rowToHtml(line, cols) + (!label ? '' : label.note
+      const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.note
         ? `<span class="rlabel note">${esc(label.text)}</span>`
         : `<span class="rlabel"><b>\uf017</b>${esc(label.text)}</span>`);
       let el: HTMLDivElement | null = null;

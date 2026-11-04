@@ -176,6 +176,7 @@ export class TerminalSession {
       if (cmd === 'open' && args.length && !this.replaying) this.onLink?.(args.join(';'), trusted);
       else if (cmd === 'rprompt') this.renderer.setRightLabel(rest.join(';')); // the prompt's clock
       else if (cmd === 'rnote') this.renderer.setRightLabel(rest.join(';'), true); // its "took 5s"
+      else if (cmd === 'bar') this.renderer.markBarLine(); // its bar line (text drawn smaller)
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
       else if (cmd === 'done') {
         this.renderer.anchorBottom = false;

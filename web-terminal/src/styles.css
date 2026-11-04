@@ -482,15 +482,20 @@ body[data-screen='home']::before {
 .term-row .dg i.r-dl, .term-preedit .dg i.r-dl { right: calc(50% - var(--bw) / 2); top: calc(50% - var(--bw) / 2); left: 0; bottom: 0; border-top-width: var(--bw); border-right-width: var(--bw); border-top-right-radius: calc(var(--cw) * 0.75); }
 .term-row .dg i.r-ul, .term-preedit .dg i.r-ul { right: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); left: 0; top: 0; border-bottom-width: var(--bw); border-right-width: var(--bw); border-bottom-right-radius: calc(var(--cw) * 0.75); }
 .term-row .dg i.r-ur, .term-preedit .dg i.r-ur { left: calc(50% - var(--bw) / 2); bottom: calc(50% - var(--bw) / 2); right: 0; top: 0; border-bottom-width: var(--bw); border-left-width: var(--bw); border-bottom-left-radius: calc(var(--cw) * 0.75); }
+/* a prompt bar's text (OSC 7770;bar): sized to the row as in Settings' pictures of the
+   prompt styles (11.5 px text in a 21 px row), centred in the cells it takes */
+.term-row .cmp { font-size: calc(var(--lh) * 11.5 / 21); text-align: center; overflow: visible; }
+.term-row .bx.pua.cmp { font-size: calc(var(--lh) * 11.5 / 21); text-align: center; }
 /* the prompt's clock, always at the right edge of its line */
 .term-row .rlabel {
   position: absolute; right: 0; top: calc(var(--lh) / 21); z-index: 1;
   display: inline-flex; align-items: center; gap: 0.45em; height: calc(var(--lh) * 19 / 21);
   padding: 0 0.75em; border-radius: calc(var(--lh) * 19 / 42);
-  background: #89b4fa; color: #1e1e2e; font-size: calc(var(--fs) * 0.95);
+  /* (the clock's text as in Settings' pictures: 11 px in a 21 px row) */
+  background: #89b4fa; color: #1e1e2e; font-size: calc(var(--lh) * 11 / 21);
 }
 /* a prompt's plain note at the right edge (how long the last command took) */
-.term-row .rlabel.note { background: none; color: #8a8fa3; padding: 0 0.2em; }
+.term-row .rlabel.note { background: none; color: #8a8fa3; padding: 0 0.2em; font-size: calc(var(--fs) * 0.95); }
 .term-row .rlabel b { font-weight: 400; font-family: 'AgySymbols', var(--mono); display: inline; height: auto; }
 /* the smart keyboard's word, inserted at the cursor (what follows on the row moves aside) */
 .term-preedit {
