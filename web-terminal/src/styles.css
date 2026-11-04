@@ -485,7 +485,6 @@ body[data-screen='home']::before {
 /* a prompt bar's text (OSC 7770;bar): sized to the row as in Settings' pictures of the
    prompt styles (11.5 px text in a 21 px row), centred in the cells it takes */
 .term-row .cmp { font-size: calc(var(--lh) * 11.5 / 21); text-align: center; overflow: visible; }
-.term-row .bx.pua.cmp { font-size: calc(var(--lh) * 11.5 / 21); text-align: center; }
 /* the prompt's clock, always at the right edge of its line */
 .term-row .rlabel {
   position: absolute; right: 0; top: calc(var(--lh) / 21); z-index: 1;

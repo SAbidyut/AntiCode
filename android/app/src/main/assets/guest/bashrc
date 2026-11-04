@@ -63,8 +63,9 @@ __agy_fit_path() {
   (( ${#__agy_p} <= $1 )) || __agy_p=${path##*/}
 }
 
-# (on a bar style's first line: tells the app to draw that line's text at the size of the
-# Settings pictures — smaller than the terminal's text, the coloured bars as tall as now)
+# (on the first line of a style with coloured blocks: tells the app to draw that line's text
+# at the size of the Settings pictures — smaller than the terminal's text, the blocks as
+# tall as now)
 __agy_bar='\[\e]7770;bar\a\]'
 
 __agy_prompt() {
@@ -208,7 +209,10 @@ __agy_ps_bar() {
     prev=$bg
   done
   line+="\[\e[0m\]"
-  PS1="${gap}${__agy_bar}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
+  # (lean has no blocks: its text stays the terminal's size)
+  local bar=
+  [ "$kind" = rainbow ] && bar=$__agy_bar
+  PS1="${gap}${bar}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
 
 # capsule — rounded capsules with a short line between, framed: ╭─ … on top, ╰─❯ below; the
@@ -348,9 +352,10 @@ if [[ ${BLE_VERSION-} ]]; then
   bleopt canvas_winch_action=redraw-prev
   bleopt prompt_eol_mark=$'\e[38;2;108;112;134m⏎\e[m'
   ble-face auto_complete='fg=#6c7086'
-  # Calm colours: a command that exists is green (cd, echo … too — not red as if wrong); a
-  # word not (yet) a command is soft red text, not a red block flashing behind every
-  # half-typed word.
+  # Calm colours. The command word is green as it's typed: with the file checks off it isn't
+  # looked up (its colour would be ble.sh's "brown" — this theme's red, every command looking
+  # wrong), and it doesn't flash red while half typed. A syntax error is soft red text.
+  ble-face syntax_command='fg=#a6e3a1'
   ble-face command_builtin='fg=#a6e3a1' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'
   ble-face command_alias='fg=#a6e3a1' command_keyword='fg=#89b4fa'
   ble-face syntax_quoted='fg=#f9e2af' syntax_comment='fg=#6c7086' syntax_error='fg=#eba0ac'
@@ -385,7 +390,15 @@ if [[ ${BLE_VERSION-} ]]; then
     ble-bind -m emacs -f 'C-h' 'delete-region-or anticode-delete-backward-cluster'
   }
   blehook/eval-after-load keymap_emacs anticode/ble-keys 2>/dev/null || anticode/ble-keys
-  # (ble.sh runs commands itself: say when one starts from its hook as well)
-  blehook PREEXEC+='printf "\e]7770;exec\a"; __agy_t0=$SECONDS' 2>/dev/null
+  # (ble.sh runs commands itself: say when one starts from its hook as well — with the
+  # command's name, so the app knows an agent started however the line was typed)
+  function __agy_preexec {
+    local w=${1#"${1%%[![:space:]]*}"}
+    w=${w%%[[:space:]]*}
+    w=${w//[[:cntrl:];]/}
+    printf '\e]7770;exec;%s\a' "${w:0:40}"
+    __agy_t0=$SECONDS
+  }
+  blehook PREEXEC+='__agy_preexec "$1"' 2>/dev/null
   ble-attach
 fi

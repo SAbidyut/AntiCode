@@ -351,6 +351,11 @@ export class BanglaRenderer {
   /** Chat layout: rows from this line down are moved down by splitGap px (-1 = off). */
   private splitLine = -1;
   private splitGap = 0;
+  /**
+   * Chat layout with a scrollback: how far the view shows earlier lines at the top so the
+   * input box sits at the bottom, not above empty rows (px).
+   */
+  private lift = 0;
   /** True while the keyboard slides: follow it exactly, no easing. */
   insetsMoving = false;
   /** Lift the input line above a floating keyboard (not for the Settings preview). */
@@ -571,7 +576,7 @@ export class BanglaRenderer {
    * at the top (with the keyboard up, the first lines would be out of reach otherwise).
    */
   private maxScroll(): number {
-    return this.term.buffer.active.baseY * this.lineHeight + this.pan;
+    return Math.max(0, this.term.buffer.active.baseY * this.lineHeight + this.pan - this.lift);
   }
 
   /** The session closed: no more frames, timers or markers. */
@@ -958,13 +963,15 @@ export class BanglaRenderer {
         continue;
       }
       flushBn();
-      if (cls === 'box' || (cls === 'mono' && w > 1)) {
+      // (on a prompt's bar line icons stay in the text's run: the piece — icon and text —
+      // is centred in its cells as one, with no gap opening between them)
+      if ((cls === 'box' || (cls === 'mono' && w > 1)) && !bar) {
         flushMono();
         // Nerd Font icons (private use area) are wider than a cell: let them spill into the
         // next cell (usually a space) instead of being clipped, like other terminals do.
         const pua = cp >= 0xe000 && cp <= 0xf8ff;
         const sym = !pua && cp >= 0x2100 && cp <= 0x2bff;
-        html += `<span class="bx${pua ? ' pua' : sym ? ' sym' : ''}${bar ? ' cmp' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
+        html += `<span class="bx${pua ? ' pua' : sym ? ' sym' : ''}" style="width:${(w * cw).toFixed(2)}px;${st.css}">${esc(chars)}</span>`;
         continue;
       }
       const text = cls === 'space' ? ' ' : chars;
@@ -1105,9 +1112,51 @@ export class BanglaRenderer {
       if (this.scrollPx > 0 && buf.baseY > this.lastBaseY) this.scrollPx += (buf.baseY - this.lastBaseY) * lh;
       this.lastBaseY = buf.baseY;
     }
+    // The last line drawn: the cursor's (plus one), or anything below it (a completion
+    // menu, a TUI's footer).
+    const visible = this.el.clientHeight - 12;
+    let lastY = buf.cursorY + 1;
+    for (let y = rows - 1; y > lastY; y--) {
+      if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
+        lastY = y;
+        break;
+      }
+    }
+    // Chat layout for agent sessions (Antigravity, Claude Code): the input box — from the
+    // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
+    // While the conversation is shorter than the screen its header stays at the top and a
+    // gap opens above the box. With earlier lines in the scrollback (a tall dialog that went
+    // away, a screen that grew) those fill the top instead: no empty rows under the box.
+    let splitLine = -1;
+    let splitGap = 0;
+    let lift = 0;
+    if (this.anchorBottom && !BanglaRenderer.floatingKeyboard && buf.type === 'normal' && visible > 0) {
+      const free = visible - (lastY + 1) * lh;
+      if (free >= lh) {
+        let box = -1;
+        for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
+          if (isRule(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '')) {
+            box = y;
+            break;
+          }
+        }
+        if (box >= 0) {
+          lift = Math.min(free, buf.baseY * lh);
+          if (this.scrollPx === 0 && free - lift >= lh) {
+            splitLine = buf.baseY + box;
+            splitGap = free - lift;
+          }
+        }
+      }
+    }
+    if (lift !== this.lift) {
+      // reading back: the lines looked at stay where they are
+      if (this.scrollPx > 0) this.scrollPx -= lift - this.lift;
+      this.lift = lift;
+    }
     this.scrollPx = Math.max(0, Math.min(this.maxScroll(), this.scrollPx));
 
-    const topPx = buf.baseY * lh - this.scrollPx; // y of the first visible pixel row
+    const topPx = buf.baseY * lh - this.lift - this.scrollPx; // y of the first visible pixel row
     if (this.scrollPx > 0 && buf.type === 'normal') {
       const topLine = Math.max(0, Math.floor(topPx / lh));
       if (!vm || vm.isDisposed || vm.line !== topLine) {
@@ -1135,33 +1184,6 @@ export class BanglaRenderer {
     const cursorLine = buf.baseY + buf.cursorY;
     const motion = !!this.opts.animate && buf.type === 'normal';
 
-    // The last line drawn: the cursor's (plus one), or anything below it (a completion
-    // menu, a TUI's footer).
-    const visible = this.el.clientHeight - 12;
-    let lastY = buf.cursorY + 1;
-    for (let y = rows - 1; y > lastY; y--) {
-      if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
-        lastY = y;
-        break;
-      }
-    }
-    // Chat layout for agent sessions (Antigravity, Claude Code): while the conversation is
-    // shorter than the screen, its header stays at the top and the input box — from the
-    // rule line above the prompt down to the footer — sits at the bottom, like a chat app.
-    let splitLine = -1;
-    let splitGap = 0;
-    if (this.anchorBottom && !BanglaRenderer.floatingKeyboard && buf.type === 'normal' && buf.baseY === 0 && this.scrollPx === 0 && visible > 0) {
-      const free = visible - (lastY + 1) * lh;
-      if (free >= lh) {
-        for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
-          if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
-            splitLine = y;
-            break;
-          }
-        }
-        if (splitLine >= 0) splitGap = free;
-      }
-    }
     const rowY = (i: number) => i * lh + (splitLine >= 0 && i >= splitLine ? splitGap : 0);
     const splitMoved = splitLine !== this.splitLine || splitGap !== this.splitGap;
     if (splitMoved) {
@@ -1249,7 +1271,7 @@ export class BanglaRenderer {
       const overflow = rows * lh - visible;
       const below = (lastY + 1) * lh - visible;
       let pan = 0;
-      if (splitLine >= 0) {
+      if (splitLine >= 0 || lift > 0) {
         pan = 0; // the chat layout already fits the screen
       } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal') {
         // the input line (and what's drawn under it) in the upper half of the screen (not in
@@ -1387,7 +1409,7 @@ export class BanglaRenderer {
     const cols = this.term.cols;
     const n = Math.min(12, end - boxTop + 1);
     // where the box is when not scrolled (the zoom layer starts 6 px down)
-    this.dockEl.style.top = `${(6 + (boxTop - buf.baseY) * lh - this.pan).toFixed(1)}px`;
+    this.dockEl.style.top = `${(6 + (boxTop - buf.baseY) * lh - this.pan + this.lift).toFixed(1)}px`;
     for (let k = 0; k < n; k++) {
       let r = this.dockRows[k];
       if (!r) {
@@ -1417,7 +1439,7 @@ export class BanglaRenderer {
     }
     this.dockEl.hidden = false;
     // (the "back to the bottom" button sits above it)
-    const top = 6 + (boxTop - buf.baseY) * lh - this.pan;
+    const top = 6 + (boxTop - buf.baseY) * lh - this.pan + this.lift;
     host?.style.setProperty('--dock-h', `${Math.max(0, this.el.clientHeight - top).toFixed(0)}px`);
   }
   /** The pinned input box on screen, if shown (a tap on it goes back to the bottom). */

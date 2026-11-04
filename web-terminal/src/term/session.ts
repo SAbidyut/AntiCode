@@ -185,6 +185,9 @@ export class TerminalSession {
       } else if (cmd === 'exec') {
         this.setProgramWidths(false); // a command starts (by letters…)
         this.edit.atPrompt = false;
+        // the shell names it (ble.sh's hook): an agent gets the chat layout however its
+        // name was typed — a grey suggestion taken with →, the history's ↑ …
+        if (/^(agy|claude)$/.test(rest[0] ?? '')) this.renderer.anchorBottom = true;
       }
       else if (cmd === 'widths') this.setProgramWidths(rest[0] === 'joined'); // …unless it's agy
       else if (cmd === 'storage' && trusted && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
