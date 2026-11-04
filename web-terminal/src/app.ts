@@ -117,6 +117,7 @@ const sessions = new Map<string, TerminalSession>();
 let accounts = { agy: '', claude: '' };
 let notifyWhenDone = true;
 let claudeFullscreen = false;
+let agyApproveAll = false;
 let restored = false;
 let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
@@ -2036,6 +2037,14 @@ function openSettingsSheet() {
       settleComposing();
       bridge.setKeyboardSmart(v);
     }),
+    // (Antigravity's Auto mode needs its terminal sandbox, which Android doesn't allow: this is
+    // the nearest — with none of Auto mode's checks)
+    toggle('Antigravity: approve everything',
+      'Every edit and command runs without asking — and without Auto mode’s checks: a wrong or harmful command runs at once. For new Antigravity sessions.',
+      agyApproveAll, (v) => {
+        agyApproveAll = v;
+        bridge.setAgyApproveAll(v);
+      }),
     // rarely needed: folded away
     h('details', { class: 'advanced' },
       h('summary', {}, h('span', {}, 'Advanced'), svg('chevron')),
@@ -2204,6 +2213,7 @@ async function boot() {
 
   notifyWhenDone = await bridge.getNotifyWhenDone();
   claudeFullscreen = await bridge.getClaudeFullscreen();
+  agyApproveAll = await bridge.getAgyApproveAll();
   accounts = await bridge.getAccounts();
   renderHome();
 

@@ -421,7 +421,16 @@ command_not_found_handle() {
 # Antigravity counts a Bangla conjunct (ক্ষ) as one character, as Unicode 15.1 does; the shell
 # and other programs (Claude Code too) count its letters. The terminal draws it the program's
 # way, so the program's tables and input line come out right (back to letters at the prompt).
-agy() { printf '\e]7770;widths;%s;joined\a' "$__agy_tok"; command agy "$@"; }
+# Settings → "Antigravity: approve everything": its own flag, when agy starts a session (not
+# for a subcommand such as `agy plugin …`)
+agy() {
+  printf '\e]7770;widths;%s;joined\a' "$__agy_tok"
+  if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ] && { [ $# -eq 0 ] || [[ $1 == -* ]]; }; then
+    command agy --dangerously-skip-permissions "$@"
+  else
+    command agy "$@"
+  fi
+}
 
 # ---------------------------------------------------------------- ble.sh look & attach
 if [[ ${BLE_VERSION-} ]]; then
