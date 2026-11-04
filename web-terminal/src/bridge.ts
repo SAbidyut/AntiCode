@@ -98,6 +98,9 @@ export interface Bridge {
   getNotifyWhenDone(): Promise<boolean>;
   /** Claude Code's own full-screen view for new sessions. */
   setClaudeFullscreen(on: boolean): void;
+  /** Antigravity approves every tool without asking (its --dangerously-skip-permissions). */
+  setAgyApproveAll(on: boolean): void;
+  getAgyApproveAll(): Promise<boolean>;
   getClaudeFullscreen(): Promise<boolean>;
   /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
   setPromptStyle(style: string): void;
@@ -160,6 +163,8 @@ interface AndroidBridgeApi {
   setNotifyWhenDone?(on: boolean): void;
   getNotifyWhenDone?(): boolean;
   setClaudeFullscreen?(on: boolean): void;
+  setAgyApproveAll?(on: boolean): void;
+  getAgyApproveAll?(): boolean;
   getClaudeFullscreen?(): boolean;
   setPromptStyle?(style: string): void;
   getPromptStyle?(): string;
@@ -215,6 +220,8 @@ class AndroidHostBridge implements Bridge {
   setNotifyWhenDone(on: boolean) { this.api.setNotifyWhenDone?.(on); }
   async getNotifyWhenDone() { return this.api.getNotifyWhenDone?.() ?? true; }
   setClaudeFullscreen(on: boolean) { this.api.setClaudeFullscreen?.(on); }
+  setAgyApproveAll(on: boolean) { this.api.setAgyApproveAll?.(on); }
+  async getAgyApproveAll() { return this.api.getAgyApproveAll?.() ?? false; }
   async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
   setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
   async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
@@ -326,6 +333,8 @@ class DevBridge implements Bridge {
   setNotifyWhenDone() {}
   async getNotifyWhenDone() { return true; }
   setClaudeFullscreen() {}
+  setAgyApproveAll() {}
+  async getAgyApproveAll() { return false; }
   async getClaudeFullscreen() { return false; }
   setPromptStyle(style: string) {
     try { localStorage.setItem('promptStyle', style); } catch { /* storage unavailable */ }

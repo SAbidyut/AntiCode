@@ -1116,6 +1116,15 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getClaudeFullscreen(): Boolean = service?.ubuntu?.claudeFullscreen ?: false
 
+        /** Antigravity approves every tool without asking (its --dangerously-skip-permissions). */
+        @JavascriptInterface
+        fun setAgyApproveAll(on: Boolean) {
+            svc().ubuntu.agyApproveAll = on
+        }
+
+        @JavascriptInterface
+        fun getAgyApproveAll(): Boolean = service?.ubuntu?.agyApproveAll ?: false
+
         /** The shell prompt's look (Settings → Prompt style). */
         @JavascriptInterface
         fun setPromptStyle(style: String) {

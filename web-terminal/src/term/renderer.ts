@@ -223,22 +223,21 @@ export class BanglaRenderer {
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
   // `sig` is the line's text once the prompt was drawn on it: when the line no longer
   // reads the same (cleared, redrawn elsewhere after a zoom, overwritten) the label goes.
-  private rightLabels: { marker: IMarker; text: string; sig: string; born: number; note: boolean; acct: boolean }[] = [];
+  private rightLabels: { marker: IMarker; text: string; sig: string; born: number; note: boolean }[] = [];
 
   /** Show [text] at the right edge of the cursor's line (OSC 7770;rprompt;text). */
   /** ([note]: plain grey text — a prompt's "5s" — not the clock's pill) */
-  /** ([acct]: an agent's signed-in account; [offset]: lines from the cursor's) */
-  setRightLabel(text: string, note = false, acct = false, offset = 0) {
+  setRightLabel(text: string, note = false) {
     if (this.term.buffer.active.type !== 'normal') return;
-    const marker = this.term.registerMarker(offset);
+    const marker = this.term.registerMarker(0);
     if (!marker) return;
-    // a redraw of the same prompt replaces its label (and there's one account label: it moves)
+    // a redraw of the same prompt replaces its label
     this.rightLabels = this.rightLabels.filter((l) => {
-      const same = l.marker.isDisposed || l.marker.line === marker.line || (acct && l.acct);
+      const same = l.marker.isDisposed || l.marker.line === marker.line;
       if (same) l.marker.dispose();
       return !same;
     });
-    this.rightLabels.push({ marker, text: text.slice(0, acct ? 48 : 24), sig: '', born: performance.now(), note, acct });
+    this.rightLabels.push({ marker, text: text.slice(0, 24), sig: '', born: performance.now(), note });
     while (this.rightLabels.length > 300) this.rightLabels.shift()!.marker.dispose();
     this.schedule();
   }
@@ -260,12 +259,6 @@ export class BanglaRenderer {
     this.barLines.push({ marker, sig: '', born: performance.now() });
     while (this.barLines.length > 300) this.barLines.shift()!.marker.dispose();
     this.schedule();
-  }
-
-  /** The line of the account label (Claude Code's / Antigravity's header), -1 if none. */
-  accountLabelLine(): number {
-    const l = this.rightLabels.find((x) => x.acct && !x.marker.isDisposed);
-    return l ? l.marker.line : -1;
   }
 
   /** After a terminal reset the old buffers (and their markers) are gone. */
@@ -314,8 +307,8 @@ export class BanglaRenderer {
   }
 
   /** Labels of the lines first..last that still belong to their prompt. */
-  private labelsByLine(first: number, last: number): Map<number, { text: string; note: boolean; acct: boolean }> {
-    const m = new Map<number, { text: string; note: boolean; acct: boolean }>();
+  private labelsByLine(first: number, last: number): Map<number, { text: string; note: boolean }> {
+    const m = new Map<number, { text: string; note: boolean }>();
     const buf = this.term.buffer.active;
     if (buf.type !== 'normal') return m;
     const now = performance.now();
@@ -329,7 +322,7 @@ export class BanglaRenderer {
         return false;
       }
       if (!ok) return true; // not drawn yet
-      m.set(line, { text: l.text, note: l.note, acct: l.acct });
+      m.set(line, { text: l.text, note: l.note });
       return true;
     });
     return m;
@@ -1049,15 +1042,6 @@ export class BanglaRenderer {
   }
 
   /** Cells up to the last one with text (wide characters count as two). */
-  /** Cells up to the line's last visible character (spaces don't count). */
-  private textEnd(line: IBufferLine, cols: number): number {
-    for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
-      const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
-      if (c && (c.getWidth() === 0 || c.getChars().trim() !== '')) return x + 1;
-    }
-    return 0;
-  }
-
   private usedCells(line: IBufferLine, cols: number): number {
     for (let x = Math.min(cols, line.length) - 1; x >= 0; x--) {
       const c = (this.cell = line.getCell(x, this.cell) ?? this.cell);
@@ -1245,14 +1229,8 @@ export class BanglaRenderer {
       // never cover text: only when the row leaves room at its right end (zoomed in,
       // re-wrapped, or a wide prompt bar → no clock on that row)
       // (the account's text is small: about 0.8 of a cell a letter)
-      const room = !label ? 0 : label.acct ? Math.ceil(label.text.length * 0.8) + 4 : label.note ? label.text.length + 3 : 13;
-      // (the account follows its line's text — "Claude Max  ✉ you@gmail.com" — the others
-      // sit at the right edge)
-      const end = label?.acct && line ? this.textEnd(line, cols) : 0;
-      if (label && line && (label.acct ? end + 1 : this.usedCells(line, cols)) > cols - room) label = undefined;
-      const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.acct
-        ? `<span class="rlabel acct" style="left:${((end + 1) * this.cellWidth).toFixed(1)}px;right:auto"><b>\uf0e0</b>${esc(label.text)}</span>`
-        : label.note
+      if (label && line && this.usedCells(line, cols) > cols - (label.note ? label.text.length + 3 : 13)) label = undefined;
+      const html = this.rowToHtml(line, cols, 0, bars.has(i)) + (!label ? '' : label.note
         ? `<span class="rlabel note">${esc(label.text)}</span>`
         : `<span class="rlabel"><b>\uf017</b>${esc(label.text)}</span>`);
       let el: HTMLDivElement | null = null;

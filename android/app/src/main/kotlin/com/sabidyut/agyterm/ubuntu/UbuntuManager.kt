@@ -59,6 +59,23 @@ class UbuntuManager private constructor(private val context: Context) {
         set(v) = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).edit().putBoolean("claudeFullscreen", v).apply()
 
     /** The shell prompt's look (Settings → Prompt style): Ubuntu's ~/.config/agy-terminal/prompt. */
+    /**
+     * Antigravity approves every tool by itself (its --dangerously-skip-permissions), set in
+     * Settings. A file inside Ubuntu, so the Antigravity button and `agy` typed in a shell
+     * both see it.
+     */
+    var agyApproveAll: Boolean
+        get() = File(rootfs, AGY_APPROVE_ALL).isFile
+        set(v) {
+            try {
+                val f = File(rootfs, AGY_APPROVE_ALL)
+                if (v) {
+                    f.parentFile?.mkdirs()
+                    f.writeText("Antigravity approves every tool without asking (Settings in the app).\n")
+                } else f.delete()
+            } catch (_: Exception) { /* not installed yet */ }
+        }
+
     var promptStyle: String
         get() = try {
             File(rootfs, "root/.config/agy-terminal/prompt").readText().trim()
@@ -724,6 +741,7 @@ class UbuntuManager private constructor(private val context: Context) {
     }
 
     companion object {
+        private const val AGY_APPROVE_ALL = "root/.config/agy-terminal/agy-approve-all"
 
         val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
         private const val UI_PREFS = "anticode-ui"
