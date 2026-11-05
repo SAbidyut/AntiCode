@@ -1770,7 +1770,8 @@ function askFolder(kind: SessionKind) {
   }
   const recent = recentDirs();
   const start = recent.length ? recent : [homeDir()];
-  const places: [string, string, string][] = [['home', 'Home', homeDir()]];
+  // (Home is already the place to start when nothing was used yet: here it's for browsing)
+  const places: [string, string, string][] = [['home', recent.length ? 'Home' : 'Browse Home', homeDir()]];
   if (hostState.host === 'android') {
     places.push(
       ['folder', 'Phone storage', `${homeDir()}/storage/shared`],
@@ -1789,7 +1790,8 @@ function askFolder(kind: SessionKind) {
     h('div', { class: 'fp-label' }, 'Choose another folder'),
     h('div', { class: 'action-list' },
       ...places.map(([icon, title, p]) => folderRow(icon, title,
-        needsAccess && p !== homeDir() ? 'Needs storage access' : tildify(p), () => browseFolder(kind, p), 'browse'))),
+        needsAccess && p !== homeDir() ? 'Needs storage access' : p === homeDir() && !recent.length ? 'Pick a folder inside ~' : tildify(p),
+        () => browseFolder(kind, p), 'browse'))),
   );
 }
 
