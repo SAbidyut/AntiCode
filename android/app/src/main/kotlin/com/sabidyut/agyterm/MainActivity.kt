@@ -876,8 +876,8 @@ class MainActivity : ComponentActivity() {
         private fun svc() = service ?: throw IllegalStateException("service not bound")
 
         @JavascriptInterface
-        fun createSession(kind: String, cols: Int, rows: Int, cwd: String): String = try {
-            val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300), cwd)
+        fun createSession(kind: String, cols: Int, rows: Int, cwd: String, profile: String): String = try {
+            val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300), cwd, profile)
             // anything printed before we got here (a quick prompt) is in the ring: send it too
             s.attach(outputListener) { snap -> if (snap.isNotEmpty()) queue(s.id, snap, snap.size) }
             s.id
@@ -935,7 +935,7 @@ class MainActivity : ComponentActivity() {
             for (s in svc().sessions.values.sortedBy { it.createdAt }) {
                 arr.put(
                     JSONObject().put("id", s.id).put("kind", s.kind).put("title", s.title).put("alive", s.alive)
-                        .put("cols", s.cols).put("rows", s.rows).put("dir", s.startDir),
+                        .put("cols", s.cols).put("rows", s.rows).put("dir", s.startDir).put("profile", s.profile),
                 )
             }
             return arr.toString()
@@ -1092,7 +1092,8 @@ class MainActivity : ComponentActivity() {
 
         /** The Antigravity account (seen in the CLI's header, or typed in Settings). */
         @JavascriptInterface
-        fun setAntigravityAccount(email: String) = Accounts.setAntigravity(this@MainActivity, email)
+        fun setAntigravityAccount(email: String, profile: String) =
+            Accounts.setAntigravity(this@MainActivity, email, profile.takeIf { com.sabidyut.agyterm.ubuntu.UbuntuManager.validProfile(it) } ?: "")
 
         @JavascriptInterface
         fun getAccounts(): String = JSONObject()
@@ -1142,7 +1143,27 @@ class MainActivity : ComponentActivity() {
 
         /** The account (email) an agent ("claude" / "agy") is signed in with; "" if unknown. */
         @JavascriptInterface
-        fun accountEmail(kind: String): String = service?.ubuntu?.accountEmail(kind) ?: ""
+        fun accountEmail(kind: String, profile: String): String = service?.ubuntu?.accountEmail(kind, profile) ?: ""
+
+        /** An agent's extra accounts (JSON [{name, email}]). */
+        @JavascriptInterface
+        fun listProfiles(kind: String): String = service?.ubuntu?.listProfiles(kind) ?: "[]"
+
+        /** A new account for an agent: "" when made, else why not. */
+        @JavascriptInterface
+        fun createProfile(kind: String, name: String): String = try {
+            svc().ubuntu.createProfile(kind, name)
+        } catch (e: Exception) {
+            e.message ?: "The account couldn't be made"
+        }
+
+        /** Forget an account (its sign-in goes with it). */
+        @JavascriptInterface
+        fun deleteProfile(kind: String, name: String): Boolean = try {
+            svc().ubuntu.deleteProfile(kind, name)
+        } catch (_: Exception) {
+            false
+        }
 
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface

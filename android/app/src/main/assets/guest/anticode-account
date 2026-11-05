@@ -1,0 +1,23 @@
+#!/bin/bash
+# AntiCode: the folder an agent's extra account keeps its sign-in in.
+#   anticode-account agy|claude   prints it (made the first time); nothing for the usual account
+# Which account a tab uses is the app's choice when it opens the tab (ANTICODE_PROFILE).
+#   Claude Code: its config folder (CLAUDE_CONFIG_DIR).
+#   Antigravity: keeps everything in ~/.gemini, so the account gets a home of its own whose
+#   other files are links to the real home's (git, ssh, the phone's storage, the programs).
+kind=$1
+name=${ANTICODE_PROFILE-}
+[[ $kind == agy || $kind == claude ]] || exit 0
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,19}$ ]] || exit 0
+base=${ANTICODE_REAL_HOME:-$HOME}
+d="$base/.anticode/profiles/$kind/$name"
+mkdir -p "$d" || exit 1
+if [ "$kind" = agy ]; then
+  shopt -s nullglob dotglob
+  for f in "$base"/*; do
+    n=${f##*/}
+    case $n in .gemini|.anticode) continue ;; esac
+    [ -e "$d/$n" ] || [ -L "$d/$n" ] || ln -s "$f" "$d/$n"
+  done
+fi
+printf '%s\n' "$d"
