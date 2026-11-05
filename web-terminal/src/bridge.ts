@@ -114,6 +114,8 @@ export interface Bridge {
   /** '' when made, else why not. */
   createProfile(kind: string, name: string): Promise<string>;
   deleteProfile(kind: string, name: string): Promise<boolean>;
+  /** Sign an account out ('' the main one): it signs in afresh next time. */
+  signOut(kind: string, profile: string): Promise<boolean>;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string, profile?: string): void;
   /** A sign-in page with the account chosen for it: an email, Google's list, or a private tab. */
@@ -181,6 +183,7 @@ interface AndroidBridgeApi {
   listProfiles?(kind: string): string;
   createProfile?(kind: string, name: string): string;
   deleteProfile?(kind: string, name: string): boolean;
+  signOut?(kind: string, profile: string): boolean;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string, profile: string): void;
   openSignIn?(url: string, hint: string, choose: boolean, privateTab: boolean): void;
@@ -260,6 +263,7 @@ class AndroidHostBridge implements Bridge {
   }
   async createProfile(kind: string, name: string) { return this.api.createProfile?.(kind, name) ?? 'Not available'; }
   async deleteProfile(kind: string, name: string) { return this.api.deleteProfile?.(kind, name) ?? false; }
+  async signOut(kind: string, profile: string) { return this.api.signOut?.(kind, profile) ?? false; }
   async getAccounts() {
     try {
       return JSON.parse(this.api.getAccounts?.() ?? '{}') as { agy: string; claude: string };
@@ -342,6 +346,7 @@ class DevBridge implements Bridge {
     try { localStorage.setItem(`profiles:${kind}`, JSON.stringify([...list, name])); } catch { /* storage unavailable */ }
     return '';
   }
+  async signOut() { return true; }
   async deleteProfile(kind: string, name: string) {
     try { localStorage.setItem(`profiles:${kind}`, JSON.stringify(this.profiles(kind).filter((n) => n !== name))); } catch { /* storage unavailable */ }
     return true;

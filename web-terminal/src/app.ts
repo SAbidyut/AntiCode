@@ -1839,7 +1839,7 @@ function accountPicker(kind: SessionKind): HTMLElement {
         pickProfile(kind, name);
         void draw();
       };
-      if (name) onLongPress(b, () => removeAccount(kind, name, label));
+      onLongPress(b, () => accountActions(kind, name, label));
       return b;
     };
     const add = h('button', { class: 'acct-chip add', 'aria-label': 'Add an account' }, svg('plus'), h('span', { class: 'ac-name' }, 'Account'));
@@ -1879,6 +1879,25 @@ function addAccount(kind: SessionKind) {
     input, err,
     h('div', { class: 'sheet-actions' }, btn));
   setTimeout(() => input.focus(), 250);
+}
+
+/** A long-press on an account: sign it out (it signs in afresh), or remove an extra one. */
+function accountActions(kind: SessionKind, name: string, label: string) {
+  const open = () => [...sessions.values()].some((s) => s.alive && (s.kind === kind ? s.profile === name : !name && s.agent === kind));
+  const signOut = async () => {
+    if (open()) {
+      toast('Close its tabs first');
+      return;
+    }
+    const ok = await bridge.signOut(kind, name);
+    toast(ok ? `${label} signed out — sign in when ${KIND_NAME[kind]} opens` : 'It couldn’t be signed out');
+    askFolder(kind);
+  };
+  openSheet(label,
+    h('div', { class: 'action-list' },
+      action('power', 'Sign out', `${KIND_NAME[kind]} asks to sign in again next time — conversations and settings stay`, () => void signOut()),
+      name ? action('trash', 'Remove this account', 'Its sign-in and settings go; your files stay', () => removeAccount(kind, name, label), true) : null,
+      action('x', 'Cancel', '', () => askFolder(kind))));
 }
 
 function removeAccount(kind: SessionKind, name: string, label: string) {

@@ -151,6 +151,42 @@ class UbuntuManager private constructor(private val context: Context) {
         return arr.toString()
     }
 
+    /**
+     * Sign an account out ([profile] "" the main one): what holds its sign-in goes, so the
+     * agent asks to sign in afresh — conversations and settings stay. Antigravity: its token
+     * (~/.gemini/antigravity-cli/antigravity-oauth-token), whose account it is
+     * (~/.config/antigravity/credential-user-scope) and what it found out with it (the cache:
+     * the Cloud project, onboarding — a stale one left the eligibility check failing).
+     * Claude Code: its credentials file.
+     */
+    fun signOut(kind: String, profile: String): Boolean {
+        val prof = profile.takeIf { validProfile(it) } ?: ""
+        if (profile.isNotEmpty() && prof.isEmpty()) return false
+        val home = if (prof.isEmpty()) File(rootfs, "root") else profileDir(kind, prof)
+        if (!home.isDirectory) return false
+        fun gone(f: File) {
+            if (isSymlink(f)) { f.delete(); return } // (never through a link into another account)
+            if (f.isDirectory) f.listFiles()?.forEach { gone(it) }
+            f.delete()
+        }
+        when (kind) {
+            "agy" -> {
+                val cli = File(home, ".gemini/antigravity-cli")
+                gone(File(cli, "antigravity-oauth-token"))
+                gone(File(cli, "cache"))
+                gone(File(home, ".config/antigravity"))
+                if (prof.isEmpty()) com.sabidyut.agyterm.Accounts.setAntigravity(context, "")
+                else com.sabidyut.agyterm.Accounts.forgetAntigravity(context, prof)
+            }
+            "claude" -> {
+                val dir = if (prof.isEmpty()) File(home, ".claude") else home
+                gone(File(dir, ".credentials.json"))
+            }
+            else -> return false
+        }
+        return true
+    }
+
     /** A new account's folder: "" when made, else why not. */
     fun createProfile(kind: String, name: String): String {
         if (kind != "agy" && kind != "claude") return "Unknown agent"

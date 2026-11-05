@@ -1157,6 +1157,14 @@ class MainActivity : ComponentActivity() {
             e.message ?: "The account couldn't be made"
         }
 
+        /** Sign an account out (it signs in afresh next time). */
+        @JavascriptInterface
+        fun signOut(kind: String, profile: String): Boolean = try {
+            svc().ubuntu.signOut(kind, profile)
+        } catch (_: Exception) {
+            false
+        }
+
         /** Forget an account (its sign-in goes with it). */
         @JavascriptInterface
         fun deleteProfile(kind: String, name: String): Boolean = try {
