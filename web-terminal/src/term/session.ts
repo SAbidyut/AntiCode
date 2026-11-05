@@ -17,11 +17,14 @@ function xtermRgb(hex: string): string {
 
 const URL_RE = /https?:\/\/[^\s'"<>`]+[^\s'"<>`.,;:)\]}]/g;
 /** A file name or path with a type worth opening (a page or PDF an agent made, a picture …). */
-const FILE_EXT = 'html?|xhtml|pdf|svg|png|jpe?g|gif|webp|bmp|txt|md|markdown|csv|json|log|xml|ya?ml|docx?|xlsx?|pptx?|odt|ods|odp|epub|mp4|webm|mkv|mov|mp3|wav|ogg|m4a|flac|zip';
+const FILE_EXT = 'html?|xhtml|pdf|svg|png|jpe?g|gif|webp|bmp|txt|md|markdown|csv|json|log|xml|ya?ml|docx?|xlsx?|pptx?|odt|ods|odp|epub|mp4|webm|mkv|mov|mp3|wav|ogg|m4a|flac|aac|opus|zip|rar|7z|tar|gz|tgz|apk|ico|avif|heic|tiff?|rtf|py|js|mjs|ts|tsx|jsx|sh|c|cc|cpp|h|hpp|java|kt|go|rs|rb|php|css|scss|sql|toml|ini|conf|env|ipynb';
 const FILE_RE = new RegExp(
   String.raw`(?:file:\/\/)?[^\s'"<>\x60|*?()\[\]{}:,;]*[^\s'"<>\x60|*?()\[\]{}:,;/.]\.(?:${FILE_EXT})(?![\p{L}\p{N}_-])`,
   'giu',
 );
+
+/** A word that could be a folder's name or path. */
+const WORD_RE = /[^\s'"<>\x60|*?()\[\]{}:,;\u2500-\u259f\ue000-\uf8ff]+/gu;
 
 export class TerminalSession {
   /** Height (CSS px) currently covered by the on-screen keyboard; set by the app. */
@@ -571,6 +574,17 @@ export class TerminalSession {
   /** If a file name (report.pdf, ~/site/index.html …) is under the point, return it. */
   fileAt(clientX: number, clientY: number): string | null {
     return this.matchAt(clientX, clientY, FILE_RE);
+  }
+
+  /**
+   * The path-like word under the point (a folder name in `ls` output, src/app …), or null.
+   * A trailing / (ls -F) and closing punctuation are left off.
+   */
+  wordAt(clientX: number, clientY: number): string | null {
+    const w = this.matchAt(clientX, clientY, WORD_RE);
+    if (!w) return null;
+    const t = w.replace(/[.,;:!]+$/, '').replace(/(.)\/+$/, '$1');
+    return t && t.length <= 255 && /[\p{L}\p{N}_~]/u.test(t) ? t : null;
   }
 
   /**

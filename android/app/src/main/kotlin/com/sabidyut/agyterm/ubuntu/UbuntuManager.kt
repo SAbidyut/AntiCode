@@ -770,7 +770,24 @@ class UbuntuManager private constructor(private val context: Context) {
     fun hostFile(guest: String): File? = normalizeGuestPath(guest)?.let { hostPath(it) }
 
     /** The folders in a folder inside Ubuntu, as JSON: {path, dirs} or {path, error: notfound|noaccess}. */
-    fun listDir(path: String): String {
+    fun listDir(path: String): String = listDir(path, false)
+
+    /**
+     * A folder's contents for the folder sheet (a folder name tapped in the terminal):
+     * {path, dirs, files} — files too, hidden ones left out, at most 2000 each.
+     */
+    fun listFolder(path: String): String = listDir(path, true)
+
+    /** The first of [candidates] (paths inside Ubuntu) that is a folder, "" if none. */
+    fun findDir(candidates: List<String>): String {
+        for (c in candidates.take(8)) {
+            val g = normalizeGuestPath(c) ?: continue
+            if (hostPath(g)?.isDirectory == true) return g
+        }
+        return ""
+    }
+
+    private fun listDir(path: String, withFiles: Boolean): String {
         val g = normalizeGuestPath(path) ?: return JSONObject().put("path", path).put("error", "notfound").toString()
         val json = JSONObject().put("path", g)
         val host = hostPath(g)
@@ -792,7 +809,17 @@ class UbuntuManager private constructor(private val context: Context) {
             .sortedWith(String.CASE_INSENSITIVE_ORDER)
             .take(2000)
             .toList()
-        return json.put("dirs", org.json.JSONArray(dirs)).toString()
+        json.put("dirs", org.json.JSONArray(dirs))
+        if (withFiles) {
+            val dirSet = dirs.toHashSet()
+            val files = names.asSequence()
+                .filter { !it.startsWith(".") && it !in dirSet }
+                .sortedWith(String.CASE_INSENSITIVE_ORDER)
+                .take(2000)
+                .toList()
+            json.put("files", org.json.JSONArray(files))
+        }
+        return json.toString()
     }
 
     /** Makes a folder inside Ubuntu (or the phone's storage); "" when done, else why not. */

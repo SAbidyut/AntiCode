@@ -1418,9 +1418,15 @@ function bindTerminalGestures(s: TerminalSession) {
         openTappedFile(s, file); // report.pdf, ~/site/index.html …
         return;
       }
+      // a folder's name (ls output, a path an agent printed): its files, to open one
+      const word = own || s.nearInput(e.clientX, e.clientY) ? null : s.wordAt(e.clientX, e.clientY);
+      if (word) {
+        void tapWord(s, word, e.clientX, e.clientY);
+        return;
+      }
       s.click(e.clientX, e.clientY);
-      // the keyboard comes up for a tap on the prompt only, not anywhere on the screen
-      if (s.nearInput(e.clientX, e.clientY)) focusTerminalKeyboard();
+      // a tap anywhere else on the terminal brings up the keyboard
+      focusTerminalKeyboard();
     }
   };
   el.addEventListener('pointerup', end);
@@ -1801,13 +1807,83 @@ async function openTappedFile(s: TerminalSession, token: string) {
       p = decodeURIComponent(p);
     } catch { /* as it is */ }
   }
-  const rel = p.replace(/^\.\//, '');
-  const candidates = p.startsWith('/') || p === '~' || p.startsWith('~/')
-    ? [p]
-    : [...new Set([s.cwd, s.startDir, homeDir()].filter(Boolean).map((d) => `${d.replace(/\/+$/, '')}/${rel}`))];
-  const res = await bridge.openFile(candidates);
+  const res = await bridge.openFile(tapCandidates(s, p));
   if (res === 'notfound') toast(`${p.split('/').pop()} wasn’t found here`);
   else if (res) toast(res);
+}
+
+/** Where a name tapped in the terminal may be: as given, or where the shell is, started, home. */
+function tapCandidates(s: TerminalSession, p: string): string[] {
+  if (p.startsWith('/') || p === '~' || p.startsWith('~/')) return [p];
+  const rel = p.replace(/^\.\//, '');
+  return [...new Set([s.cwd, s.startDir, homeDir()].filter(Boolean).map((d) => `${d.replace(/\/+$/, '')}/${rel}`))];
+}
+
+/**
+ * A word tapped in the terminal: a folder's name shows its files; anything else is a plain
+ * tap (to the program, and the keyboard comes up). On the phone the lookup answers at once.
+ */
+let tapWordSeq = 0;
+async function tapWord(s: TerminalSession, word: string, x: number, y: number) {
+  const seq = ++tapWordSeq;
+  const dir = await bridge.findDir(tapCandidates(s, word)).catch(() => '');
+  if (seq !== tapWordSeq || s !== active) return;
+  if (dir) {
+    void showFolder(s, dir);
+    return;
+  }
+  s.click(x, y);
+  focusTerminalKeyboard();
+}
+
+/** A folder's folders and files: a folder opens in place, a file opens (pictures, PDFs, documents …). */
+let showFolderSeq = 0;
+async function showFolder(s: TerminalSession, path: string) {
+  const seq = ++showFolderSeq;
+  const res = await bridge.listFolder(path).catch(() => ({ path, error: 'notfound' } as DirListing & { files?: string[] }));
+  if (seq !== showFolderSeq) return;
+  const p = res.path || path;
+  haptic();
+  const up = h('button', { class: 'fp-up', 'aria-label': 'Up' }, svg('chevron'));
+  up.onclick = () => {
+    haptic();
+    if (p !== '/') void showFolder(s, parentDir(p));
+  };
+  const here = h('button', { class: 'btn btn-primary fp-open' }, svg('terminal'), h('span', {}, 'Terminal here'));
+  here.onclick = () => {
+    haptic();
+    closeSheet();
+    void newSession('ubuntu', p);
+  };
+  const head = h('div', { class: 'fp-head' },
+    h('div', { class: 'fp-pathbar' }, up, h('span', { class: 'fp-where' }, tildify(p))),
+    here);
+  let body: Kid[];
+  if (res.error === 'noaccess') {
+    const allow = h('button', { class: 'btn btn-secondary' }, svg('shield'), h('span', {}, 'Allow storage access'));
+    allow.onclick = () => {
+      haptic();
+      bridge.requestStorage();
+    };
+    body = [h('p', { class: 'fp-empty' }, 'AntiCode can’t see your phone’s files yet.'), allow];
+  } else if (res.error) {
+    body = [h('p', { class: 'fp-empty' }, 'This folder isn’t there.')];
+  } else {
+    const dirs = res.dirs ?? [];
+    const files = res.files ?? [];
+    body = [
+      h('div', { class: 'action-list' },
+        ...dirs.map((d) => folderRow('folder', d, '', () => void showFolder(s, childDir(p, d)), 'browse sub')),
+        ...files.map((f) => folderRow('file', f, '', () => {
+          void bridge.openFile([childDir(p, f)]).then((r) => {
+            if (r === 'notfound') toast(`${f} wasn’t found here`);
+            else if (r) toast(r);
+          });
+        }, 'sub file'))),
+      dirs.length || files.length ? null : h('p', { class: 'fp-empty' }, 'This folder is empty.'),
+    ];
+  }
+  openSheet(dirName(p), head, ...body);
 }
 
 // ---- more than one account per agent ----

@@ -70,6 +70,10 @@ export interface Bridge {
   createSession(kind: SessionKind, cols: number, rows: number, cwd?: string, profile?: string): Promise<string>;
   /** The folders in a folder (full path or ~/…). */
   listDir(path: string): Promise<DirListing>;
+  /** A folder's folders and files (the folder sheet). */
+  listFolder(path: string): Promise<DirListing & { files?: string[] }>;
+  /** The first of [candidates] that is a folder inside Ubuntu, '' if none. */
+  findDir(candidates: string[]): Promise<string>;
   /** Makes a folder; "" when done, else why not. */
   makeDir(path: string): Promise<string>;
   write(id: string, data: string): void;
@@ -155,6 +159,8 @@ function b64ToBytes(b64: string): Uint8Array {
 interface AndroidBridgeApi {
   createSession(kind: string, cols: number, rows: number, cwd: string, profile: string): string;
   listDir(path: string): string;
+  listFolder?(path: string): string;
+  findDir?(candidates: string): string;
   makeDir(path: string): string;
   write(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;
@@ -216,6 +222,10 @@ class AndroidHostBridge implements Bridge {
     return this.api.createSession(kind, cols, rows, cwd, profile);
   }
   async listDir(path: string) { return JSON.parse(this.api.listDir(path)) as DirListing; }
+  async listFolder(path: string) {
+    return JSON.parse(this.api.listFolder?.(path) ?? JSON.stringify({ path, error: 'notfound' })) as DirListing & { files?: string[] };
+  }
+  async findDir(candidates: string[]) { return this.api.findDir?.(JSON.stringify(candidates)) ?? ''; }
   async makeDir(path: string) { return this.api.makeDir(path); }
   write(id: string, data: string) { this.api.write(id, data); }
   resize(id: string, cols: number, rows: number) { this.api.resize(id, cols, rows); }
@@ -352,6 +362,8 @@ class DevBridge implements Bridge {
     return true;
   }
   listDir(path: string) { return this.call<DirListing>('listDir', path); }
+  listFolder(path: string) { return this.call<DirListing & { files?: string[] }>('listFolder', path); }
+  findDir(candidates: string[]) { return this.call<string>('findDir', candidates); }
   makeDir(path: string) { return this.call<string>('makeDir', path); }
   write(id: string, data: string) { this.send('write', id, data); }
   resize(id: string, cols: number, rows: number) { this.send('resize', id, cols, rows); }

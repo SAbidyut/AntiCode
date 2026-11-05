@@ -894,6 +894,23 @@ class MainActivity : ComponentActivity() {
             org.json.JSONObject().put("path", path).put("error", "notfound").toString()
         }
 
+        /** A folder's folders and files (the folder sheet). */
+        @JavascriptInterface
+        fun listFolder(path: String): String = try {
+            svc().ubuntu.listFolder(path)
+        } catch (e: Exception) {
+            org.json.JSONObject().put("path", path).put("error", "notfound").toString()
+        }
+
+        /** A word tapped in the terminal that names a folder: where it is ("" if it isn't one). */
+        @JavascriptInterface
+        fun findDir(candidates: String): String = try {
+            val list = JSONArray(candidates)
+            svc().ubuntu.findDir((0 until list.length()).map { list.optString(it) })
+        } catch (_: Exception) {
+            ""
+        }
+
         /** The folder picker's "New folder": "" when made, else why not. */
         @JavascriptInterface
         fun makeDir(path: String): String = try {
