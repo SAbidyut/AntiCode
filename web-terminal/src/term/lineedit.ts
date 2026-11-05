@@ -78,6 +78,8 @@ export class LineEditor {
     /** Keys to the program (not the user's typing: doesn't drop the selection). */
     private send: (data: string) => void,
     private lastOutput: () => number,
+    /** An agent runs (Claude Code, Antigravity): its input box between two rules counts. */
+    private agentRuns: () => boolean = () => true,
   ) {
     this.cell = undefined;
   }
@@ -97,8 +99,10 @@ export class LineEditor {
     const cur = buf.baseY + buf.cursorY;
     let top = -1;
     let bottom = cur;
-    // (at the shell's prompt a rule line above is what an agent left on the screen)
-    if (!this.atPrompt) {
+    // (at the shell's prompt a rule line above is what an agent left on the screen; and only
+    // an agent's box: a script that printed a rule and asks something would get arrow keys
+    // typed into its answer, less would scroll sideways)
+    if (!this.atPrompt && this.agentRuns()) {
       for (let y = cur - 1; y >= Math.max(0, cur - 8); y--) {
         if (isRule(this.text(y))) {
           top = y + 1;
@@ -141,7 +145,7 @@ export class LineEditor {
       } else if (y === top) {
         // after our prompt's ❯ (or a classic "$ " / "# ")
         const m = /❯ |[$#%] /.exec(t);
-        s = m ? m.index + m[0].length : 0;
+        s = m ? this.cellOf(y, m.index + m[0].length) : 0;
       }
       start.push(s);
       end.push(Math.max(s, this.textEnd(y)));
@@ -304,6 +308,23 @@ export class LineEditor {
     if (cmp(a, b) > 0) [a, b] = [b, a];
     this.sel = { a, b, top: area.top, kind: 'input' };
     this.onSelection?.(this.sel, area);
+  }
+
+  /**
+   * The cell column where character [index] of a row's text is (a folder name in Bangla or
+   * Chinese before the ❯ has more — or fewer — characters than cells).
+   */
+  private cellOf(y: number, index: number): number {
+    const line = this.buf.getLine(y);
+    if (!line) return index;
+    let chars = 0;
+    let col = 0;
+    for (; col < this.term.cols && chars < index; col++) {
+      const c = line.getCell(col);
+      // (as the row's text counts them: an empty cell is a space, a wide letter's second half nothing)
+      chars += (c?.getChars() || (c?.getWidth() === 0 ? '' : ' ')).length;
+    }
+    return col;
   }
 
   /** Text selected anywhere on the screen (the output): from [a] to [b]. */

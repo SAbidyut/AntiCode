@@ -216,6 +216,8 @@ class SessionService : Service() {
         if (kind != "android") session.startDir = ubuntu.normalizeGuestPath(cwd.ifEmpty { "~" }) ?: "/root"
         if ((kind == "agy" || kind == "claude") && UbuntuManager.validProfile(profile)) session.profile = profile
         sessions[id] = session
+        // gone already (it failed to start): its end was reported before it was listed — once more
+        if (!session.alive) mainHandler.post { onSessionExit?.invoke(session) }
         saveLive()
         updateForeground()
         mainHandler.post { startWatching() }

@@ -88,10 +88,29 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, 
   for (const k of kids) if (k) el.append(k);
   return el;
 }
+const svgCache = new Map<string, Node>();
 function svg(name: string, cls = ''): Node {
-  const t = document.createElement('template');
-  t.innerHTML = icon(name, cls);
-  return t.content.firstChild!;
+  // (parsed once per icon: a folder of thousands of rows would parse thousands of times)
+  let n = svgCache.get(`${name}|${cls}`);
+  if (!n) {
+    const t = document.createElement('template');
+    t.innerHTML = icon(name, cls);
+    n = t.content.firstChild!;
+    svgCache.set(`${name}|${cls}`, n);
+  }
+  return n.cloneNode(true);
+}
+
+/** Rows of a big folder: the first few hundred, then "Show more" adds the next. */
+function cappedRows(make: (() => HTMLElement)[], first = 200): HTMLElement[] {
+  const rows = make.slice(0, first).map((m) => m());
+  if (make.length > first) {
+    const more = folderRow('down', `Show ${make.length - first} more`, '', () => {
+      more.replaceWith(...cappedRows(make.slice(first), 400));
+    }, 'more');
+    rows.push(more);
+  }
+  return rows;
 }
 const haptic = () => navigator.vibrate?.(6);
 
@@ -168,6 +187,9 @@ const bridge: Bridge = createBridge({
       q.push(data);
       early.set(id, q);
     }
+  },
+  onHiddenInput(id, on) {
+    sessions.get(id)?.renderer.setHiddenInput(on);
   },
   onExit(id, code) {
     sessions.get(id)?.markExited(code);
@@ -378,6 +400,7 @@ function openLink(url: string, trusted: boolean, from?: TerminalSession) {
   }
   openSheet(
     'Open this link?',
+    fromOther(from),
     h('p', { class: 'note link-ask' }, url.length > 400 ? `${url.slice(0, 400)}…` : url),
     h('div', { class: 'action-list' },
       action('external', 'Open', '', () => bridge.openUrl(url)),
@@ -424,7 +447,14 @@ async function askSignInAccount(url: string, site: 'google' | 'claude', from?: T
   rows.push(action('shield', 'Another account', 'A private tab: nothing signed in, nothing kept', () => bridge.openSignIn(url, '', site === 'google', true)));
   rows.push(action('x', 'Cancel', '', () => {}));
   openSheet(`Sign in to ${site === 'google' ? 'Antigravity' : 'Claude Code'}${forTab} with…`,
+    fromOther(from),
     h('div', { class: 'action-list' }, ...rows));
+}
+
+/** A tab that isn't the one in front asked: which one (else nothing). */
+function fromOther(from?: TerminalSession): HTMLElement | null {
+  if (!from || (from === active && screen === 'term')) return null;
+  return h('p', { class: 'note' }, `Asked by the tab “${from.customName || from.about || from.kindLabel}”`);
 }
 
 function addSession(id: string, kind: SessionKind): TerminalSession {
@@ -442,7 +472,7 @@ function addSession(id: string, kind: SessionKind): TerminalSession {
       accounts.agy = email;
       bridge.setAntigravityAccount(email);
     }
-    renderHomeSessions(); // (its card shows the account)
+    if (screen === 'home') renderHomeSessions(); // (its card shows the account)
   };
   sessions.set(id, s);
   for (const d of early.get(id) ?? []) s.write(d);
@@ -511,6 +541,7 @@ async function reportLostSessions() {
 
 function activate(s: TerminalSession | null) {
   if (s !== active) {
+    active?.stopGestures?.();
     settleComposing();
     endSelection();
     consumeLatch(); // (a Ctrl latched in one tab doesn't turn the next tab's letter into ^C)
@@ -548,6 +579,7 @@ function showSessionPill(s: TerminalSession) {
 }
 
 function closeSession(s: TerminalSession) {
+  s.stopGestures?.();
   bridge.close(s.id);
   sessions.delete(s.id);
   early.delete(s.id);
@@ -592,8 +624,10 @@ function renderTabs(scrollToActive = false) {
   if (sig !== tabsSig) {
     tabsSig = sig;
     syncTabs(tabs);
-    renderHomeSessions();
   }
+  // (the home list shows other things than the tabs — not the titles, which change with
+  // every command — and is drawn anew when home shows)
+  if (screen === 'home') renderHomeSessions();
   // switching tabs only moves the highlight (existing tabs, so it eases)
   for (const el of tabs.children) {
     const on = (el as HTMLElement).dataset.id === active?.id;
@@ -662,7 +696,10 @@ function showHome() {
 /** Which session is in front (programs that ask are told: focus reports). */
 function updateFront() {
   const shown = !document.hidden && screen === 'term';
-  for (const x of sessions.values()) x.setInFront(shown && x === active);
+  for (const x of sessions.values()) {
+    x.setInFront(shown && x === active);
+    x.setOnScreen(screen === 'term' && x === active);
+  }
 }
 document.addEventListener('visibilitychange', updateFront);
 /** The first appearance of the home screen: its parts rise in one after another. */
@@ -771,7 +808,7 @@ function finishRenderHome() {
   renderStorage();
   // only on the phone, and only until it's allowed
   setCardShown($('#bg-card'), stateKnown && hostState.host === 'android' && hostState.background === false);
-  renderHomeSessions();
+  renderHomeSessions(true); // (the accounts may have changed meanwhile)
 }
 
 /** A card's fold animation (kept here: older WebViews have no element.getAnimations). */
@@ -836,9 +873,14 @@ function renderStorage() {
   }
 }
 
-function renderHomeSessions() {
+let homeSig = '';
+function renderHomeSessions(force = false) {
   const box = $('#home-sessions');
   const list = [...sessions.values()];
+  const sig = list.map((s) => [s.id, s.customName, s.kindLabel, s.about, s.alive, s.agent, s.email, s.profile].join('|')).join('\n');
+  // (unchanged: the items stay — one being pressed isn't replaced under the finger)
+  if (!force && sig === homeSig) return;
+  homeSig = sig;
   box.hidden = list.length === 0;
   box.querySelector('.list')!.replaceChildren(
     ...list.map((s) => {
@@ -894,7 +936,9 @@ function openRenameSheet(s: TerminalSession) {
     h('p', { class: 'note' }, 'Shown in the tabs and on the home screen.'),
     input,
     h('div', { class: 'sheet-actions' }, saveBtn));
-  setTimeout(() => input.focus(), 250);
+  setTimeout(() => {
+    if (sheetOpen() && input.isConnected) input.focus(); // (not once the sheet was put away)
+  }, 250);
 }
 
 // ================================================================ keyboard input
@@ -997,6 +1041,16 @@ function showSelectionBar(s: TerminalSession, at: { x: number; y: number } | nul
   placeSelectionBar();
 }
 
+/** (from the renderer, mid-drawing: measuring then would force a layout every frame) */
+let selBarFrame = 0;
+function placeSelectionBarSoon() {
+  if (selBarFrame) return;
+  selBarFrame = requestAnimationFrame(() => {
+    selBarFrame = 0;
+    placeSelectionBar();
+  });
+}
+
 /** Above the selection (below it when there's no room), on screen. */
 function placeSelectionBar() {
   const s = selOwner;
@@ -1007,7 +1061,9 @@ function placeSelectionBar() {
   const bw = selBar.offsetWidth;
   const bh = selBar.offsetHeight;
   const x = Math.max(8, Math.min(window.innerWidth - bw - 8, (r.left + r.right) / 2 - bw / 2));
-  const top = $('#term').getBoundingClientRect().top + 52;
+  // (below the tab bar — in landscape the tabs are a rail at the side: the screen's top)
+  const tb = document.querySelector('.topbar')?.getBoundingClientRect();
+  const top = tb && tb.width > tb.height ? tb.bottom + 4 : $('#term').getBoundingClientRect().top + 4;
   let y = r.top - bh - 8;
   if (y < top) y = r.bottom + 8;
   selBar.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
@@ -1116,7 +1172,7 @@ function splineAt(t: number): number {
 function bindTerminalGestures(s: TerminalSession) {
   const el = s.renderer.el;
   s.renderer.onSelectionDrawn = () => {
-    if (selOwner === s) placeSelectionBar();
+    if (selOwner === s) placeSelectionBarSoon();
   };
   s.edit.onChanged = (sel) => {
     // gone by itself (the line was sent, the box moved): the bar and the selection's owner go
@@ -1231,6 +1287,14 @@ function bindTerminalGestures(s: TerminalSession) {
   const stopInertia = () => {
     cancelAnimationFrame(inertia);
     inertia = 0;
+  };
+  // (another tab shown, or this one closed: a fling or queued wheel steps stop — they went on
+  // scrolling a program out of sight)
+  s.stopGestures = () => {
+    stopInertia();
+    cancelAnimationFrame(wheelFrame);
+    wheelFrame = 0;
+    wheelLines = 0;
   };
   // Full-screen programs (vim, less, Claude Code's full-screen view) scroll themselves: they
   // get wheel steps, paced — at most 2 a frame, a short backlog — so a quick swipe doesn't
@@ -1413,13 +1477,15 @@ function bindTerminalGestures(s: TerminalSession) {
         bridge.openUrl(url); // the user tapped it
         return;
       }
-      const file = own ? null : s.fileAt(e.clientX, e.clientY);
+      // (names in the Android shell are the phone's, not Ubuntu's: not looked up there)
+      const ubuntuFiles = !own && s.kind !== 'android';
+      const file = ubuntuFiles ? s.fileAt(e.clientX, e.clientY) : null;
       if (file) {
         openTappedFile(s, file); // report.pdf, ~/site/index.html …
         return;
       }
       // a folder's name (ls output, a path an agent printed): its files, to open one
-      const word = own || s.nearInput(e.clientX, e.clientY) ? null : s.wordAt(e.clientX, e.clientY);
+      const word = !ubuntuFiles || s.nearInput(e.clientX, e.clientY) ? null : s.wordAt(e.clientX, e.clientY);
       if (word) {
         void tapWord(s, word, e.clientX, e.clientY);
         return;
@@ -1654,11 +1720,15 @@ function openSheet(title: string, ...content: Kid[]) {
   // a sheet replacing another (⋮ → Settings): the sheet stays, its height eases to the new
   // content and the content fades in, instead of a jump
   const swap = !sheet.hidden;
-  const h0 = swap ? sheet.offsetHeight : 0;
   settleComposing();
   clearTimeout(sheetHideTimer);
+  // (before measuring: with "closing" on, its slide-down would start, and taking it off
+  // again would replay the slide-up from the bottom — the sheet stays where it is instead)
   sheet.classList.remove('closing');
   backdrop.classList.remove('closing');
+  sheet.style.animation = swap ? 'none' : '';
+  backdrop.style.animation = swap ? 'none' : '';
+  const h0 = swap ? sheet.offsetHeight : 0;
   body.replaceChildren(...([title ? h('h3', {}, title) : null, ...content].filter(Boolean) as Node[]));
   backdrop.hidden = false;
   sheet.hidden = false;
@@ -1678,6 +1748,11 @@ function closeSheet() {
   const sheet = $('#sheet');
   const backdrop = $('#sheet-backdrop');
   if (sheet.hidden) return;
+  // a field in it had the keyboard: the keyboard goes with the sheet (the terminal didn't
+  // have it any more, and the page would think it's still up)
+  if (sheet.contains(document.activeElement) && (document.activeElement as HTMLElement).matches('input, textarea')) hideKeyboard();
+  sheet.style.animation = '';
+  backdrop.style.animation = '';
   sheet.classList.add('closing');
   backdrop.classList.add('closing');
   clearTimeout(sheetHideTimer);
@@ -1770,7 +1845,8 @@ function askFolder(kind: SessionKind) {
   }
   const recent = recentDirs();
   const start = recent.length ? recent : [homeDir()];
-  const places: [string, string, string][] = [['home', 'Home', homeDir()]];
+  // (Home is already the place to start when nothing was used yet: here it's for browsing)
+  const places: [string, string, string][] = [['home', recent.length ? 'Home' : 'Browse Home', homeDir()]];
   if (hostState.host === 'android') {
     places.push(
       ['folder', 'Phone storage', `${homeDir()}/storage/shared`],
@@ -1789,7 +1865,8 @@ function askFolder(kind: SessionKind) {
     h('div', { class: 'fp-label' }, 'Choose another folder'),
     h('div', { class: 'action-list' },
       ...places.map(([icon, title, p]) => folderRow(icon, title,
-        needsAccess && p !== homeDir() ? 'Needs storage access' : tildify(p), () => browseFolder(kind, p), 'browse'))),
+        needsAccess && p !== homeDir() ? 'Needs storage access' : p === homeDir() && !recent.length ? 'Pick a folder inside ~' : tildify(p),
+        () => browseFolder(kind, p), 'browse'))),
   );
 }
 
@@ -1872,14 +1949,15 @@ async function showFolder(s: TerminalSession, path: string) {
     const dirs = res.dirs ?? [];
     const files = res.files ?? [];
     body = [
-      h('div', { class: 'action-list' },
-        ...dirs.map((d) => folderRow('folder', d, '', () => void showFolder(s, childDir(p, d)), 'browse sub')),
-        ...files.map((f) => folderRow('file', f, '', () => {
+      h('div', { class: 'action-list' }, ...cappedRows([
+        ...dirs.map((d) => () => folderRow('folder', d, '', () => void showFolder(s, childDir(p, d)), 'browse sub')),
+        ...files.map((f) => () => folderRow('file', f, '', () => {
           void bridge.openFile([childDir(p, f)]).then((r) => {
             if (r === 'notfound') toast(`${f} wasn’t found here`);
             else if (r) toast(r);
           });
-        }, 'sub file'))),
+        }, 'sub file')),
+      ])),
       dirs.length || files.length ? null : h('p', { class: 'fp-empty' }, 'This folder is empty.'),
     ];
   }
@@ -1954,7 +2032,9 @@ function addAccount(kind: SessionKind) {
     h('p', { class: 'note' }, `A name for it. ${KIND_NAME[kind]} asks you to sign in the first time it opens with it; each account stays signed in on its own, so several can run at once.`),
     input, err,
     h('div', { class: 'sheet-actions' }, btn));
-  setTimeout(() => input.focus(), 250);
+  setTimeout(() => {
+    if (sheetOpen() && input.isConnected) input.focus(); // (not once the sheet was put away)
+  }, 250);
 }
 
 /** A long-press on an account: sign it out (it signs in afresh), or remove an extra one. */
@@ -2045,8 +2125,8 @@ async function browseFolder(kind: SessionKind, path: string) {
     const dirs = res.dirs ?? [];
     body = [
       h('div', { class: 'action-list' },
-        ...dirs.map((d) => folderRow('folder', d, '', () => browseFolder(kind, childDir(p, d)), 'browse sub')),
-        newFolderRow(kind, p)),
+        newFolderRow(kind, p),
+        ...cappedRows(dirs.map((d) => () => folderRow('folder', d, '', () => browseFolder(kind, childDir(p, d)), 'browse sub')))),
       dirs.length ? null : h('p', { class: 'fp-empty' }, 'No folders in here — open it, or make one.'),
     ];
   }
@@ -2138,6 +2218,8 @@ function openSettingsSheet() {
   const preview = h('div', {}, samplePreview());
   const refreshPreview = () => preview.replaceChildren(samplePreview());
 
+  let dragFont = prefs.fontSize;
+  let dragBn = prefs.bnScale;
   const range = (label: string, min: number, max: number, step: number, value: number, fmt: (v: number) => string,
     onInput: (v: number) => void, onDone: () => void) => {
     const val = h('span', { class: 'val' }, fmt(value));
@@ -2246,15 +2328,19 @@ function openSettingsSheet() {
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Preview'), preview),
     // while dragging only the preview changes; the terminals once the finger lifts (each
     // change resizes them and makes their programs redraw)
+    // (the setting itself too: a sheet closed mid-drag leaves everything as it was)
     range('Text size', 9, 28, 1, prefs.fontSize, (v) => `${v}px`, (v) => {
-      prefs.fontSize = v;
+      dragFont = v;
       sample?.renderer.setOptions({ fontSize: v });
-    }, () => zoomTo(prefs.fontSize)),
+    }, () => zoomTo(dragFont)),
     range('Bangla letter size', 0.8, 1.3, 0.05, prefs.bnScale, (v) => `${Math.round(v * 100)}%`, (v) => {
-      prefs.bnScale = v;
-      for (const s of sessions.values()) s.renderer.setOptions({ bnScale: v });
+      dragBn = v;
       sample?.renderer.setOptions({ bnScale: v });
-    }, savePrefs),
+    }, () => {
+      prefs.bnScale = dragBn;
+      for (const s of sessions.values()) s.renderer.setOptions({ bnScale: dragBn });
+      savePrefs();
+    }),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Cursor'), cursorSeg),
     h('div', { class: 'setting' }, h('div', { class: 's-title' }, 'Prompt style'),
       h('div', { class: 's-sub' }, 'How the shell’s prompt looks. The branch (main) shows inside a git project, the time a command took after one that ran 2 s or more.'), promptList),
@@ -2338,7 +2424,8 @@ function bindChrome() {
   $('#home-btn').onclick = () => showHome();
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
-  $('#remote-top-btn').onclick = () => openDashboard(active?.kind === 'claude' ? 'claude' : 'agy');
+  // (Claude Code started in a shell tab too)
+  $('#remote-top-btn').onclick = () => openDashboard(active?.kind === 'claude' || active?.agent === 'claude' ? 'claude' : 'agy');
   $('#settings-btn').onclick = () => openSettingsSheet();
   $('#sheet-backdrop').onclick = () => closeSheet();
   $('#remote-btn').onclick = () => openDashboard('agy');
@@ -2453,7 +2540,8 @@ async function boot() {
   try {
     // (the fonts took a while: the list may have changed — and a session opened from the
     // home screen meanwhile is already here)
-    const userOpened = sessions.size > 0;
+    // (a sheet open counts too: the folder picker the user just opened stays where it is)
+    const userOpened = sessions.size > 0 || sheetOpen();
     const list = (await bridge.listSessions().catch(() => first)).filter((i) => !sessions.has(i.id));
     // forget saved terminal modes of sessions that no longer exist
     try {
@@ -2485,7 +2573,7 @@ async function boot() {
     }
     pendingOpen = '';
     restored = true;
-    if (!sessions.size) await reportLostSessions();
+    if (!sessions.size && !sheetOpen()) await reportLostSessions();
   } catch { /* nothing to restore */ }
   if (document.body.dataset.screen === 'boot') enterHome();
 

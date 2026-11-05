@@ -13,11 +13,12 @@ name=${ANTICODE_PROFILE-}
 [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,19}$ ]] || exit 0
 base=${ANTICODE_REAL_HOME:-$HOME}
 d="$base/.anticode/profiles/$kind/$name"
-mkdir -p "$d" || exit 1
+[ -d "$d" ] || mkdir -p "$d" || exit 1
 if [ "$kind" = agy ]; then
   shopt -s nullglob dotglob
   # what holds a Google / Antigravity sign-in or its settings: never shared between accounts
-  own() { [[ ${1,,} =~ antigravity|gemini|jetski|google|gcloud|keyring|codeium|windsurf|credentials ]]; }
+  # (whole names: ~/.git-credentials is shared, git over https keeps working)
+  own() { [[ ${1,,} =~ ^\.?(antigravity|gemini|jetski|google|gcloud|keyrings?|codeium|windsurf|credentials(\.json)?)$ ]]; }
   # [$2] mirrors [$1]: a link per entry, except the account's own; the folders named after it
   # are folders of the account's own, mirrored the same way (one level down at most)
   mirror() {
@@ -26,7 +27,8 @@ if [ "$kind" = agy ]; then
       n=${f##*/}
       [ "$n" = .anticode ] && continue
       own "$n" && continue
-      if [ -n "$deep" ] && [[ " $deep " == *" $n "* ]] && [ -d "$f" ] && [ ! -L "$f" ]; then
+      # (a dotfiles setup's ~/.config may be a link: mirrored all the same)
+      if [ -n "$deep" ] && [[ " $deep " == *" $n "* ]] && [ -d "$f" ]; then
         # (made by an earlier version as a link to the real one: a folder of its own now)
         [ -L "$dst/$n" ] && rm -f "$dst/$n"
         mkdir -p "$dst/$n" && mirror "$f" "$dst/$n" ""
@@ -37,7 +39,7 @@ if [ "$kind" = agy ]; then
   }
   for top in .config .local .cache; do
     [ -L "$d/$top" ] && rm -f "$d/$top"
-    mkdir -p "$d/$top"
+    [ -d "$d/$top" ] || mkdir -p "$d/$top"
   done
   mirror "$base" "$d" ".config .local .cache"
   # (inside ~/.local: share and state hold app data — mirrored, not linked whole)

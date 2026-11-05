@@ -26,4 +26,10 @@ object Pty {
     @JvmStatic external fun close(fd: Int)
 
     @JvmStatic external fun sendSignal(pid: Int, signal: Int)
+
+    /** The program reads a hidden answer (a password): echo off, whole lines. */
+    @JvmStatic external fun hiddenInput(fd: Int): Boolean
+
+    /** SIGHUP to the process group in front on the terminal [fd]. */
+    @JvmStatic external fun hangUp(fd: Int)
 }

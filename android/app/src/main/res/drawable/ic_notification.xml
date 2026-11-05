@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- AntiCode mark for the status bar -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M12,2.5 C12.6,2.5 13,2.8 13.3,3.4 L20.2,18.8 C20.6,19.7 20,20.6 19,20.6 L18.4,20.6 C17.8,20.6 17.4,20.3 17.1,19.7 L12,8.5 L6.9,19.7 C6.6,20.3 6.2,20.6 5.6,20.6 L5,20.6 C4,20.6 3.4,19.7 3.8,18.8 L10.7,3.4 C11,2.8 11.4,2.5 12,2.5 Z M9.3,14.5 h5.4 a1,1 0 0 1 1,1 v0.6 a1,1 0 0 1 -1,1 h-5.4 a1,1 0 0 1 -1,-1 v-0.6 a1,1 0 0 1 1,-1 Z" />
+    <group android:scaleX="0.45" android:scaleY="0.45" android:translateX="-12.19" android:translateY="-11.88">
+        <path android:strokeColor="#FFFFFFFF" android:strokeWidth="6.2" android:pathData="M51.29,41.73 L39.04,67.69 M56.71,41.73 L68.96,67.69" />
+        <path android:fillType="evenOdd" android:fillColor="#FFFFFFFF" android:pathData="M46.4,36 a7.6,7.6 0 1,0 15.2,0 a7.6,7.6 0 1,0 -15.2,0 Z M51.1,36 a2.9,2.9 0 1,0 5.8,0 a2.9,2.9 0 1,0 -5.8,0 Z M30.8,72 a6.2,6.2 0 1,0 12.4,0 a6.2,6.2 0 1,0 -12.4,0 Z M34.7,72 a2.3,2.3 0 1,0 4.6,0 a2.3,2.3 0 1,0 -4.6,0 Z M64.8,72 a6.2,6.2 0 1,0 12.4,0 a6.2,6.2 0 1,0 -12.4,0 Z M68.7,72 a2.3,2.3 0 1,0 4.6,0 a2.3,2.3 0 1,0 -4.6,0 Z M49.3,58 h9.4 a2.3,2.3 0 0 1 0,4.6 h-9.4 a2.3,2.3 0 0 1 0,-4.6 Z" />
+    </group>
 </vector>

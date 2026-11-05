@@ -141,11 +141,21 @@ class UbuntuManager private constructor(private val context: Context) {
 
     private fun profileDir(kind: String, name: String) = File(profilesRoot(kind), name)
 
+    /**
+     * The profile's folder only if it really is where it should be: no link anywhere on the way
+     * (~/.anticode or profiles/<kind> made a link would point deleting at other folders).
+     */
+    private fun ownProfileDir(kind: String, name: String): File? {
+        val d = profileDir(kind, name)
+        val real = try { d.canonicalPath } catch (_: Exception) { return null }
+        return d.takeIf { real == File(rootfsReal, "root/.anticode/profiles/$kind/$name").path }
+    }
+
     /** The extra accounts of [kind] ("agy" / "claude"), as JSON: [{name, email}], oldest first. */
     fun listProfiles(kind: String): String {
         val arr = org.json.JSONArray()
         if (kind != "agy" && kind != "claude") return arr.toString()
-        val dirs = profilesRoot(kind).listFiles()?.filter { it.isDirectory && !isSymlink(it) && validProfile(it.name) }
+        val dirs = profilesRoot(kind).listFiles()?.filter { it.isDirectory && !isSymlink(it) && validProfile(it.name) && ownProfileDir(kind, it.name) != null }
             ?.sortedBy { it.lastModified() } ?: emptyList()
         for (d in dirs) arr.put(JSONObject().put("name", d.name).put("email", accountEmail(kind, d.name)))
         return arr.toString()
@@ -162,7 +172,7 @@ class UbuntuManager private constructor(private val context: Context) {
     fun signOut(kind: String, profile: String): Boolean {
         val prof = profile.takeIf { validProfile(it) } ?: ""
         if (profile.isNotEmpty() && prof.isEmpty()) return false
-        val home = if (prof.isEmpty()) File(rootfs, "root") else profileDir(kind, prof)
+        val home = if (prof.isEmpty()) File(rootfs, "root") else ownProfileDir(kind, prof) ?: return false
         if (!home.isDirectory) return false
         fun gone(f: File) {
             if (isSymlink(f)) { f.delete(); return } // (never through a link into another account)
@@ -202,7 +212,7 @@ class UbuntuManager private constructor(private val context: Context) {
      */
     fun deleteProfile(kind: String, name: String): Boolean {
         if ((kind != "agy" && kind != "claude") || !validProfile(name)) return false
-        val d = profileDir(kind, name)
+        val d = ownProfileDir(kind, name) ?: return false
         if (!d.exists() || isSymlink(d)) return false
         fun remove(f: File) {
             if (!isSymlink(f) && f.isDirectory) f.listFiles()?.forEach { remove(it) }
@@ -213,7 +223,16 @@ class UbuntuManager private constructor(private val context: Context) {
         return !d.exists()
     }
 
+    // (looked up again at most every few seconds: the home screen asks for every tab)
+    private val agySeen = HashMap<String, Pair<Long, String>>()
+
     private fun agyEmail(dir: File): String {
+        val now = android.os.SystemClock.uptimeMillis()
+        agySeen[dir.path]?.let { if (now - it.first < 5000) return it.second }
+        return findAgyEmail(dir).also { synchronized(agySeen) { agySeen[dir.path] = now to it } }
+    }
+
+    private fun findAgyEmail(dir: File): String {
         if (!dir.isDirectory) return ""
         val skip = setOf("brain", "skills", "plugins", "sidecars", "artifacts", "workflows", "global_workflows", "tmp", "history", "cache", "logs")
         val names = Regex("account|oauth|cred|auth|token|user|login|session", RegexOption.IGNORE_CASE)

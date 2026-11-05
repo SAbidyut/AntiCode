@@ -44,6 +44,15 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
      */
     var compatMode = false
 
+    /** A password is asked for: a password field to the keyboard (no suggestions, nothing learnt). */
+    private var hidden = false
+
+    fun setHidden(on: Boolean) {
+        if (on == hidden) return
+        hidden = on
+        if (hasFocus()) (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).restartInput(this)
+    }
+
     private var connection: Connection? = null
 
     /** Drop the word being composed (the page already sent it, e.g. before a key-bar key). */
@@ -65,6 +74,7 @@ class KeyCaptureView(context: Context, private val sink: Sink) : View(context) {
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
         outAttrs.inputType = when {
+            hidden -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             // plain text: suggestions on; no AUTO_CORRECT / CAP_* flags → no autocorrect, no capitals
             smart -> InputType.TYPE_CLASS_TEXT
             compatMode -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or

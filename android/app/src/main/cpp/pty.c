@@ -208,3 +208,32 @@ Java_com_sabidyut_agyterm_term_Pty_sendSignal(JNIEnv *env, jclass clazz, jint pi
     // the child called setsid(), so -pid addresses its whole process group
     if (kill(-pid, sig) != 0) kill(pid, sig);
 }
+
+/*
+ * Hangs up the program in front on the terminal (an interactive bash puts itself in a
+ * process group of its own, which the signal to proot's group doesn't reach — proot also
+ * ignores SIGHUP): it can save its history and clean up, as when a terminal window closes.
+ */
+JNIEXPORT void JNICALL
+Java_com_sabidyut_agyterm_term_Pty_hangUp(JNIEnv *env, jclass clazz, jint fd) {
+    (void)env;
+    (void)clazz;
+    pid_t pg = tcgetpgrp(fd);
+    if (pg > 0) {
+        kill(-pg, SIGHUP);
+        kill(-pg, SIGCONT); // (a stopped job gets it too)
+    }
+}
+
+/*
+ * The program reads a hidden answer (a password: sudo, ssh, read -s): lines typed with echo
+ * off. (Line editors — bash, Claude Code — turn echo off too, but read keys one by one.)
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_sabidyut_agyterm_term_Pty_hiddenInput(JNIEnv *env, jclass clazz, jint fd) {
+    (void)env;
+    (void)clazz;
+    struct termios t;
+    if (tcgetattr(fd, &t) != 0) return JNI_FALSE;
+    return (!(t.c_lflag & ECHO) && (t.c_lflag & ICANON)) ? JNI_TRUE : JNI_FALSE;
+}

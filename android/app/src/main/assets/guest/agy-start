@@ -1,6 +1,8 @@
 #!/bin/bash
 # Started by the app's "Antigravity" button: set up if needed, run agy, then stay in a shell.
 export PATH="$HOME/.local/bin:$PATH"
+# Ctrl-C stops the agent (or its setup), not this script: the tab goes on to its shell
+trap : INT
 [ -f "$HOME/.agy-terminal-setup-done" ] && command -v agy >/dev/null 2>&1 || /usr/local/bin/agy-setup --auto
 if command -v agy >/dev/null 2>&1; then
   printf '\e]7770;exec;%s;agy\a' "${ANTICODE_LINK_TOKEN:-}"

@@ -10,12 +10,12 @@
 # ---------------------------------------------------------------- ble.sh (autosuggestions)
 # Fish-like grey suggestions from history (→ or End accepts), Tab completion menu and
 # syntax colours. Off with:  agy-autocomplete off
-if [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && [ -z "$CLAUDECODE" ] && [ "$TERM" != dumb ] \
+if [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && [ -z "${CLAUDECODE-}" ] && [ "${TERM-}" != dumb ] \
    && [ -f /usr/share/blesh/ble.sh ] && [ ! -f "$HOME/.config/agy-terminal/no-autocomplete" ]; then
   source /usr/share/blesh/ble.sh --noattach
 fi
 # bash's own completions for apt, git, systemctl … (package: bash-completion)
-if [ -z "$BASH_COMPLETION_VERSINFO" ] && [ -f /usr/share/bash-completion/bash_completion ] && [[ $- == *i* ]]; then
+if [ -z "${BASH_COMPLETION_VERSINFO-}" ] && [ -f /usr/share/bash-completion/bash_completion ] && [[ $- == *i* ]]; then
   . /usr/share/bash-completion/bash_completion
 fi
 
@@ -98,12 +98,21 @@ __agy_cut() {
   __agy_w "$s"
   if (( __agy_n <= max )); then __agy_c=$s; return; fi
   if (( max <= 1 )); then __agy_c=…; return; fi
-  while [ -n "$s" ]; do
-    if [ "$1" = tail ]; then s=${s:1}; else s=${s:0:${#s}-1}; fi
-    __agy_w "$s"
-    (( __agy_n <= max - 1 )) && break
+  # one pass: letters taken from the end that's kept, each measured once, while they fit
+  # (re-measuring the rest after every letter was slow for a long Bangla or Chinese name)
+  local keep= ch used=0 i n=${#s}
+  for (( i = 0; i < n; i++ )); do
+    if [ "$1" = tail ]; then ch=${s:n-1-i:1}; else ch=${s:i:1}; fi
+    __agy_w "$ch"
+    (( used + __agy_n > max - 1 )) && break
+    (( used += __agy_n ))
+    if [ "$1" = tail ]; then keep=$ch$keep; else keep+=$ch; fi
   done
-  if [ "$1" = tail ]; then __agy_c=…$s; else __agy_c=$s…; fi
+  if [ "$1" = tail ]; then
+    # (not starting on a vowel sign: it would be drawn on a dotted circle)
+    while [ -n "$keep" ]; do __agy_w "${keep:0:1}"; (( __agy_n == 0 )) || break; keep=${keep:1}; done
+    __agy_c=…$keep
+  else __agy_c=$keep…; fi
 }
 
 # The path, shortened to fit [$1] cells: "…/parent/name", else "name", else the name's end.
@@ -131,6 +140,7 @@ __agy_folder_need() {
   __agy_need=$__agy_n
   (( __agy_need < 1 )) && __agy_need=1
   (( __agy_need > 12 )) && __agy_need=12
+  return 0
 }
 
 # (on the first line of a style with coloured blocks: tells the app to draw that line's text
@@ -140,7 +150,13 @@ __agy_bar="\[\e]7770;bar;${__agy_tok}\a\]"
 
 __agy_prompt() {
   local status=$?
+  # (the user's set -e / -u / -x don't break the prompt — nor print hundreds of trace lines;
+  # their options come back as they were after it)
+  local -
+  set +eux
   __agy_in_prompt=1
+  # (each command saved at once: a tab closed or killed keeps its history for the suggestions)
+  history -a 2>/dev/null
   # tell the app the command is done (its "task finished" notification), and where the
   # shell is (OSC 7: a file name tapped in the terminal is looked for here)
   printf '\e]7770;done;%s\a\e]7;file://android-%s%s\a' "$__agy_tok" "$__agy_tok" "${PWD//[[:cntrl:]]/}"
@@ -148,7 +164,9 @@ __agy_prompt() {
   local style=powerline
   [ -r "$__agy_style_file" ] && read -r style < "$__agy_style_file"
 
-  local path=${PWD/#$HOME/\~}
+  local path=$PWD
+  # (only home itself or what's in it: /root-backup isn't ~-backup)
+  [[ $PWD == "$HOME" || $PWD == "$HOME"/* ]] && path=\~${PWD#"$HOME"}
   # a folder name can't smuggle escape sequences into the title or the bar
   path=${path//[[:cntrl:]]/?}
   __agy_txt=()
@@ -401,7 +419,8 @@ __agy_ps_powerline() {
   # window title (shown on the app's tab) + segments + input line
   PS1="${__agy_bar}${rclock}${title}${line}\n\[\e[38;2;${mark}m\]❯\[\e[0m\] "
 }
-PROMPT_COMMAND=__agy_prompt
+# (first, to see the command's status; other tools' hooks set earlier keep running after it)
+[[ ${PROMPT_COMMAND-} == *__agy_prompt* ]] || PROMPT_COMMAND="__agy_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 # a command starts (the app's "task finished" notification waits for the prompt again); its
 # start time is noted for the prompt's "took 5s" (the empty slice prints nothing — the
 # arithmetic sets the variable)
@@ -411,8 +430,15 @@ PS0=$'\e]7770;exec;'"${__agy_tok}"$'\a''${PS0:0:$((__agy_t0=SECONDS,0))}'
 # Typing 'agy' or 'claude' before they are installed installs them first.
 command_not_found_handle() {
   case "$1" in
-    agy) /usr/local/bin/agy-setup --auto && hash -r && command agy "${@:2}"; return ;;
-    claude) /usr/local/bin/claude-setup --auto && hash -r && command claude "${@:2}"; return ;;
+    # (installed for the real home — in an extra account's tab this runs with that account's
+    # HOME; and once only: still missing after it, it says so instead of trying again forever)
+    agy|claude)
+      env HOME="${ANTICODE_REAL_HOME:-$HOME}" -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+        /usr/local/bin/"$1"-setup --auto || return
+      hash -r
+      export PATH="${ANTICODE_REAL_HOME:-$HOME}/.local/bin:$PATH"
+      type -P "$1" >/dev/null || { printf '%s: still not found after setup — try %s-setup\n' "$1" "$1" >&2; return 127; }
+      command "$@"; return ;;
   esac
   if [ -x /usr/lib/command-not-found ]; then /usr/lib/command-not-found -- "$1"; return $?; fi
   printf '%s: command not found\n' "$1" >&2
@@ -426,21 +452,23 @@ command_not_found_handle() {
 # A tab opened for one of an agent's extra accounts (ANTICODE_PROFILE): `agy` / `claude` typed
 # in it sign in with that account too (see anticode-account).
 agy() {
-  printf '\e]7770;widths;%s;joined\a' "$__agy_tok"
+  # (to the app — on the terminal only: `agy -p … > out.md` gets agy's output, nothing else)
+  [ -t 1 ] && printf '\e]7770;exec;%s;agy\a' "$__agy_tok"
   local -a pre=()
   if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ] && { [ $# -eq 0 ] || [[ $1 == -* ]]; }; then
     pre=(--dangerously-skip-permissions)
   fi
-  local h
-  h=$(/usr/local/bin/anticode-account agy 2>/dev/null)
+  local h=
+  [ -n "${ANTICODE_PROFILE-}" ] && h=$(/usr/local/bin/anticode-account agy 2>/dev/null)
   if [ -n "$h" ]; then
     ANTICODE_REAL_HOME=$HOME HOME=$h XDG_CONFIG_HOME=$h/.config XDG_DATA_HOME=$h/.local/share \
       XDG_STATE_HOME=$h/.local/state XDG_CACHE_HOME=$h/.cache command agy "${pre[@]}" "$@"
   else command agy "${pre[@]}" "$@"; fi
 }
 claude() {
-  local d
-  d=$(/usr/local/bin/anticode-account claude 2>/dev/null)
+  [ -t 1 ] && printf '\e]7770;exec;%s;claude\a' "$__agy_tok"
+  local d=
+  [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account claude 2>/dev/null)
   if [ -n "$d" ]; then CLAUDE_CONFIG_DIR=$d command claude "$@"; else command claude "$@"; fi
 }
 
