@@ -61,12 +61,36 @@ class InAppBrowser(private val activity: Activity) {
     var toolbarColor = Color.parseColor("#0B0D12")
     var darkTheme = true
 
-    fun open(url: String) {
-        // open Google dashboards with the account the agent uses, not the browser's first one
-        val parsed = Uri.parse(url)
-        val host = parsed.host ?: ""
-        val google = host == "google.com" || host.endsWith(".google.com")
-        val uri = if (google) Accounts.withAccount(parsed, Accounts.antigravity(activity)) else parsed
+    /**
+     * A sign-in page, with the account the user chose for it (the page asked first):
+     * [hint] an email — Google signs in with that account; [choose] — Google shows its list
+     * of the accounts on the phone (and "Use another account"); [private] — a tab with no
+     * saved sign-ins at all (Chrome's ephemeral Custom Tab), for an account the browser
+     * isn't signed in to, on any site.
+     */
+    fun openSignIn(url: String, hint: String, choose: Boolean, private: Boolean) {
+        var uri = Uri.parse(url)
+        val host = uri.host ?: ""
+        if (host == "accounts.google.com" && !uri.isOpaque) {
+            if (hint.isNotEmpty()) uri = withParam(uri, "login_hint", hint)
+            if (choose || private) {
+                // (added to the prompt the page asked for, e.g. "consent select_account")
+                val prompt = (uri.getQueryParameter("prompt") ?: "").split(' ').filter { it.isNotBlank() }.toMutableList()
+                if ("select_account" !in prompt) prompt += "select_account"
+                uri = withParam(uri, "prompt", prompt.joinToString(" "))
+            }
+        }
+        open(uri.toString(), private)
+    }
+
+    private fun withParam(uri: Uri, name: String, value: String): Uri {
+        val b = uri.buildUpon().clearQuery()
+        for (n in uri.queryParameterNames) if (n != name) for (v in uri.getQueryParameters(n)) b.appendQueryParameter(n, v)
+        return b.appendQueryParameter(name, value).build()
+    }
+
+    fun open(url: String, private: Boolean = false) {
+        val uri = Uri.parse(url)
         val scheme = uri.scheme?.lowercase()
         if (scheme == null || scheme == "file") {
             // Android forbids handing file:// paths to other apps (it would crash the app)
@@ -103,6 +127,8 @@ class InAppBrowser(private val activity: Activity) {
             .build()
         // Pin the provider so a non-Custom-Tabs default browser doesn't take over.
         tab.intent.setPackage(pkg)
+        // nothing remembered (no other account signed in, nothing kept after): Chrome 136+
+        if (private) tab.intent.putExtra(EXTRA_EPHEMERAL, true)
         try {
             tab.launchUrl(activity, uri)
         } catch (_: Exception) {
@@ -157,6 +183,8 @@ class InAppBrowser(private val activity: Activity) {
     }
 
     companion object {
+        /** CustomTabsIntent.EXTRA_ENABLE_EPHEMERAL_BROWSING (androidx.browser 1.9). */
+        private const val EXTRA_EPHEMERAL = "androidx.browser.customtabs.extra.ENABLE_EPHEMERAL_BROWSING"
         private val PREFERRED = listOf(
             "com.android.chrome",
             "com.chrome.beta",

@@ -369,9 +369,11 @@ function openDashboard(which: 'agy' | 'claude') {
  * opens web pages straight away; anything else — the same escape printed by `cat` of a
  * downloaded file, or a link to another app — only after the user says so.
  */
-function openLink(url: string, trusted: boolean) {
+function openLink(url: string, trusted: boolean, from?: TerminalSession) {
   if (trusted && /^https?:\/\//i.test(url)) {
-    bridge.openUrl(url);
+    const site = signInSite(url);
+    if (site) void askSignInAccount(url, site, from);
+    else bridge.openUrl(url);
     return;
   }
   openSheet(
@@ -384,11 +386,52 @@ function openLink(url: string, trusted: boolean) {
   );
 }
 
+/** A sign-in page an agent opens ('google': Antigravity's, 'claude': Claude Code's), or null. */
+function signInSite(url: string): 'google' | 'claude' | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.hostname === 'accounts.google.com') return 'google';
+  if (/^(claude\.ai|console\.anthropic\.com|platform\.claude\.com)$/.test(u.hostname) && /oauth|login|authorize/i.test(u.pathname)) return 'claude';
+  return null;
+}
+
+/**
+ * Before the browser opens to sign in: which account? The browser on its own goes straight
+ * to the account it's signed in to — there was no way to sign an agent in with another one.
+ */
+async function askSignInAccount(url: string, site: 'google' | 'claude', from?: TerminalSession) {
+  const kind = site === 'google' ? 'agy' : 'claude';
+  // the accounts the app knows for this agent (the main one and the extra ones) — the tab's
+  // own first
+  const known: string[] = [];
+  const tabEmail = from && (from.kind === kind || from.agent === kind) ? bridge.accountEmail(kind, from.kind === kind ? from.profile : '') : '';
+  if (tabEmail) known.push(tabEmail);
+  for (const e of [bridge.accountEmail(kind, ''), ...(await bridge.listProfiles(kind)).map((p) => p.email)]) {
+    if (e && !known.includes(e)) known.push(e);
+  }
+  const forTab = from?.kind === kind && from.profile ? ` (“${from.profile}”)` : '';
+  const rows: HTMLElement[] = [];
+  if (site === 'google') {
+    for (const e of known) rows.push(action('check', e, e === tabEmail ? 'This tab’s account' : 'Signed in before', () => bridge.openSignIn(url, e, false, false)));
+    rows.push(action('globe', 'Choose an account on this phone', 'Google lists them — or “Use another account”', () => bridge.openSignIn(url, '', true, false)));
+  } else {
+    rows.push(action('external', 'The account signed in to Claude in the browser', known.length ? `Known here: ${known.join(', ')}` : '', () => bridge.openSignIn(url, '', false, false)));
+  }
+  rows.push(action('shield', 'Another account', 'A private tab: nothing signed in, nothing kept', () => bridge.openSignIn(url, '', site === 'google', true)));
+  rows.push(action('x', 'Cancel', '', () => {}));
+  openSheet(`Sign in to ${site === 'google' ? 'Antigravity' : 'Claude Code'}${forTab} with…`,
+    h('div', { class: 'action-list' }, ...rows));
+}
+
 function addSession(id: string, kind: SessionKind): TerminalSession {
   const existing = sessions.get(id);
   if (existing) return existing; // listed and created at the same moment
   const s = new TerminalSession(bridge, id, kind, rendererOpts());
-  s.onLink = openLink;
+  s.onLink = (url, trusted) => openLink(url, trusted, s);
   s.renderer.el.dataset.cursor = prefs.cursor;
   s.onTitle = () => renderTabs();
   s.onMeta = () => renderTabs();
@@ -2075,18 +2118,6 @@ function openSettingsSheet() {
         h('label', { class: 'switch' }, input, h('span', {}))));
   };
 
-  const accountField = h('input', { class: 'text-input', type: 'email', spellcheck: 'false', placeholder: 'you@gmail.com' }) as HTMLInputElement;
-  accountField.value = accounts.agy;
-  accountField.onchange = () => {
-    const v = accountField.value.trim();
-    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
-      toast('That doesn’t look like an email address');
-      accountField.value = accounts.agy;
-      return;
-    }
-    accounts.agy = v;
-    bridge.setAntigravityAccount(accounts.agy);
-  };
   const resetBtn = h('button', { class: 'btn btn-secondary' }, 'Open claude.ai in the app again');
   resetBtn.onclick = () => {
     bridge.resetDashboardChoices();
@@ -2166,10 +2197,6 @@ function openSettingsSheet() {
         savePrefs();
         bridge.setKeyboardCompat(v);
       }),
-      h('div', { class: 'setting' },
-        h('div', { class: 's-title' }, 'Antigravity Google account'),
-        h('div', { class: 's-sub' }, 'Found automatically when agy starts.'),
-        accountField),
       h('div', { class: 'setting' },
         h('div', { class: 's-title' }, 'Antigravity dashboard address'),
         urlField('remoteUrl')),

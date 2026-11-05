@@ -116,6 +116,8 @@ export interface Bridge {
   deleteProfile(kind: string, name: string): Promise<boolean>;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
   setAntigravityAccount(email: string, profile?: string): void;
+  /** A sign-in page with the account chosen for it: an email, Google's list, or a private tab. */
+  openSignIn(url: string, hint: string, choose: boolean, privateTab: boolean): void;
   getAccounts(): Promise<{ agy: string; claude: string }>;
   /** Dashboards that went to Chrome for a Google sign-in open in the app again. */
   resetDashboardChoices(): void;
@@ -181,6 +183,7 @@ interface AndroidBridgeApi {
   deleteProfile?(kind: string, name: string): boolean;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string, profile: string): void;
+  openSignIn?(url: string, hint: string, choose: boolean, privateTab: boolean): void;
   getAccounts?(): string;
   resetDashboardChoices?(): void;
   setTerminalKeyboard(on: boolean): void;
@@ -244,6 +247,10 @@ class AndroidHostBridge implements Bridge {
   }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
   setAntigravityAccount(email: string, profile = '') { this.api.setAntigravityAccount?.(email, profile); }
+  openSignIn(url: string, hint: string, choose: boolean, privateTab: boolean) {
+    if (this.api.openSignIn) this.api.openSignIn(url, hint, choose, privateTab);
+    else this.openUrl(url);
+  }
   async listProfiles(kind: string) {
     try {
       return JSON.parse(this.api.listProfiles?.(kind) ?? '[]') as { name: string; email: string }[];
@@ -383,6 +390,7 @@ class DevBridge implements Bridge {
 
   setThemeColors() {}
   setAntigravityAccount() {}
+  openSignIn(url: string) { window.open(url, '_blank', 'noopener'); }
   async getAccounts() { return { agy: '', claude: '' }; }
   resetDashboardChoices() {}
   setTerminalKeyboard() {}

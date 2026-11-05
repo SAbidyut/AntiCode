@@ -952,6 +952,12 @@ class MainActivity : ComponentActivity() {
             main.post { browser.open(url) }
         }
 
+        /** A sign-in page with the account chosen for it (see InAppBrowser.openSignIn). */
+        @JavascriptInterface
+        fun openSignIn(url: String, hint: String, choose: Boolean, private: Boolean) {
+            main.post { browser.openSignIn(url, hint, choose, private) }
+        }
+
         /** What our xdg-open puts in front of a link (the page trusts only those). */
         @JavascriptInterface
         fun linkToken(): String = com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken
@@ -992,7 +998,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val host = Uri.parse(url).host ?: ""
                 // Google sites only work signed in, and Google blocks its sign-in inside apps:
-                // straight to the Chrome tab (with the agent's account) for those.
+                // straight to the Chrome tab for those.
                 val googleOnly = host == "google.com" || host.endsWith(".google.com")
                 if (googleOnly || !panel.open(url, title.ifBlank { host.ifEmpty { url } })) browser.open(url)
             }
