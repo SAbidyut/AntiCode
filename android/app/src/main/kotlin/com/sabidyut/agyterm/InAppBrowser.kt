@@ -75,7 +75,8 @@ class InAppBrowser(private val activity: Activity) {
             if (hint.isNotEmpty()) uri = withParam(uri, "login_hint", hint)
             if (choose || private) {
                 // (added to the prompt the page asked for, e.g. "consent select_account")
-                val prompt = (uri.getQueryParameter("prompt") ?: "").split(' ').filter { it.isNotBlank() }.toMutableList()
+                // ("consent select_account" may come written with a "+", which Android reads as is)
+                val prompt = (uri.getQueryParameter("prompt") ?: "").split(' ', '+').filter { it.isNotBlank() }.toMutableList()
                 if ("select_account" !in prompt) prompt += "select_account"
                 uri = withParam(uri, "prompt", prompt.joinToString(" "))
             }
@@ -83,10 +84,16 @@ class InAppBrowser(private val activity: Activity) {
         open(uri.toString(), private)
     }
 
+    /**
+     * [uri] with [name] set to [value]; every other part of the query exactly as it was. (Not
+     * decoded and encoded again: Android reads a "+" in a value as a plus, and writing it back
+     * as %2B turned the page's "scope=a+b" into one scope Google refuses — invalid_scope.)
+     */
     private fun withParam(uri: Uri, name: String, value: String): Uri {
-        val b = uri.buildUpon().clearQuery()
-        for (n in uri.queryParameterNames) if (n != name) for (v in uri.getQueryParameters(n)) b.appendQueryParameter(n, v)
-        return b.appendQueryParameter(name, value).build()
+        val kept = (uri.encodedQuery ?: "").split('&')
+            .filter { it.isNotEmpty() && Uri.decode(it.substringBefore('=')) != name }
+        val query = (kept + "${Uri.encode(name)}=${Uri.encode(value)}").joinToString("&")
+        return uri.buildUpon().encodedQuery(query).build()
     }
 
     fun open(url: String, private: Boolean = false) {

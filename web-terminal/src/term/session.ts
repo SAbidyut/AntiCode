@@ -280,8 +280,6 @@ export class TerminalSession {
    * one the shell says it started (until the prompt comes back). '' for none.
    */
   agent = '';
-  /** The account (profile) this agent session signs in with; '' the usual one. */
-  profile = '';
 
   write(data: Uint8Array) {
     if (this.kind === 'agy' && !this.accountSeen) this.spotAccount(data);

@@ -13,8 +13,6 @@ export interface SessionInfo {
   /** The PTY's current size (Android host). */
   cols?: number;
   rows?: number;
-  /** The account (profile) an agent session signs in with; '' the usual one. */
-  profile?: string;
   /** The folder it was started in. */
   dir?: string;
 }
@@ -67,7 +65,7 @@ export interface BridgeEvents {
 export interface Bridge {
   readonly host: 'android' | 'dev';
   /** [cwd]: the folder to start in (empty: home) */
-  createSession(kind: SessionKind, cols: number, rows: number, cwd?: string, profile?: string): Promise<string>;
+  createSession(kind: SessionKind, cols: number, rows: number, cwd?: string): Promise<string>;
   /** The folders in a folder (full path or ~/…). */
   listDir(path: string): Promise<DirListing>;
   /** Makes a folder; "" when done, else why not. */
@@ -108,14 +106,9 @@ export interface Bridge {
   setPromptStyle(style: string): void;
   getPromptStyle(): Promise<string>;
   /** The account (email) an agent is signed in with; "" if unknown. */
-  accountEmail(kind: string, profile?: string): string;
-  /** An agent's extra accounts ("profiles"): each keeps its own sign-in. */
-  listProfiles(kind: string): Promise<{ name: string; email: string }[]>;
-  /** '' when made, else why not. */
-  createProfile(kind: string, name: string): Promise<string>;
-  deleteProfile(kind: string, name: string): Promise<boolean>;
+  accountEmail(kind: string): string;
   /** The Google account the Antigravity CLI is signed in with (dashboards open with it). */
-  setAntigravityAccount(email: string, profile?: string): void;
+  setAntigravityAccount(email: string): void;
   /** A sign-in page with the account chosen for it: an email, Google's list, or a private tab. */
   openSignIn(url: string, hint: string, choose: boolean, privateTab: boolean): void;
   getAccounts(): Promise<{ agy: string; claude: string }>;
@@ -138,7 +131,7 @@ export interface Bridge {
   /** Ask to run without battery restrictions (so Android doesn't stop the sessions). */
   allowBackground(): void;
   /** Sessions Android stopped while the app was gone; forget them once shown. */
-  getLostSessions(): Promise<{ kind: SessionKind; label: string; dir?: string; profile?: string }[]>;
+  getLostSessions(): Promise<{ kind: SessionKind; label: string; dir?: string }[]>;
   forgetLostSessions(): void;
   exitApp(): void;
 }
@@ -151,7 +144,7 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 interface AndroidBridgeApi {
-  createSession(kind: string, cols: number, rows: number, cwd: string, profile: string): string;
+  createSession(kind: string, cols: number, rows: number, cwd: string): string;
   listDir(path: string): string;
   makeDir(path: string): string;
   write(id: string, data: string): void;
@@ -177,12 +170,9 @@ interface AndroidBridgeApi {
   getClaudeFullscreen?(): boolean;
   setPromptStyle?(style: string): void;
   getPromptStyle?(): string;
-  accountEmail?(kind: string, profile: string): string;
-  listProfiles?(kind: string): string;
-  createProfile?(kind: string, name: string): string;
-  deleteProfile?(kind: string, name: string): boolean;
+  accountEmail?(kind: string): string;
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
-  setAntigravityAccount?(email: string, profile: string): void;
+  setAntigravityAccount?(email: string): void;
   openSignIn?(url: string, hint: string, choose: boolean, privateTab: boolean): void;
   getAccounts?(): string;
   resetDashboardChoices?(): void;
@@ -209,8 +199,8 @@ declare global {
 class AndroidHostBridge implements Bridge {
   readonly host = 'android' as const;
   constructor(private api: AndroidBridgeApi) {}
-  async createSession(kind: SessionKind, cols: number, rows: number, cwd = '', profile = '') {
-    return this.api.createSession(kind, cols, rows, cwd, profile);
+  async createSession(kind: SessionKind, cols: number, rows: number, cwd = '') {
+    return this.api.createSession(kind, cols, rows, cwd);
   }
   async listDir(path: string) { return JSON.parse(this.api.listDir(path)) as DirListing; }
   async makeDir(path: string) { return this.api.makeDir(path); }
@@ -238,28 +228,19 @@ class AndroidHostBridge implements Bridge {
   async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
   setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
   async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
-  accountEmail(kind: string, profile = '') {
+  accountEmail(kind: string) {
     try {
-      return this.api.accountEmail?.(kind, profile) ?? '';
+      return this.api.accountEmail?.(kind) ?? '';
     } catch {
       return '';
     }
   }
   setThemeColors(bg: string, text: string, muted: string, accent: string) { this.api.setThemeColors?.(bg, text, muted, accent); }
-  setAntigravityAccount(email: string, profile = '') { this.api.setAntigravityAccount?.(email, profile); }
+  setAntigravityAccount(email: string) { this.api.setAntigravityAccount?.(email); }
   openSignIn(url: string, hint: string, choose: boolean, privateTab: boolean) {
     if (this.api.openSignIn) this.api.openSignIn(url, hint, choose, privateTab);
     else this.openUrl(url);
   }
-  async listProfiles(kind: string) {
-    try {
-      return JSON.parse(this.api.listProfiles?.(kind) ?? '[]') as { name: string; email: string }[];
-    } catch {
-      return [];
-    }
-  }
-  async createProfile(kind: string, name: string) { return this.api.createProfile?.(kind, name) ?? 'Not available'; }
-  async deleteProfile(kind: string, name: string) { return this.api.deleteProfile?.(kind, name) ?? false; }
   async getAccounts() {
     try {
       return JSON.parse(this.api.getAccounts?.() ?? '{}') as { agy: string; claude: string };
@@ -278,7 +259,7 @@ class AndroidHostBridge implements Bridge {
   allowBackground() { this.api.allowBackground?.(); }
   async getLostSessions() {
     try {
-      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string; dir?: string; profile?: string }[];
+      return JSON.parse(this.api.getLostSessions?.() ?? '[]') as { kind: SessionKind; label: string; dir?: string }[];
     } catch {
       return [];
     }
@@ -330,22 +311,6 @@ class DevBridge implements Bridge {
     this.ready.then(() => this.ws.send(JSON.stringify({ method, args }))).catch(() => {});
   }
   createSession(kind: SessionKind, cols: number, rows: number, cwd = '') { return this.call<string>('createSession', kind, cols, rows, cwd); }
-  // (accounts in the browser: names only, kept in the page's storage — for trying the UI)
-  private profiles(kind: string): string[] {
-    try { return JSON.parse(localStorage.getItem(`profiles:${kind}`) ?? '[]') as string[]; } catch { return []; }
-  }
-  async listProfiles(kind: string) { return this.profiles(kind).map((name) => ({ name, email: '' })); }
-  async createProfile(kind: string, name: string) {
-    const list = this.profiles(kind);
-    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,19}$/.test(name)) return 'Use letters, digits and - (up to 20)';
-    if (list.includes(name)) return `There's already an account called ${name}`;
-    try { localStorage.setItem(`profiles:${kind}`, JSON.stringify([...list, name])); } catch { /* storage unavailable */ }
-    return '';
-  }
-  async deleteProfile(kind: string, name: string) {
-    try { localStorage.setItem(`profiles:${kind}`, JSON.stringify(this.profiles(kind).filter((n) => n !== name))); } catch { /* storage unavailable */ }
-    return true;
-  }
   listDir(path: string) { return this.call<DirListing>('listDir', path); }
   makeDir(path: string) { return this.call<string>('makeDir', path); }
   write(id: string, data: string) { this.send('write', id, data); }

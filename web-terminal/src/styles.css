@@ -885,19 +885,3 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   content: ''; position: absolute; left: -8px; right: -8px; top: -22px; height: 22px; pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--tbg, #000));
 }
-
-/* the folder picker's accounts (several Antigravity / Claude Code sign-ins) */
-.acct-chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 10px; scrollbar-width: none; }
-.acct-chips::-webkit-scrollbar { display: none; }
-.acct-chip {
-  flex: none; display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
-  max-width: 220px; min-height: 48px; padding: 6px 14px; border-radius: 14px;
-  background: var(--surface-2); border: 1.5px solid transparent; color: var(--text); text-align: left;
-}
-.acct-chip.on { border-color: var(--accent); background: var(--surface-3); }
-.acct-chip .ac-name { font-weight: 600; font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acct-chip .ac-sub { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acct-chip.add { flex-direction: row; align-items: center; gap: 6px; color: var(--muted); border: 1.5px dashed var(--line, rgba(255,255,255,0.14)); background: none; }
-.acct-chip.add svg { width: 18px; height: 18px; }
-.btn-danger { background: #f38ba8; color: #1e1e2e; border-color: transparent; }
-.note.warn { color: #f38ba8; }

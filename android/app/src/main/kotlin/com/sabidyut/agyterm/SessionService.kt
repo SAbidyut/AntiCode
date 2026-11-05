@@ -198,9 +198,9 @@ class SessionService : Service() {
         if (sessions.containsKey(s.id)) onSessionExit?.invoke(s)
     }
 
-    fun createSession(kind: String, cols: Int, rows: Int, cwd: String = "", profile: String = ""): TermSession {
+    fun createSession(kind: String, cols: Int, rows: Int, cwd: String = ""): TermSession {
         val launch = when (kind) {
-            "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind, cwd, profile)
+            "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind, cwd)
             else -> ubuntu.launchAndroidShell()
         }
         val id = UUID.randomUUID().toString().substring(0, 8)
@@ -214,7 +214,6 @@ class SessionService : Service() {
             id, kind, title, launch.command, launch.args, launch.env, launch.cwd, rows, cols,
         ) { s -> sessionEnded(s) }
         if (kind != "android") session.startDir = ubuntu.normalizeGuestPath(cwd.ifEmpty { "~" }) ?: "/root"
-        if ((kind == "agy" || kind == "claude") && UbuntuManager.validProfile(profile)) session.profile = profile
         sessions[id] = session
         saveLive()
         updateForeground()
@@ -239,7 +238,7 @@ class SessionService : Service() {
     fun saveLive() {
         val arr = org.json.JSONArray()
         for (s in sessions.values.sortedBy { it.createdAt }) {
-            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label).put("dir", s.startDir).put("profile", s.profile))
+            if (s.alive && s.kind != "selftest") arr.put(org.json.JSONObject().put("kind", s.kind).put("label", s.label).put("dir", s.startDir))
         }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LIVE, arr.toString()).apply()
     }

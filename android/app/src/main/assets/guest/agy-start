@@ -3,12 +3,9 @@
 export PATH="$HOME/.local/bin:$PATH"
 [ -f "$HOME/.agy-terminal-setup-done" ] && command -v agy >/dev/null 2>&1 || /usr/local/bin/agy-setup --auto
 if command -v agy >/dev/null 2>&1; then
-  printf '\e]7770;exec;%s;agy\a' "${ANTICODE_LINK_TOKEN:-}"
+  printf '\e]7770;exec;%s;agy\a' "${ANTICODE_LINK_TOKEN:-}"   # (the app shows the signed-in account by its header)
   # (Settings → "Antigravity: approve everything")
-  # the tab's account: one of the extra ones gets its own home (see anticode-account)
-  acct_home=$(/usr/local/bin/anticode-account agy)
-  if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ]; then set -- --dangerously-skip-permissions; else set --; fi
-  if [ -n "$acct_home" ]; then ANTICODE_REAL_HOME=$HOME HOME=$acct_home agy "$@"; else agy "$@"; fi
+  if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ]; then agy --dangerously-skip-permissions; else agy; fi
 else
   echo "agy was not found — run 'agy-setup' and try again."
 fi
