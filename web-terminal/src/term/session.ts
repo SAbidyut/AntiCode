@@ -431,6 +431,7 @@ export class TerminalSession {
     this.edit.cancel();
     this.edit.clearSelection();
     this.onTyped?.();
+    this.renderer.lastInput = performance.now();
     this.trackInput(data);
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
@@ -445,6 +446,7 @@ export class TerminalSession {
   /** Keys the app sends for the user (moving the cursor to a tap, a cut). */
   private sendKeys(data: string) {
     if (!this.alive) return;
+    this.renderer.lastInput = performance.now();
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
       this.renderer.schedule();

@@ -184,6 +184,8 @@ interface Row {
 
 /** Rows drawn beyond each edge of the screen: a fast fling never shows a row not yet drawn. */
 const OVERSCAN = 10;
+/** The keyboard pan goes where the cursor was for most (60 %) of this long (ms). */
+const PAN_WINDOW_MS = 500;
 
 export class BanglaRenderer {
   /**
@@ -598,6 +600,7 @@ export class BanglaRenderer {
     clearTimeout(this.frame);
     this.frame = 0;
     clearTimeout(this.typingTimer);
+    clearTimeout(this.panTimer);
     this.trimMarker?.dispose();
     this.trimMarker = null;
     this.viewMarker?.dispose();
@@ -672,6 +675,20 @@ export class BanglaRenderer {
 
   /** Vertical pan of the whole screen (keeps the cursor above the keyboard). */
   private pan = 0;
+  /**
+   * A pan the screen would move to, waiting to be sure: while an agent writes its reply it
+   * moves the cursor around its screen (the status line, the panel under the prompt, back),
+   * and following each of those stops made the whole screen — the input box with it — jump
+   * up and down. The screen goes where the cursor stays most of the time instead (at once
+   * for the keyboard, a zoom).
+   */
+  private panHist: { t: number; v: number }[] = [];
+  private panTimer = 0;
+  private panZoom = 1;
+  /** (the last picture was scrolled back: no pan was worked out for it) */
+  private panScrolled = false;
+  /** Time of the user's last keystroke (set by the session). */
+  lastInput = 0;
   private applyLayerTransform() {
     const t = `translateY(${(-this.pan).toFixed(1)}px)` + (this.zoom !== 1 ? ` scale(${this.zoom})` : '');
     if (this.zoomLayer.style.transform !== t) this.zoomLayer.style.transform = t;
@@ -693,6 +710,48 @@ export class BanglaRenderer {
     this.holdUntil = this.holdFrom + ms;
     this.holdQuiet = quiet;
   }
+  /** The pan to show now, given the one wanted (see panHist). */
+  private settlePan(want: number, backDown: boolean): number {
+    const now = performance.now();
+    const zoomed = this.zoom !== this.panZoom;
+    this.panZoom = this.zoom;
+    const same = (x: number, y: number) => Math.abs(x - y) < 0.5;
+    // at once: the keyboard sliding, a zoom, back from reading history, the first picture,
+    // and in a shell the user's own keys (Enter takes the prompt to a new line)
+    const prompt = this.insetsMoving || zoomed || backDown || !this.rows.size ||
+      (!this.anchorBottom && now - this.lastInput < 400);
+    const h = this.panHist;
+    if (prompt) {
+      h.length = 0;
+      h.push({ t: now, v: want });
+      return want;
+    }
+    if (!h.length || !same(h[h.length - 1].v, want)) h.push({ t: now, v: want });
+    // where the cursor kept the screen for most of the last moment
+    const from = now - PAN_WINDOW_MS;
+    while (h.length > 1 && h[1].t <= from) h.shift();
+    const dwell = new Map<number, number>();
+    let best = this.pan;
+    let bestMs = -1;
+    for (let i = 0; i < h.length; i++) {
+      const ms = (i + 1 < h.length ? h[i + 1].t : now) - Math.max(from, h[i].t);
+      const v = Math.round(h[i].v);
+      const total = (dwell.get(v) ?? 0) + ms;
+      dwell.set(v, total);
+      if (total > bestMs) {
+        bestMs = total;
+        best = h[i].v;
+      }
+    }
+    if (!same(best, this.pan) && bestMs >= PAN_WINDOW_MS * 0.6) return best;
+    // not decided yet: look again in a moment, even if no more output comes
+    if (!same(want, this.pan)) {
+      clearTimeout(this.panTimer);
+      this.panTimer = window.setTimeout(() => this.schedule(), 60);
+    }
+    return this.pan;
+  }
+
   private shouldWait(): boolean {
     const now = performance.now();
     // DEC 2026 synchronized output: the program says "frame in progress"
@@ -1307,6 +1366,8 @@ export class BanglaRenderer {
     // programs redraw and flicker); instead the screen slides up just enough to keep the
     // cursor — and a line of context under it — visible. A prompt at the top never moves.
     let panEased = false;
+    const backDown = this.panScrolled;
+    this.panScrolled = this.scrollPx !== 0;
     if (this.scrollPx === 0) {
       const overflow = rows * lh - visible;
       const below = (lastY + 1) * lh - visible;
@@ -1321,7 +1382,11 @@ export class BanglaRenderer {
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
         pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
+        // an agent at work hides its cursor and leaves it wherever it last wrote: nothing
+        // to follow then — stay put (only less, when what's drawn got shorter)
+        if (this.anchorBottom && !this.cursorVisible) pan = Math.max(0, Math.min(this.pan, overflow, below));
       }
+      pan = this.settlePan(pan, backDown);
       // ease small moves that come from new content; follow the keyboard exactly
       const d = Math.abs(pan - this.pan);
       const ease = motion && !this.insetsMoving && this.zoom === 1 && d > 0 && d <= 4 * lh;
