@@ -8,7 +8,11 @@ if command -v agy >/dev/null 2>&1; then
   # the tab's account: one of the extra ones gets its own home (see anticode-account)
   acct_home=$(/usr/local/bin/anticode-account agy)
   if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ]; then set -- --dangerously-skip-permissions; else set --; fi
-  if [ -n "$acct_home" ]; then ANTICODE_REAL_HOME=$HOME HOME=$acct_home agy "$@"; else agy "$@"; fi
+  if [ -n "$acct_home" ]; then
+    # (its sign-in lives in the config folder: the account's own, however the XDG folders were set)
+    ANTICODE_REAL_HOME=$HOME HOME=$acct_home XDG_CONFIG_HOME=$acct_home/.config XDG_DATA_HOME=$acct_home/.local/share \
+      XDG_STATE_HOME=$acct_home/.local/state XDG_CACHE_HOME=$acct_home/.cache agy "$@"
+  else agy "$@"; fi
 else
   echo "agy was not found — run 'agy-setup' and try again."
 fi
