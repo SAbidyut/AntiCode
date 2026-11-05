@@ -17,11 +17,14 @@ function xtermRgb(hex: string): string {
 
 const URL_RE = /https?:\/\/[^\s'"<>`]+[^\s'"<>`.,;:)\]}]/g;
 /** A file name or path with a type worth opening (a page or PDF an agent made, a picture …). */
-const FILE_EXT = 'html?|xhtml|pdf|svg|png|jpe?g|gif|webp|bmp|txt|md|markdown|csv|json|log|xml|ya?ml|docx?|xlsx?|pptx?|odt|ods|odp|epub|mp4|webm|mkv|mov|mp3|wav|ogg|m4a|flac|zip';
+const FILE_EXT = 'html?|xhtml|pdf|svg|png|jpe?g|gif|webp|bmp|txt|md|markdown|csv|json|log|xml|ya?ml|docx?|xlsx?|pptx?|odt|ods|odp|epub|mp4|webm|mkv|mov|mp3|wav|ogg|m4a|flac|aac|opus|zip|rar|7z|tar|gz|tgz|apk|ico|avif|heic|tiff?|rtf|py|js|mjs|ts|tsx|jsx|sh|c|cc|cpp|h|hpp|java|kt|go|rs|rb|php|css|scss|sql|toml|ini|conf|env|ipynb';
 const FILE_RE = new RegExp(
   String.raw`(?:file:\/\/)?[^\s'"<>\x60|*?()\[\]{}:,;]*[^\s'"<>\x60|*?()\[\]{}:,;/.]\.(?:${FILE_EXT})(?![\p{L}\p{N}_-])`,
   'giu',
 );
+
+/** A word that could be a folder's name or path. */
+const WORD_RE = /[^\s'"<>\x60|*?()\[\]{}:,;\u2500-\u259f\ue000-\uf8ff]+/gu;
 
 export class TerminalSession {
   /** Height (CSS px) currently covered by the on-screen keyboard; set by the app. */
@@ -250,27 +253,34 @@ export class TerminalSession {
     });
   }
 
-  /** The Antigravity CLI shows its account in the header: "you@gmail.com (Google AI Pro)". */
+  /**
+   * The Antigravity CLI shows its account in its header — "you@gmail.com (Google AI Pro)", or
+   * (1.5) the line under "Antigravity CLI 1.5.0". Watched all along: it draws the header
+   * again after a sign-in with another account.
+   */
   onAccount?: (email: string) => void;
-  private accountSeen = false;
+  /** The account this tab's agent showed in its header ('' not seen). */
+  email = '';
   private accountDecoder = new TextDecoder();
   private accountTail = '';
-  private accountScanned = 0;
   private spotAccount(data: Uint8Array) {
-    // only the CLI's startup screen (the header), not whatever the agent prints later
-    this.accountScanned += data.length;
-    if (this.accountScanned > 64 * 1024) {
-      this.accountSeen = true;
-      return;
-    }
     const joined = this.accountTail + this.accountDecoder.decode(data, { stream: true });
-    const text = joined.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-    const m = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*\(Google/.exec(text);
-    if (m) {
-      this.accountSeen = true;
-      this.onAccount?.(m[1]);
+    this.accountTail = joined.slice(-400); // raw: an escape split across chunks still strips
+    if (!joined.includes('@')) return;
+    // (escapes out; a cursor move between the header's lines counts as a break)
+    const text = joined.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ' ').replace(/\x1b\][^\x07]*\x07/g, '');
+    if (!/Antigravity\s+CLI|\(Google/.test(text)) return;
+    const email = '([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})';
+    // (the latest header: an earlier one may still be in what's kept from the last piece)
+    const all = [
+      ...text.matchAll(new RegExp(`Antigravity\\s+CLI\\s*v?[0-9][0-9.]*[\\s\\S]{0,160}?${email}`, 'g')),
+      ...text.matchAll(new RegExp(`${email}\\s*\\(Google`, 'g')),
+    ].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+    const found = all.length ? all[all.length - 1][1] : '';
+    if (found && found !== this.email) {
+      this.email = found;
+      this.onAccount?.(found);
     }
-    this.accountTail = joined.slice(-200); // raw: an escape split across chunks still strips
   }
 
   // ---- the account an agent is signed in with, shown by its header: on the
@@ -280,9 +290,11 @@ export class TerminalSession {
    * one the shell says it started (until the prompt comes back). '' for none.
    */
   agent = '';
+  /** The account (profile) this agent session signs in with; '' the usual one. */
+  profile = '';
 
   write(data: Uint8Array) {
-    if (this.kind === 'agy' && !this.accountSeen) this.spotAccount(data);
+    if (this.kind === 'agy' || this.agent === 'agy') this.spotAccount(data);
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;
@@ -562,6 +574,17 @@ export class TerminalSession {
   /** If a file name (report.pdf, ~/site/index.html …) is under the point, return it. */
   fileAt(clientX: number, clientY: number): string | null {
     return this.matchAt(clientX, clientY, FILE_RE);
+  }
+
+  /**
+   * The path-like word under the point (a folder name in `ls` output, src/app …), or null.
+   * A trailing / (ls -F) and closing punctuation are left off.
+   */
+  wordAt(clientX: number, clientY: number): string | null {
+    const w = this.matchAt(clientX, clientY, WORD_RE);
+    if (!w) return null;
+    const t = w.replace(/[.,;:!]+$/, '').replace(/(.)\/+$/, '$1');
+    return t && t.length <= 255 && /[\p{L}\p{N}_~]/u.test(t) ? t : null;
   }
 
   /**

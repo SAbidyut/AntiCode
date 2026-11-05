@@ -17,6 +17,7 @@ const PATHS: Record<string, string> = {
   android: '<path d="M6 10v7a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-7z"/><path d="M6 9a6 6 0 0 1 12 0zM9 6.5 7.5 4M15 6.5 16.5 4"/><path d="M3.5 11v5M20.5 11v5"/>',
   folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
+  file: '<path d="M6 3h8l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h0M9.5 10h0M13 10h0M16.5 10h0M7 14h10"/>',
   pencil: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',

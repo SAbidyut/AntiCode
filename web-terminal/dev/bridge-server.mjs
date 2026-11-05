@@ -67,6 +67,30 @@ const methods = {
       return { path: dir, error: e.code === 'EACCES' ? 'noaccess' : 'notfound' };
     }
   },
+  listFolder: (p) => {
+    const dir = resolveDir(String(p));
+    try {
+      const all = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith('.'));
+      const isDir = (e) => { try { return fs.statSync(path.join(dir, e.name)).isDirectory(); } catch { return false; } };
+      const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+      return {
+        path: dir,
+        dirs: all.filter(isDir).map((e) => e.name).sort(byName),
+        files: all.filter((e) => !isDir(e)).map((e) => e.name).sort(byName).slice(0, 2000),
+      };
+    } catch (e) {
+      return { path: dir, error: e.code === 'EACCES' ? 'noaccess' : 'notfound' };
+    }
+  },
+  findDir: (candidates) => {
+    for (const c of candidates ?? []) {
+      const f = resolveDir(String(c));
+      try {
+        if (fs.statSync(f).isDirectory()) return f;
+      } catch { /* next */ }
+    }
+    return '';
+  },
   openFile: (candidates) => {
     for (const c of candidates ?? []) {
       const f = resolveDir(String(c));

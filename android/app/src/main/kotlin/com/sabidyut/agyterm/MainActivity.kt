@@ -876,8 +876,8 @@ class MainActivity : ComponentActivity() {
         private fun svc() = service ?: throw IllegalStateException("service not bound")
 
         @JavascriptInterface
-        fun createSession(kind: String, cols: Int, rows: Int, cwd: String): String = try {
-            val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300), cwd)
+        fun createSession(kind: String, cols: Int, rows: Int, cwd: String, profile: String): String = try {
+            val s = svc().createSession(kind, cols.coerceIn(10, 500), rows.coerceIn(4, 300), cwd, profile)
             // anything printed before we got here (a quick prompt) is in the ring: send it too
             s.attach(outputListener) { snap -> if (snap.isNotEmpty()) queue(s.id, snap, snap.size) }
             s.id
@@ -892,6 +892,23 @@ class MainActivity : ComponentActivity() {
             svc().ubuntu.listDir(path)
         } catch (e: Exception) {
             org.json.JSONObject().put("path", path).put("error", "notfound").toString()
+        }
+
+        /** A folder's folders and files (the folder sheet). */
+        @JavascriptInterface
+        fun listFolder(path: String): String = try {
+            svc().ubuntu.listFolder(path)
+        } catch (e: Exception) {
+            org.json.JSONObject().put("path", path).put("error", "notfound").toString()
+        }
+
+        /** A word tapped in the terminal that names a folder: where it is ("" if it isn't one). */
+        @JavascriptInterface
+        fun findDir(candidates: String): String = try {
+            val list = JSONArray(candidates)
+            svc().ubuntu.findDir((0 until list.length()).map { list.optString(it) })
+        } catch (_: Exception) {
+            ""
         }
 
         /** The folder picker's "New folder": "" when made, else why not. */
@@ -935,7 +952,7 @@ class MainActivity : ComponentActivity() {
             for (s in svc().sessions.values.sortedBy { it.createdAt }) {
                 arr.put(
                     JSONObject().put("id", s.id).put("kind", s.kind).put("title", s.title).put("alive", s.alive)
-                        .put("cols", s.cols).put("rows", s.rows).put("dir", s.startDir),
+                        .put("cols", s.cols).put("rows", s.rows).put("dir", s.startDir).put("profile", s.profile),
                 )
             }
             return arr.toString()
@@ -950,6 +967,12 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun openUrl(url: String) {
             main.post { browser.open(url) }
+        }
+
+        /** A sign-in page with the account chosen for it (see InAppBrowser.openSignIn). */
+        @JavascriptInterface
+        fun openSignIn(url: String, hint: String, choose: Boolean, private: Boolean) {
+            main.post { browser.openSignIn(url, hint, choose, private) }
         }
 
         /** What our xdg-open puts in front of a link (the page trusts only those). */
@@ -992,7 +1015,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val host = Uri.parse(url).host ?: ""
                 // Google sites only work signed in, and Google blocks its sign-in inside apps:
-                // straight to the Chrome tab (with the agent's account) for those.
+                // straight to the Chrome tab for those.
                 val googleOnly = host == "google.com" || host.endsWith(".google.com")
                 if (googleOnly || !panel.open(url, title.ifBlank { host.ifEmpty { url } })) browser.open(url)
             }
@@ -1086,7 +1109,8 @@ class MainActivity : ComponentActivity() {
 
         /** The Antigravity account (seen in the CLI's header, or typed in Settings). */
         @JavascriptInterface
-        fun setAntigravityAccount(email: String) = Accounts.setAntigravity(this@MainActivity, email)
+        fun setAntigravityAccount(email: String, profile: String) =
+            Accounts.setAntigravity(this@MainActivity, email, profile.takeIf { com.sabidyut.agyterm.ubuntu.UbuntuManager.validProfile(it) } ?: "")
 
         @JavascriptInterface
         fun getAccounts(): String = JSONObject()
@@ -1136,7 +1160,35 @@ class MainActivity : ComponentActivity() {
 
         /** The account (email) an agent ("claude" / "agy") is signed in with; "" if unknown. */
         @JavascriptInterface
-        fun accountEmail(kind: String): String = service?.ubuntu?.accountEmail(kind) ?: ""
+        fun accountEmail(kind: String, profile: String): String = service?.ubuntu?.accountEmail(kind, profile) ?: ""
+
+        /** An agent's extra accounts (JSON [{name, email}]). */
+        @JavascriptInterface
+        fun listProfiles(kind: String): String = service?.ubuntu?.listProfiles(kind) ?: "[]"
+
+        /** A new account for an agent: "" when made, else why not. */
+        @JavascriptInterface
+        fun createProfile(kind: String, name: String): String = try {
+            svc().ubuntu.createProfile(kind, name)
+        } catch (e: Exception) {
+            e.message ?: "The account couldn't be made"
+        }
+
+        /** Sign an account out (it signs in afresh next time). */
+        @JavascriptInterface
+        fun signOut(kind: String, profile: String): Boolean = try {
+            svc().ubuntu.signOut(kind, profile)
+        } catch (_: Exception) {
+            false
+        }
+
+        /** Forget an account (its sign-in goes with it). */
+        @JavascriptInterface
+        fun deleteProfile(kind: String, name: String): Boolean = try {
+            svc().ubuntu.deleteProfile(kind, name)
+        } catch (_: Exception) {
+            false
+        }
 
         /** Keyboard compatibility mode for keyboards that misbehave in raw mode. */
         @JavascriptInterface

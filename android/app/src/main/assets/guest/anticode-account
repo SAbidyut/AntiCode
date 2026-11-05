@@ -1,0 +1,51 @@
+#!/bin/bash
+# AntiCode: the folder an agent's extra account keeps its sign-in in.
+#   anticode-account agy|claude   prints it (made the first time); nothing for the usual account
+# Which account a tab uses is the app's choice when it opens the tab (ANTICODE_PROFILE).
+#   Claude Code: its config folder (CLAUDE_CONFIG_DIR).
+#   Antigravity: keeps its settings in ~/.gemini and its sign-in in the config folder
+#   (~/.config, or $XDG_CONFIG_HOME), so the account gets a home of its own: ~/.gemini its own,
+#   ~/.config ~/.local ~/.cache folders of its own whose other contents are links to the real
+#   home's, like everything else there (git, ssh, the phone's storage, the programs).
+kind=$1
+name=${ANTICODE_PROFILE-}
+[[ $kind == agy || $kind == claude ]] || exit 0
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,19}$ ]] || exit 0
+base=${ANTICODE_REAL_HOME:-$HOME}
+d="$base/.anticode/profiles/$kind/$name"
+mkdir -p "$d" || exit 1
+if [ "$kind" = agy ]; then
+  shopt -s nullglob dotglob
+  # what holds a Google / Antigravity sign-in or its settings: never shared between accounts
+  own() { [[ ${1,,} =~ antigravity|gemini|jetski|google|gcloud|keyring|codeium|windsurf|credentials ]]; }
+  # [$2] mirrors [$1]: a link per entry, except the account's own; the folders named after it
+  # are folders of the account's own, mirrored the same way (one level down at most)
+  mirror() {
+    local src=$1 dst=$2 deep=$3 f n
+    for f in "$src"/*; do
+      n=${f##*/}
+      [ "$n" = .anticode ] && continue
+      own "$n" && continue
+      if [ -n "$deep" ] && [[ " $deep " == *" $n "* ]] && [ -d "$f" ] && [ ! -L "$f" ]; then
+        # (made by an earlier version as a link to the real one: a folder of its own now)
+        [ -L "$dst/$n" ] && rm -f "$dst/$n"
+        mkdir -p "$dst/$n" && mirror "$f" "$dst/$n" ""
+        continue
+      fi
+      [ -e "$dst/$n" ] || [ -L "$dst/$n" ] || ln -s "$f" "$dst/$n"
+    done
+  }
+  for top in .config .local .cache; do
+    [ -L "$d/$top" ] && rm -f "$d/$top"
+    mkdir -p "$d/$top"
+  done
+  mirror "$base" "$d" ".config .local .cache"
+  # (inside ~/.local: share and state hold app data — mirrored, not linked whole)
+  for sub in share state; do
+    if [ -d "$base/.local/$sub" ]; then
+      [ -L "$d/.local/$sub" ] && rm -f "$d/.local/$sub"
+      mkdir -p "$d/.local/$sub" && mirror "$base/.local/$sub" "$d/.local/$sub" ""
+    fi
+  done
+fi
+printf '%s\n' "$d"
