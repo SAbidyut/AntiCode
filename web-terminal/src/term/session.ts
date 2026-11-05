@@ -250,27 +250,34 @@ export class TerminalSession {
     });
   }
 
-  /** The Antigravity CLI shows its account in the header: "you@gmail.com (Google AI Pro)". */
+  /**
+   * The Antigravity CLI shows its account in its header — "you@gmail.com (Google AI Pro)", or
+   * (1.5) the line under "Antigravity CLI 1.5.0". Watched all along: it draws the header
+   * again after a sign-in with another account.
+   */
   onAccount?: (email: string) => void;
-  private accountSeen = false;
+  /** The account this tab's agent showed in its header ('' not seen). */
+  email = '';
   private accountDecoder = new TextDecoder();
   private accountTail = '';
-  private accountScanned = 0;
   private spotAccount(data: Uint8Array) {
-    // only the CLI's startup screen (the header), not whatever the agent prints later
-    this.accountScanned += data.length;
-    if (this.accountScanned > 64 * 1024) {
-      this.accountSeen = true;
-      return;
-    }
     const joined = this.accountTail + this.accountDecoder.decode(data, { stream: true });
-    const text = joined.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-    const m = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*\(Google/.exec(text);
-    if (m) {
-      this.accountSeen = true;
-      this.onAccount?.(m[1]);
+    this.accountTail = joined.slice(-400); // raw: an escape split across chunks still strips
+    if (!joined.includes('@')) return;
+    // (escapes out; a cursor move between the header's lines counts as a break)
+    const text = joined.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ' ').replace(/\x1b\][^\x07]*\x07/g, '');
+    if (!/Antigravity\s+CLI|\(Google/.test(text)) return;
+    const email = '([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})';
+    // (the latest header: an earlier one may still be in what's kept from the last piece)
+    const all = [
+      ...text.matchAll(new RegExp(`Antigravity\\s+CLI\\s*v?[0-9][0-9.]*[\\s\\S]{0,160}?${email}`, 'g')),
+      ...text.matchAll(new RegExp(`${email}\\s*\\(Google`, 'g')),
+    ].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+    const found = all.length ? all[all.length - 1][1] : '';
+    if (found && found !== this.email) {
+      this.email = found;
+      this.onAccount?.(found);
     }
-    this.accountTail = joined.slice(-200); // raw: an escape split across chunks still strips
   }
 
   // ---- the account an agent is signed in with, shown by its header: on the
@@ -284,7 +291,7 @@ export class TerminalSession {
   profile = '';
 
   write(data: Uint8Array) {
-    if (this.kind === 'agy' && !this.accountSeen) this.spotAccount(data);
+    if (this.kind === 'agy' || this.agent === 'agy') this.spotAccount(data);
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;

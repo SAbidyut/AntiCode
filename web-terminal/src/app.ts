@@ -863,7 +863,8 @@ function titleWithAccount(s: TerminalSession): HTMLElement {
   const name = s.customName || s.kindLabel;
   const own = s.kind === 'agy' || s.kind === 'claude';
   const agent = own ? s.kind : s.agent;
-  const email = agent ? bridge.accountEmail(agent, own ? s.profile : '') : '';
+  // what the tab's own agent shows (its header) first; else what was remembered for its account
+  const email = !agent ? '' : agent === 'agy' && s.email ? s.email : bridge.accountEmail(agent, own ? s.profile : '');
   if (!email) return h('div', { class: 'li-title' }, name);
   return h('div', { class: 'li-title has-acct' }, h('span', { class: 'li-name' }, name), h('span', { class: 'li-acct' }, email));
 }
