@@ -69,6 +69,13 @@ class MainActivity : ComponentActivity() {
 
     private val outputListener = object : TermSession.OutputListener {
         override fun onOutput(session: TermSession, data: ByteArray, len: Int) = queue(session.id, data, len)
+        override fun onHiddenInput(session: TermSession, on: Boolean) {
+            main.post {
+                flush() // (the question first)
+                js("__native.onHiddenInput && __native.onHiddenInput('${session.id}', $on)")
+                if (session.id == shownSessionId) keys.setHidden(on)
+            }
+        }
     }
 
     private fun queue(id: String, data: ByteArray, len: Int) {
@@ -433,6 +440,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        TermSession.paceOutput = true
         service?.uiVisible = true
     }
 
@@ -466,6 +474,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        TermSession.paceOutput = false
         service?.uiVisible = false
         // Opening the app again must not pop the keyboard up by itself: let go of the
         // terminal's keyboard focus (a tap on the terminal brings it back).
@@ -919,6 +928,12 @@ class MainActivity : ComponentActivity() {
             e.message ?: "The folder couldn't be made."
         }
 
+        /** The page has taken in [n] more bytes of a session's output (flow control). */
+        @JavascriptInterface
+        fun ack(id: String, n: Int) {
+            service?.sessions?.get(id)?.ack(n)
+        }
+
         @JavascriptInterface
         fun write(id: String, data: String) {
             svc().sessions[id]?.write(data.toByteArray(Charsets.UTF_8))
@@ -1035,7 +1050,7 @@ class MainActivity : ComponentActivity() {
                         isAppearanceLightStatusBars = light
                         isAppearanceLightNavigationBars = light
                     }
-                } catch (_: IllegalArgumentException) {
+                } catch (_: RuntimeException) { // (a colour the page didn't have: "")
                 }
             }
         }
@@ -1044,7 +1059,15 @@ class MainActivity : ComponentActivity() {
         fun copyText(text: String) {
             main.post {
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("terminal", text))
+                // (a clip over ~1 MB can't be handed to the system: it would throw here, on
+                // the main thread, and take every session down — e.g. OSC 52 from any program)
+                val clip = if (text.length > MAX_CLIP) text.substring(text.length - MAX_CLIP) else text
+                try {
+                    cm.setPrimaryClip(ClipData.newPlainText("terminal", clip))
+                    if (clip.length < text.length) Toast.makeText(this@MainActivity, "Copied the last ${MAX_CLIP / 1000}k characters", Toast.LENGTH_SHORT).show()
+                } catch (_: RuntimeException) {
+                    Toast.makeText(this@MainActivity, "Too much text to copy", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -1063,8 +1086,12 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun showKeyboard() {
             main.post {
+                // already the terminal's: a restart would reset the keyboard on every tap (the
+                // suggestions blink, the symbols page goes back to letters, a word half typed
+                // is cut off) — only shown again if it was put away
+                val had = keys.hasFocus()
                 focusTerminalKeys()
-                imm.restartInput(keys)
+                if (!had) imm.restartInput(keys)
                 imm.showSoftInput(keys, InputMethodManager.SHOW_IMPLICIT)
             }
         }
@@ -1081,6 +1108,8 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun setActiveSession(id: String) {
             shownSessionId = id.ifEmpty { null }
+            val hidden = id.isNotEmpty() && service?.sessions?.get(id)?.hiddenInput == true
+            main.post { keys.setHidden(hidden) }
             service?.let {
                 if (!panel.isOpen) it.activeSessionId = shownSessionId
                 if (id.isNotEmpty()) it.clearFinished(id)
@@ -1234,6 +1263,8 @@ class MainActivity : ComponentActivity() {
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
+        /** The most the clipboard is given at once (the system refuses ~1 MB and more). */
+        private const val MAX_CLIP = 300_000
         private const val BG = "#0b0d12"
         private const val PREF_KEYBOARD_COMPAT = "keyboard_compat"
         private const val PREF_KEYBOARD_SMART = "keyboard_smart"

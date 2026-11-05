@@ -351,7 +351,7 @@ export class BanglaRenderer {
    */
   anchorBottom = false;
   /** The scrollback lost lines at its top (a full scrollback, a clear): line numbers moved. */
-  onLinesRenumbered?: () => void;
+  onLinesRenumbered?: (shift: number) => void;
   /** Chat layout: rows from this line down are moved down by splitGap px (-1 = off). */
   private splitLine = -1;
   private splitGap = 0;
@@ -368,6 +368,14 @@ export class BanglaRenderer {
    * Smart keyboard: the word being composed (not in the terminal yet), drawn at the cursor
    * like the keyboard's own underlined text in a chat app.
    */
+  /** A password is being asked for: the keyboard's text isn't drawn (the program shows none). */
+  private hiddenInput = false;
+  setHiddenInput(on: boolean) {
+    if (on === this.hiddenInput) return;
+    this.hiddenInput = on;
+    this.schedule();
+  }
+
   preedit = '';
   private preeditEl: HTMLSpanElement;
   private preeditHtml = '';
@@ -679,8 +687,10 @@ export class BanglaRenderer {
    * After a resize, programs clear and redraw: keep the old picture until they're done
    * (output quiet for [quiet] ms, at most [ms]).
    */
+  private holdFrom = 0;
   holdForRedraw(ms = 300, quiet = 60) {
-    this.holdUntil = performance.now() + ms;
+    this.holdFrom = performance.now();
+    this.holdUntil = this.holdFrom + ms;
     this.holdQuiet = quiet;
   }
   private shouldWait(): boolean {
@@ -691,7 +701,13 @@ export class BanglaRenderer {
       if (now - this.syncSince < 250) return true;
     } else this.syncSince = 0;
     // after a resize: wait until output has been quiet for a moment (at most holdForRedraw ms)
-    return now < this.holdUntil && now - this.lastOutput < this.holdQuiet;
+    if (now >= this.holdUntil) return false;
+    if (now - this.lastOutput < this.holdQuiet) return true;
+    // …and a program that redraws itself on a resize (a full-screen one, an agent): until its
+    // redraw has begun — the first frame was otherwise the old screen re-wrapped, boxes broken
+    // (the program hears of the new size a moment after the resize)
+    const redraws = this.term.buffer.active.type === 'alternate' || this.anchorBottom;
+    return redraws && this.lastOutput < this.holdFrom;
   }
 
   private applyMetrics() {
@@ -708,6 +724,8 @@ export class BanglaRenderer {
     s.background = theme.background;
     s.color = theme.foreground;
     s.setProperty('--tbg', theme.background);
+    // (on the screen, not just the cursor: the pinned input box draws a cursor too)
+    s.setProperty('--cursor', theme.cursor);
     this.cursorEl.style.setProperty('--cursor', theme.cursor);
   }
 
@@ -1069,8 +1087,19 @@ export class BanglaRenderer {
   /** A restored session's old output is being replayed: draw once it's all in. */
   paused = false;
 
+  /**
+   * Not on screen (another tab, home, Reader view): drawing waits until it shows again — a
+   * busy tab in the background used to be drawn every frame, measuring a hidden layout.
+   */
+  private offscreen = false;
+  setOffscreen(off: boolean) {
+    if (off === this.offscreen) return;
+    this.offscreen = off;
+    if (!off) this.schedule();
+  }
+
   render() {
-    if (this.disposed || this.paused) return;
+    if (this.disposed || this.paused || this.offscreen) return;
     this.lastRenderAt = performance.now();
     // (nothing on screen — e.g. right after a text-size change — then don't wait: holding an
     // empty picture is worse than a half-drawn one)
@@ -1091,8 +1120,10 @@ export class BanglaRenderer {
     const gen0 = this.trimGen;
     const trimmed = this.checkTrim(buf.type === 'normal', reflowed);
     if (trimmed > 0) this.shiftRows(trimmed);
-    // (lines numbered anew: a selection of the output would now point at other text)
-    if (trimmed > 0 || this.trimGen !== gen0) this.onLinesRenumbered?.();
+    // (lines numbered anew: a selection of the output moves along — or, not knowing by how
+    // much (re-wrapped, cleared), goes)
+    if (this.trimGen !== gen0 || reflowed) this.onLinesRenumbered?.(-1);
+    else if (trimmed > 0) this.onLinesRenumbered?.(trimmed);
 
     // A different buffer (alt screen), a resize (reflow), or a trim we couldn't measure
     // invalidate the line → row mapping.
@@ -1315,7 +1346,7 @@ export class BanglaRenderer {
       } else if (this.holdPreedit) pre = ''; // ⌫ first: the word would show twice
     }
     const ghost = this.ghost;
-    const composing = !!(pre || ghost) && this.scrollPx < lh;
+    const composing = !this.hiddenInput && !!(pre || ghost) && this.scrollPx < lh;
     this.cursorEl.style.display = showCursor && !composing ? 'block' : 'none';
     this.preeditEl.style.display = composing ? 'block' : 'none';
     if (composing) {
@@ -1458,7 +1489,7 @@ export class BanglaRenderer {
   }
 
   /** The cell under a client point: x/y relative to the visible screen, plus the buffer line. */
-  cellAt(clientX: number, clientY: number): { x: number; y: number; line: number } {
+  cellAt(clientX: number, clientY: number): { x: number; y: number; line: number; onScreen: boolean } {
     const rect = this.viewport.getBoundingClientRect(); // includes the scroll transform
     const buf = this.term.buffer.active;
     const z = this.zoom;
@@ -1470,8 +1501,10 @@ export class BanglaRenderer {
     }
     const line = Math.max(0, Math.min(buf.length - 1, Math.floor(py / lh)));
     const x = Math.max(0, Math.min(this.term.cols - 1, Math.floor((clientX - rect.left) / (this.cellWidth * z))));
-    const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY + this.scrollOffset));
-    return { x, y, line };
+    // (line is already where the finger is, scrolled back or not: the program's row is
+    // counted from the top of its screen; history above it is no row of the program's)
+    const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY));
+    return { x, y, line, onScreen: line >= buf.baseY };
   }
 }
 

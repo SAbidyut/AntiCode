@@ -146,9 +146,9 @@ body[data-screen='boot'] #home, body[data-screen='boot'] #term { opacity: 0; vis
 .btn {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   width: 100%; height: 50px; border-radius: 14px; font-weight: 600; font-size: 15.5px;
-  transition: transform 0.12s var(--ease), filter 0.15s, background 0.15s;
+  transition: transform 0.12s var(--ease), opacity 0.15s, background 0.15s;
 }
-.btn:active { transform: scale(0.98); filter: brightness(0.95); }
+.btn:active { transform: scale(0.98); opacity: 0.9; }
 .btn-primary { background: var(--grad); color: #16121c; box-shadow: 0 8px 24px rgba(243, 139, 168, 0.25); }
 .btn-secondary { background: var(--surface-2); border: 1px solid var(--line-strong); }
 .btn-ghost { background: transparent; border: 1px solid var(--line-strong); }
@@ -210,9 +210,9 @@ body[data-screen='boot'] #home, body[data-screen='boot'] #term { opacity: 0; vis
   display: flex; flex-direction: column; align-items: flex-start;
   padding: 14px 14px 14px; border-radius: 18px;
   border: 1px solid var(--line-strong); background: var(--surface-2);
-  transition: transform 0.12s var(--ease), filter 0.15s;
+  transition: transform 0.12s var(--ease), opacity 0.15s;
 }
-.agent-tile:active { transform: scale(0.97); filter: brightness(0.95); }
+.agent-tile:active { transform: scale(0.97); opacity: 0.9; }
 .agent-tile::before {
   content: ''; position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none;
   background: radial-gradient(120% 90% at 100% 0%, var(--agent-glow), transparent 65%);
@@ -256,7 +256,7 @@ body[data-theme='paper'] .agent-agy { --agent: #d0477a; }
 .list-item .li-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* the account an agent session is signed in with, after its name */
 .list-item .li-title.has-acct { display: flex; align-items: baseline; gap: 8px; }
-.list-item .li-title .li-name { flex: none; }
+.list-item .li-title .li-name { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
 .list-item .li-acct {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 500; font-size: 13px; color: var(--muted);
@@ -624,7 +624,8 @@ body[data-screen='home']::before {
   background: rgba(0, 0, 0, 0.45);
   animation: fade-in 0.2s var(--ease);
 }
-#sheet-backdrop.closing { animation: fade-out 0.19s var(--ease) forwards; pointer-events: none; }
+/* (it still takes taps while going: a quick second tap mustn't land on the key bar below) */
+#sheet-backdrop.closing { animation: fade-out 0.19s var(--ease) forwards; }
 @keyframes fade-out { to { opacity: 0; } }
 .sheet {
   position: fixed; left: var(--safe-left); right: var(--safe-right); bottom: 0; z-index: 41;
@@ -640,7 +641,7 @@ body[data-screen='home']::before {
 }
 .sheet.closing { animation: sheet-down 0.2s var(--ease) forwards; pointer-events: none; }
 .sheet-grip { width: 40px; height: 4px; border-radius: 99px; background: var(--line-strong); margin: 4px auto 12px; }
-.sheet h3 { margin: 4px 4px 12px; font-size: 17px; }
+.sheet h3 { margin: 4px 4px 12px; font-size: 17px; overflow-wrap: anywhere; }
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes sheet-down { to { transform: translateY(100%); } }
 @keyframes fade-in { from { opacity: 0; } }
@@ -652,7 +653,7 @@ body[data-screen='home']::before {
 }
 .action:active { background: var(--surface-2); }
 .action .a-icon { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); color: var(--text); flex: none; }
-.action .a-main { flex: 1; }
+.action .a-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .action .a-sub { display: block; font-size: 12.5px; color: var(--muted); }
 .action.danger { color: var(--bad); }
 .action.danger .a-icon { color: var(--bad); }
@@ -761,6 +762,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
    tabs become a rail on the left, the extra keys a thumb-sized rail on the right, and the
    terminal gets the whole height. */
 @media (orientation: landscape) and (min-width: 600px) and (max-height: 600px) {
+  /* (no key bar under the terminal sideways: low, out of the way of the text) */
+  #toast { bottom: calc(var(--safe-bottom) + 20px); }
   #term {
     display: grid;
     grid-template-columns: 60px minmax(0, 1fr) 124px;

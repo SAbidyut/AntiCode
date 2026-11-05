@@ -45,6 +45,8 @@ export interface DirListing {
 export interface BridgeEvents {
   onOutput(id: string, data: Uint8Array): void;
   onExit(id: string, code: number): void;
+  /** The session's program reads a password now (or no longer): nothing typed is drawn. */
+  onHiddenInput?(id: string, on: boolean): void;
   /** A re-attached session's saved output has all been delivered. */
   onReplayed(id: string): void;
   onState(state: HostState): void;
@@ -77,6 +79,8 @@ export interface Bridge {
   /** Makes a folder; "" when done, else why not. */
   makeDir(path: string): Promise<string>;
   write(id: string, data: string): void;
+  /** The page has taken in [n] more bytes of a session's output (flow control). */
+  ack(id: string, n: number): void;
   resize(id: string, cols: number, rows: number): void;
   close(id: string): void;
   /** Ask the host to re-send the buffered output of a session (after the UI reloads). */
@@ -163,6 +167,7 @@ interface AndroidBridgeApi {
   findDir?(candidates: string): string;
   makeDir(path: string): string;
   write(id: string, data: string): void;
+  ack?(id: string, n: number): void;
   resize(id: string, cols: number, rows: number): void;
   closeSession(id: string): void;
   attach(id: string): void;
@@ -228,6 +233,7 @@ class AndroidHostBridge implements Bridge {
   async findDir(candidates: string[]) { return this.api.findDir?.(JSON.stringify(candidates)) ?? ''; }
   async makeDir(path: string) { return this.api.makeDir(path); }
   write(id: string, data: string) { this.api.write(id, data); }
+  ack(id: string, n: number) { this.api.ack?.(id, n); }
   resize(id: string, cols: number, rows: number) { this.api.resize(id, cols, rows); }
   close(id: string) { this.api.closeSession(id); }
   attach(id: string) { this.api.attach(id); }
@@ -366,6 +372,7 @@ class DevBridge implements Bridge {
   findDir(candidates: string[]) { return this.call<string>('findDir', candidates); }
   makeDir(path: string) { return this.call<string>('makeDir', path); }
   write(id: string, data: string) { this.send('write', id, data); }
+  ack() {} // (the dev bridge has no flow control)
   resize(id: string, cols: number, rows: number) { this.send('resize', id, cols, rows); }
   close(id: string) { this.send('close', id); }
   attach(id: string) { this.send('attach', id); }
@@ -432,6 +439,7 @@ export function createBridge(events: BridgeEvents): Bridge {
   window.__native = {
     onOutput: (id: string, b64: string) => events.onOutput(id, b64ToBytes(b64)),
     onExit: (id: string, code: number) => events.onExit(id, code),
+    onHiddenInput: (id: string, on: boolean) => events.onHiddenInput?.(id, on),
     onReplayed: (id: string) => events.onReplayed(id),
     onState: (json: string) => events.onState(JSON.parse(json)),
     onImeText: (text: string) => events.onImeText(text),

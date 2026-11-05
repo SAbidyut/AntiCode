@@ -29,7 +29,13 @@ class TermSession(
 
     interface OutputListener {
         fun onOutput(session: TermSession, data: ByteArray, len: Int)
+        /** A password is being asked for (or no longer). */
+        fun onHiddenInput(session: TermSession, on: Boolean) {}
     }
+
+    /** The program reads a password now: the keyboard and the screen hide what's typed. */
+    @Volatile var hiddenInput = false
+        private set
 
     private val fd: Int
     // Kept as a field: a garbage-collected ParcelFileDescriptor would close the PTY.
@@ -85,13 +91,20 @@ class TermSession(
                 while (true) {
                     val n = input.read(buf)
                     if (n <= 0) break
-                    synchronized(lock) {
+                    val shown = synchronized(lock) {
                         append(buf, n)
                         listener?.onOutput(this, buf, n)
+                        listener != null
                     }
                     lastOutputAt = System.currentTimeMillis()
                     outSinceEnter += n
                     scanForAlerts(buf, n)
+                    val hide = synchronized(fdLock) { fdOpen && Pty.hiddenInput(fd) }
+                    if (hide != hiddenInput) {
+                        hiddenInput = hide
+                        synchronized(lock) { listener?.onHiddenInput(this, hide) }
+                    }
+                    if (shown) waitForRoom(n)
                 }
             } catch (_: IOException) {
                 // EIO when the child side closes — normal end of session
@@ -132,6 +145,10 @@ class TermSession(
      */
     fun attach(l: OutputListener?, withSnapshot: ((ByteArray) -> Unit)? = null) = synchronized(lock) {
         listener = l
+        synchronized(ackLock) { // (a new page starts counting afresh)
+            unacked = 0
+            ackLock.notifyAll()
+        }
         if (withSnapshot != null) {
             val snap = ByteArray(ringLen)
             for (i in 0 until ringLen) snap[i] = ring[(ringStart + i) % RING_SIZE]
@@ -178,6 +195,34 @@ class TermSession(
         }
     }
 
+    // ---- flow control ----
+    // The page says how much output it has taken in (ack). A program printing faster than the
+    // screen can follow (yes, cat of a huge log) then waits for it, as on any terminal — the
+    // output used to pile up by the megabyte in the page until it dropped some or froze.
+    private val ackLock = Object()
+    private var unacked = 0L
+
+    fun ack(n: Int) = synchronized(ackLock) {
+        unacked = maxOf(0L, unacked - n)
+        ackLock.notifyAll()
+    }
+
+    private fun waitForRoom(n: Int) = synchronized(ackLock) {
+        unacked += n
+        // (the app out of sight: its page may be slowed down by the system — an agent working
+        // in the background isn't held back by it)
+        if (!paceOutput) return@synchronized
+        val until = android.os.SystemClock.uptimeMillis() + ACK_GIVE_UP_MS
+        while (unacked > HIGH_WATER && alive && paceOutput) {
+            val left = until - android.os.SystemClock.uptimeMillis()
+            if (left <= 0) {
+                unacked = 0 // the page isn't answering (reloading, gone): don't hold the program
+                break
+            }
+            ackLock.wait(minOf(left, 200L))
+        }
+    }
+
     fun write(data: ByteArray) {
         if (!alive) return
         // Enter arms the "answer finished" check — so does a digit in an agent (answering
@@ -193,12 +238,16 @@ class TermSession(
         } else if (!agent && data.isNotEmpty() && data[0] != 0x1b.toByte()) {
             enterAt = 0
         }
-        writer.execute {
-            try {
-                out.write(data)
-                out.flush()
-            } catch (_: IOException) {
+        try {
+            writer.execute {
+                try {
+                    out.write(data)
+                    out.flush()
+                } catch (_: IOException) {
+                }
             }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // closed meanwhile (a key typed as the tab closed)
         }
     }
 
@@ -223,7 +272,12 @@ class TermSession(
 
     fun kill() {
         val wasAlive = alive
-        if (wasAlive) Pty.sendSignal(pid, 1) // SIGHUP, like closing a terminal window
+        if (wasAlive) {
+            // SIGHUP, like closing a terminal window: to the program in front (bash saves its
+            // history) and to the whole session
+            synchronized(fdLock) { if (fdOpen) Pty.hangUp(fd) }
+            Pty.sendSignal(pid, 1)
+        }
         Thread {
             if (wasAlive) {
                 Thread.sleep(1500)
@@ -239,6 +293,11 @@ class TermSession(
 
     companion object {
         const val RING_SIZE = 512 * 1024
+        /** Output the page may be behind by before the program has to wait. */
+        private const val HIGH_WATER = 1024 * 1024L
+        private const val ACK_GIVE_UP_MS = 4000L
+        /** The app is on screen: output keeps pace with its page (set by the activity). */
+        @Volatile var paceOutput = true
         private val OSC9_SUBCOMMAND = Regex("^9;\\d+(;|$)")
     }
 }

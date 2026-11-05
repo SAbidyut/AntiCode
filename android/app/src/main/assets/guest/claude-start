@@ -1,6 +1,8 @@
 #!/bin/bash
 # Started by the app's "Claude Code" button: install if needed, run claude, then stay in a shell.
 export PATH="$HOME/.local/bin:$PATH"
+# Ctrl-C stops the agent (or its setup), not this script: the tab goes on to its shell
+trap : INT
 command -v claude >/dev/null 2>&1 || /usr/local/bin/claude-setup --auto
 if command -v claude >/dev/null 2>&1; then
   printf '\e]7770;exec;%s;claude\a' "${ANTICODE_LINK_TOKEN:-}"

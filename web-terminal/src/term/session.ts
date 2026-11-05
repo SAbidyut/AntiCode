@@ -74,9 +74,16 @@ export class TerminalSession {
     this.setProgramWidths(kind === 'agy');
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
-    this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput);
-    this.renderer.onLinesRenumbered = () => {
-      if (this.edit.sel?.kind === 'screen') this.edit.clearSelection();
+    this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput,
+      () => this.kind === 'agy' || this.kind === 'claude' || !!this.agent);
+    this.renderer.onLinesRenumbered = (shift) => {
+      const sel = this.edit.sel;
+      if (sel?.kind !== 'screen') return;
+      // (old lines dropping off a full history: the selection moves with its text — it used
+      // to vanish within a frame while an agent printed)
+      if (shift > 0 && sel.a.line - shift >= 0) {
+        this.edit.setScreenSelection({ line: sel.a.line - shift, x: sel.a.x }, { line: sel.b.line - shift, x: sel.b.x });
+      } else this.edit.clearSelection();
     };
     this.edit.onSelection = (sel, area) => {
       this.edit.onChanged?.(sel);
@@ -154,6 +161,7 @@ export class TerminalSession {
       if (full) {
         this.renderer.clearLabels();
         this.sgrMouse = false;
+        this.focusReports = false; // (a crashed editor's focus reports end with `reset`)
       }
       this.renderer.cursorVisible = true;
       this.renderer.schedule();
@@ -189,6 +197,7 @@ export class TerminalSession {
       else if (cmd === 'bar') this.renderer.markBarLine(); // its bar line (text drawn smaller)
       // a shell prompt: no agent is on screen any more → ordinary terminal layout
       else if (cmd === 'done') {
+        if (this.replaying) this.replaySawMeta = true;
         this.renderer.anchorBottom = false;
         this.agent = '';
         this.onMeta?.(); // (the home screen's card: no agent's account any more)
@@ -197,6 +206,7 @@ export class TerminalSession {
       } else if (cmd === 'exec') {
         // a command starts: by letters… (Antigravity counts conjuncts whole — its start script
         // says "exec;agy" and runs the program itself, not the shell's agy wrapper)
+        if (this.replaying) this.replaySawMeta = true;
         this.setProgramWidths(args[0] === 'agy');
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
@@ -298,8 +308,18 @@ export class TerminalSession {
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;
-    this.term.write(data);
+    // taken in: the phone may send more (flow control — a flood of output waits for the screen
+    // instead of piling up); told in 64 KB steps, not for every keystroke's echo
+    const n = data.length;
+    this.term.write(data, () => {
+      this.unacked += n;
+      if (this.unacked >= 65536) {
+        this.bridge.ack(this.id, this.unacked);
+        this.unacked = 0;
+      }
+    });
   }
+  private unacked = 0;
 
   /** Diagnostics for bug reports: terminal state + the last output with escapes made visible. */
   debugDump(): string {
@@ -552,7 +572,8 @@ export class TerminalSession {
   /** Send a mouse click (only when the program enabled mouse tracking). */
   click(clientX: number, clientY: number): boolean {
     if (!this.mouseTracking) return false;
-    const { x, y } = this.renderer.cellAt(clientX, clientY);
+    const { x, y, onScreen } = this.renderer.cellAt(clientX, clientY);
+    if (!onScreen) return false; // (a tap on history scrolled back to)
     this.bridge.write(this.id, this.mouseReport(0, x, y, true) + this.mouseReport(0, x, y, false));
     return true;
   }
@@ -613,6 +634,10 @@ export class TerminalSession {
     while (a > 0 && offset - a < 1024 && !space(text[a - 1])) a--;
     while (b < text.length && b - offset < 1024 && !space(text[b])) b++;
     if (a === b) return null;
+    // (a window around the point: these patterns can start anywhere, and on a 2k-long token
+    // every start was tried — a tap took a good part of a second)
+    a = Math.max(a, offset - 256);
+    b = Math.min(b, offset + 256);
     const token = text.slice(a, b);
     const at0 = offset - a;
     for (const m of token.matchAll(re)) {
@@ -633,6 +658,7 @@ export class TerminalSession {
     this.readerEl.hidden = !open;
     this.readerBadge.hidden = !open;
     this.renderer.el.hidden = open;
+    this.renderer.setOffscreen(open || !this.onScreen); // (drawn anew when it's back)
     if (open) this.renderReader(true);
   }
 
@@ -659,36 +685,62 @@ export class TerminalSession {
     return out;
   }
 
+  /** The lines Reader view shows now (to change only what changed). */
+  private readerLines: string[] = [];
+
   private renderReader(forceBottom: boolean) {
+    if (!this.readerOpen) return;
     const el = this.readerEl;
+    // the user is selecting text in it (what Reader view is for): not now — replacing the
+    // lines would drop the selection
+    const picked = window.getSelection();
+    if (!forceBottom && picked && !picked.isCollapsed && el.contains(picked.anchorNode)) {
+      this.scheduleReader();
+      return;
+    }
     const atBottom = forceBottom || el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
     const lines = this.logicalLines();
-    const frag = document.createDocumentFragment();
-    for (const l of lines) {
-      const div = document.createElement('div');
-      div.className = 'rl';
-      if (!l.trim()) {
-        div.innerHTML = '&nbsp;';
-      } else {
-        let last = 0;
-        for (const m of l.matchAll(URL_RE)) {
-          div.append(l.slice(last, m.index));
-          const a = document.createElement('a');
-          a.textContent = m[0];
-          a.href = m[0];
-          a.onclick = (e) => {
-            e.preventDefault();
-            this.bridge.openUrl(m[0]);
-          };
-          div.append(a);
-          last = m.index! + m[0].length;
-        }
-        div.append(l.slice(last));
-      }
-      frag.append(div);
+    const old = this.readerLines;
+    // only the lines that changed (usually the last few) are made anew; all of them when the
+    // history's start moved (old lines dropped) or when it's opened
+    let keep = 0;
+    if (!forceBottom && old.length && lines.length && old[0] === lines[0] && el.childElementCount === old.length) {
+      const n = Math.min(old.length, lines.length);
+      while (keep < n && old[keep] === lines[keep]) keep++;
     }
-    el.replaceChildren(frag);
+    this.readerLines = lines;
+    const frag = document.createDocumentFragment();
+    for (let i = keep; i < lines.length; i++) frag.append(this.readerLine(lines[i]));
+    if (keep === 0) el.replaceChildren(frag);
+    else {
+      while (el.childElementCount > keep) el.lastElementChild!.remove();
+      el.append(frag);
+    }
     if (atBottom) el.scrollTop = el.scrollHeight;
+  }
+
+  private readerLine(l: string): HTMLElement {
+    const div = document.createElement('div');
+    div.className = 'rl';
+    if (!l.trim()) {
+      div.innerHTML = '&nbsp;';
+      return div;
+    }
+    let last = 0;
+    for (const m of l.matchAll(URL_RE)) {
+      div.append(l.slice(last, m.index));
+      const a = document.createElement('a');
+      a.textContent = m[0];
+      a.href = m[0];
+      a.onclick = (e) => {
+        e.preventDefault();
+        this.bridge.openUrl(m[0]);
+      };
+      div.append(a);
+      last = m.index! + m[0].length;
+    }
+    div.append(l.slice(last));
+    return div;
   }
 
   /** How many rows of the screen have something on them. */
@@ -704,7 +756,20 @@ export class TerminalSession {
     return this.logicalLines().join('\n');
   }
 
+  /** Stops a fling / queued scroll steps (set by the app's gestures). */
+  stopGestures?: () => void;
+
+  /** In front on the screen (the tab shown, the terminal screen up): drawn only then. */
+  private onScreen = true;
+  setOnScreen(on: boolean) {
+    this.onScreen = on;
+    this.renderer.setOffscreen(!on || this.readerOpen);
+  }
+
+  private exitShown = false;
   markExited(code: number) {
+    if (this.exitShown) return; // (reported twice when it ended the moment it started)
+    this.exitShown = true;
     this.alive = false;
     // after everything it printed: a program that died mid-screen (alternate screen, mouse
     // mode) can't clean up — back to the normal screen with its history, mouse off, no
@@ -731,6 +796,10 @@ export class TerminalSession {
       this.term.buffer.active.type === 'alternate' ? 1 : 0,
       this.renderer.cursorVisible ? 1 : 0,
       m.mouseTrackingMode,
+      // (an agent started from a shell tab: told by a message that may be older than the
+      // saved output too — its layout and its way of counting letters come back with it)
+      this.agent,
+      this.edit.atPrompt ? 1 : 0,
     ].join(',');
   }
   private saveModes() {
@@ -763,12 +832,16 @@ export class TerminalSession {
     if (this.focusReports && this.alive) this.reply(on ? '\x1b[I' : '\x1b[O');
   }
 
+  /** The replay had the shell's own word on what runs (a prompt, a command starting). */
+  private replaySawMeta = false;
+
   /** Private modes (CSI ? n h/l) the replayed output set — its state of them is the latest. */
   private replaySet = new Set<number>();
 
   /** A restored session: its saved output comes next (requests in it were answered then). */
   beginReplay() {
     this.replaying = true;
+    this.replaySawMeta = false;
     this.replaySet.clear();
     // draw it once, when it's all in — not flickering through the old screens
     this.renderer.paused = true;
@@ -798,7 +871,16 @@ export class TerminalSession {
       k = localStorage.getItem(`modes:${this.id}`);
     } catch { /* storage unavailable */ }
     if (!k || !this.alive) return; // a finished session has no modes to restore
-    const [bp, ac, alt, cur, mouse] = k.split(',');
+    const [bp, ac, alt, cur, mouse, agent, atPrompt] = k.split(',');
+    if (agent !== undefined && !this.replaySawMeta) {
+      this.edit.atPrompt = atPrompt === '1';
+      if (/^(agy|claude)$/.test(agent) && !this.agent) {
+        this.agent = agent;
+        this.renderer.anchorBottom = true;
+        this.setProgramWidths(agent === 'agy');
+        this.onMeta?.();
+      }
+    }
     this.term.write('', () => {
       const m = this.term.modes;
       const mouseMode: Record<string, number> = { x10: 9, vt200: 1000, drag: 1002, any: 1003 };
