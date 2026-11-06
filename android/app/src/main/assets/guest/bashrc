@@ -477,11 +477,14 @@ opencode() {
   local pkg=
   [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
   if [ -e "$HOME/.local/share/opencode-cli" ] && [ "$pkg" != @opencode/cli ]; then
-    env HOME="${ANTICODE_REAL_HOME:-$HOME}" /usr/local/bin/opencode-setup --auto || return
+    # (no connection: the OpenCode that's there, as it is)
+    env HOME="${ANTICODE_REAL_HOME:-$HOME}" /usr/local/bin/opencode-setup --auto ||
+      echo "opencode: couldn't update to OpenCode 2 — starting the one installed" >&2
+    pkg=; [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
   fi
   [ -t 1 ] && printf '\e]7770;exec;%s;opencode\a' "$__agy_tok"
   # bare `opencode`: its compact view, the input at the bottom (as the app's button opens it)
-  [ $# -eq 0 ] && [ -t 1 ] && set -- mini
+  [ $# -eq 0 ] && [ -t 1 ] && [ "$pkg" = @opencode/cli ] && set -- mini
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account opencode 2>/dev/null)
   if [ -n "$d" ]; then XDG_DATA_HOME=$d command opencode "$@"; else command opencode "$@"; fi

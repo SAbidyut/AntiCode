@@ -102,7 +102,8 @@ export class LineEditor {
     // (at the shell's prompt a rule line above is what an agent left on the screen; and only
     // an agent's box: a script that printed a rule and asks something would get arrow keys
     // typed into its answer, less would scroll sideways)
-    if (!this.atPrompt && this.agentRuns()) {
+    // (OpenCode's barred box first — see below — a table's border in its reply isn't the box)
+    if (!this.atPrompt && this.agentRuns() && !/^\s*┃/.test(this.text(cur))) {
       for (let y = cur - 1; y >= Math.max(0, cur - 8); y--) {
         if (isRule(this.text(y))) {
           top = y + 1;

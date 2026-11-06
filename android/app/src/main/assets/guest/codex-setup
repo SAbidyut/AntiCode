@@ -28,7 +28,14 @@ if ! codex --version >/dev/null 2>&1; then
   tar xzf "$tmp/codex.tgz" -C "$dir.new" --strip-components=3 --exclude='*/voice/*' "package/vendor/$triple" \
     || fail "Unpacking Codex failed"
   rm -rf "$dir" && mv "$dir.new" "$dir" || fail "Couldn't put Codex in place"
-  mkdir -p "$HOME/.local/bin" && ln -sfn "$dir/bin/codex" "$HOME/.local/bin/codex"
+fi
+# started through a small script that puts Codex's own helpers (its ripgrep) on the PATH, as
+# its npm launcher does (an earlier version of the app linked the program itself)
+dir="$HOME/.local/share/codex-cli"
+if [ -x "$dir/bin/codex" ] && { [ -L "$HOME/.local/bin/codex" ] || [ ! -e "$HOME/.local/bin/codex" ]; }; then
+  mkdir -p "$HOME/.local/bin" && rm -f "$HOME/.local/bin/codex" &&
+    printf '#!/bin/sh\nPATH="%s/codex-path:$PATH" exec "%s/bin/codex" "$@"\n' "$dir" "$dir" > "$HOME/.local/bin/codex" &&
+    chmod +x "$HOME/.local/bin/codex"
 fi
 codex --version >/dev/null 2>&1 \
   || fail "Codex was installed but does not start on this phone"

@@ -15,7 +15,7 @@
 // drawn with CSS/SVG instead of font glyphs, so they fill the cell exactly and join
 // seamlessly at any zoom level.
 
-import type { Terminal, IBufferCell, IBufferLine, IMarker } from '@xterm/headless';
+import type { Terminal, IBuffer, IBufferCell, IBufferLine, IMarker } from '@xterm/headless';
 import { isRule } from './lineedit';
 
 export interface TermTheme {
@@ -186,6 +186,8 @@ interface Row {
 const OVERSCAN = 10;
 /** The keyboard pan goes where the cursor was for most (60 %) of this long (ms). */
 const PAN_WINDOW_MS = 500;
+/** How long a moment's miss of an agent's input box is bridged (no layout flip-flop). */
+const BOX_MEMORY_MS = 400;
 
 export class BanglaRenderer {
   /**
@@ -219,6 +221,7 @@ export class BanglaRenderer {
   suppressReveal = true;
   private lastCursorT = '';
   private lastCursorLine = -1;
+  private cursorOnTop = false;
   private typingTimer = 0;
   private animBaseY = 0;
   // ---- right-aligned labels (the prompt's clock): drawn by us at the right edge of a
@@ -704,9 +707,13 @@ export class BanglaRenderer {
    * After a resize, programs clear and redraw: keep the old picture until they're done
    * (output quiet for [quiet] ms, at most [ms]).
    */
+  private panKey = '';
   private holdFrom = 0;
+  /** When output first came after the hold began (0: not yet). */
+  private holdStarted = 0;
   holdForRedraw(ms = 300, quiet = 60) {
     this.holdFrom = performance.now();
+    this.holdStarted = 0;
     this.holdUntil = this.holdFrom + ms;
     this.holdQuiet = quiet;
   }
@@ -715,11 +722,19 @@ export class BanglaRenderer {
     const now = performance.now();
     const zoomed = this.zoom !== this.panZoom;
     this.panZoom = this.zoom;
+    // the screen itself changed (keyboard settled without sliding, rotation, text size, a
+    // full-screen program started or ended): the new pan at once, not after a moment's jump
+    const buf = this.term.buffer.active;
+    const key = `${this.el.clientHeight}|${this.term.rows}|${this.lineHeight}|${buf.type}`;
+    const relaid = key !== this.panKey;
+    this.panKey = key;
     const same = (x: number, y: number) => Math.abs(x - y) < 0.5;
     // at once: the keyboard sliding, a zoom, back from reading history, the first picture,
     // and in a shell the user's own keys (Enter takes the prompt to a new line)
-    const prompt = this.insetsMoving || zoomed || backDown || !this.rows.size ||
-      (!this.anchorBottom && now - this.lastInput < 400);
+    const prompt = this.insetsMoving || zoomed || relaid || backDown || !this.rows.size ||
+      // (a shell's output growing down past the keyboard is followed at once — it ran on
+      // hidden under the keyboard, then the screen jumped)
+      (!this.anchorBottom && (now - this.lastInput < 400 || want > this.pan + 0.5));
     const h = this.panHist;
     if (prompt) {
       h.length = 0;
@@ -761,6 +776,10 @@ export class BanglaRenderer {
     } else this.syncSince = 0;
     // after a resize: wait until output has been quiet for a moment (at most holdForRedraw ms)
     if (now >= this.holdUntil) return false;
+    if (this.lastOutput >= this.holdFrom && !this.holdStarted) this.holdStarted = now;
+    // (a program that never goes quiet — a spinner, a busy agent — isn't held for the whole
+    // time: a moment after its redraw began)
+    if (this.holdStarted && now - this.holdStarted > 300) return false;
     if (now - this.lastOutput < this.holdQuiet) return true;
     // …and a program that redraws itself on a resize (a full-screen one, an agent): until its
     // redraw has begun — the first frame was otherwise the old screen re-wrapped, boxes broken
@@ -1154,8 +1173,40 @@ export class BanglaRenderer {
   setOffscreen(off: boolean) {
     if (off === this.offscreen) return;
     this.offscreen = off;
-    if (!off) this.schedule();
+    if (off) {
+      // (a fade cut short by hiding would replay from nothing when shown again)
+      for (const r of this.rows.values()) {
+        r.el.classList.remove('row-in');
+        r.el.style.animationDelay = '';
+      }
+      return;
+    }
+    // back on screen: the keyboard may have come or gone meanwhile — the pan follows at once
+    // (not after the usual dwell: the screen sat cut off for a moment, then jumped), and the
+    // cursor is placed, not glided from where it was
+    this.panScrolled = true;
+    this.lastCursorLine = -1;
+    this.schedule();
   }
+
+  /** The agent's input box: the screen row of the rule above it, or of the line before
+   * OpenCode's barred (┃) rows; -1 if none near the cursor. */
+  private findBox(buf: IBuffer): number {
+    const text = (y: number) => buf.getLine(buf.baseY + y)?.translateToString(true) ?? '';
+    // (the bar first: a reply ending in a table's border or a rule just above OpenCode's box
+    // would otherwise be taken for the box's top)
+    const barred = (y: number) => /^\s*┃/.test(text(y));
+    if (barred(buf.cursorY)) {
+      let top = buf.cursorY;
+      while (top > 0 && buf.cursorY - top < 12 && barred(top - 1)) top--;
+      return top > 0 ? top - 1 : -1;
+    }
+    for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) if (isRule(text(y))) return y;
+    return -1;
+  }
+  private boxSeenAt = -Infinity;
+  private boxFromEnd = -1;
+  private boxTimer = 0;
 
   render() {
     if (this.disposed || this.paused || this.offscreen) return;
@@ -1228,30 +1279,30 @@ export class BanglaRenderer {
     let splitGap = 0;
     let lift = 0;
     // (a floating keyboard too: the box stays at the bottom — the keyboard can be moved off it)
-    if (this.anchorBottom && buf.type === 'normal' && visible > 0) {
+    // the box's screen row (see findBox), -1 none
+    let box = -1;
+    if (this.anchorBottom && buf.type === 'normal') {
+      box = this.findBox(buf);
+      const now = performance.now();
+      if (box >= 0) {
+        this.boxSeenAt = now;
+        this.boxFromEnd = lastY - box;
+      } else if (now - this.boxSeenAt < BOX_MEMORY_MS && this.boxFromEnd >= 0) {
+        // missed for a moment (the agent's redraw came in two pieces, its cursor elsewhere
+        // mid-write): where it was — the layout used to flip off and on, everything jumping
+        box = Math.max(0, lastY - this.boxFromEnd);
+        clearTimeout(this.boxTimer);
+        this.boxTimer = window.setTimeout(() => this.schedule(), BOX_MEMORY_MS);
+      }
+    }
+    if (box >= 0 && visible > 0) {
       const free = visible - (lastY + 1) * lh;
-      if (free >= lh) {
-        let box = -1;
-        for (let y = buf.cursorY - 1; y >= Math.max(0, buf.cursorY - 8); y--) {
-          if (isRule(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '')) {
-            box = y;
-            break;
-          }
-        }
-        // OpenCode's input box has no rule above it, a bar at its left (┃): the line before
-        // its first row is where the bottom part starts
-        const barred = (y: number) => /^\s*┃/.test(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
-        if (box < 0 && barred(buf.cursorY)) {
-          let top = buf.cursorY;
-          while (top > 0 && buf.cursorY - top < 12 && barred(top - 1)) top--;
-          if (top > 0) box = top - 1;
-        }
-        if (box >= 0) {
-          lift = Math.min(free, buf.baseY * lh);
-          if (this.scrollPx === 0 && free - lift >= lh) {
-            splitLine = buf.baseY + box;
-            splitGap = free - lift;
-          }
+      // (any room at all: the box follows the keyboard pixel by pixel, no one-line step)
+      if (free > 0) {
+        lift = Math.min(free, buf.baseY * lh);
+        if (this.scrollPx === 0 && free - lift > 0.5) {
+          splitLine = buf.baseY + box;
+          splitGap = free - lift;
         }
       }
     }
@@ -1302,11 +1353,13 @@ export class BanglaRenderer {
     // erased and drawn again below each new piece of a reply — always on fresh lines. It is
     // not new output: it must not fade in (it flickered), and its lines stay "unrevealed" so
     // the reply that takes their place still fades in.
-    let boxTop = -1;
-    for (let y = cursorLine - 1; y >= Math.max(buf.baseY, cursorLine - 8); y--) {
-      if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
-        boxTop = y;
-        break;
+    let boxTop = box >= 0 ? buf.baseY + box : -1;
+    if (!this.anchorBottom) {
+      for (let y = cursorLine - 1; y >= Math.max(buf.baseY, cursorLine - 8); y--) {
+        if (isRule(buf.getLine(y)?.translateToString(true) ?? '')) {
+          boxTop = y;
+          break;
+        }
       }
     }
     // No box (a shell, a command's output): the line being typed — all of it, when it wraps
@@ -1364,7 +1417,9 @@ export class BanglaRenderer {
     // the output, and only for a few lines — a flood just jumps).
     const grew = buf.baseY - this.animBaseY;
     this.animBaseY = buf.baseY;
-    const slide = motion && this.scrollPx === 0 && grew > 0 && grew <= 4;
+    // (not under an agent's input box: the box, drawn at once on its new lines, dipped a line
+    // and glided back up on every new line of a reply)
+    const slide = motion && this.scrollPx === 0 && grew > 0 && grew <= 4 && !(this.anchorBottom && boxTop >= 0);
     const dur = slide ? '140ms' : '0s';
     if (this.viewport.style.transitionDuration !== dur) this.viewport.style.transitionDuration = dur;
     this.viewport.style.transform = `translateY(${(-topPx).toFixed(2)}px)`;
@@ -1385,8 +1440,9 @@ export class BanglaRenderer {
       } else if (buf.type === 'alternate') {
         // a full-screen program is sized to the room above the keyboard once it settles (see
         // TerminalSession.fit) and draws itself in it: sliding its screen up meanwhile only
-        // made it jump twice
-        pan = 0;
+        // made it jump twice. (Still too tall once settled — a big text size sideways: what
+        // the cursor needs is shown.)
+        pan = !this.insetsMoving && overflow > 0 ? Math.max(0, Math.min(overflow, below, buf.cursorY * lh)) : 0;
       } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal' &&
         !this.anchorBottom && this.el.clientHeight > this.el.clientWidth) {
         // the input line (and what's drawn under it) in the upper half of the screen (not in
@@ -1460,6 +1516,15 @@ export class BanglaRenderer {
       this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${y}px)`;
     }
     if (showCursor) {
+      // Over a cell the program painted (OpenCode's, Codex's input box) the cursor goes on top
+      // — under the row it was hidden; elsewhere under the text, the letter showing through
+      const under = buf.getLine(cursorLine)?.getCell(Math.min(buf.cursorX, cols - 1), this.probe);
+      if (under) this.probe = under;
+      const painted = !!under && !under.isBgDefault();
+      if (painted !== this.cursorOnTop) {
+        this.cursorOnTop = painted;
+        this.cursorEl.classList.toggle('on-top', painted);
+      }
       // cursorX == cols while a line wrap is pending: keep it on the grid
       const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;
       if (t !== this.lastCursorT) {

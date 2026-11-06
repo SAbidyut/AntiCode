@@ -14,12 +14,17 @@
 kind=$1
 if [ "$kind" = codex-config ]; then
   cfg="${2:-$HOME/.codex}/config.toml"
-  grep -qs '^[[:space:]]*sandbox_mode' "$cfg" && exit 0
+  add=()
+  grep -qs '^[[:space:]]*sandbox_mode' "$cfg" || add+=('sandbox_mode = "danger-full-access"')
+  # (with full access nothing needs Codex's permission any more: without this it would run
+  # any command without asking — this way it asks first, except for plain reading)
+  grep -qs '^[[:space:]]*approval_policy' "$cfg" || add+=('approval_policy = "untrusted"')
+  [ ${#add[@]} -eq 0 ] && exit 0
   mkdir -p "${cfg%/*}" || exit 0
   # (first in the file: a setting after a [section] would belong to that section)
   { printf '%s\n' "# AntiCode: Codex's sandbox can't work on Android (no Linux namespaces) — commands" \
-      "# run without it; Codex still asks before running them (approval_policy)." \
-      'sandbox_mode = "danger-full-access"' ''
+      "# run without it, and Codex asks before running them (change it with /permissions)." \
+      "${add[@]}" ''
     cat "$cfg" 2>/dev/null || true; } > "$cfg.new" && mv "$cfg.new" "$cfg"
   exit 0
 fi
