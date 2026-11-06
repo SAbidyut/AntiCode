@@ -32,8 +32,8 @@ android {
         // is installed directly (not from Play Store), so this is allowed.
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 75
-        versionName = "0.19.2"
+        versionCode = 76
+        versionName = "0.19.3"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")

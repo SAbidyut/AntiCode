@@ -20,6 +20,8 @@
    `sandbox_mode = "danger-full-access"` বসানো হয় — কমান্ড চালানোর আগে Codex তবুও অনুমতি চায়।
 7. **OpenCode** টাইলে চাপুন। প্রথমবার OpenCode 2 এর অফিসিয়াল npm প্যাকেজের প্রোগ্রাম (`@opencode/cli-linux-arm64`, ~১২০MB) দিয়ে
    `opencode` ইনস্টল হবে। `/models` এ মডেল বাছুন (কয়েকটা ফ্রি), `/connect` দিয়ে কোনো provider এ সাইন ইন।
+   শুরু থেকেই ইনপুট বক্স নিচে রাখতে OpenCode এর ছোট ভিউ (`opencode mini`) খোলে; পুরো স্ক্রিনের ভিউ চাইলে
+   Settings → **OpenCode: full-screen view**।
 
 ## ব্যবহার
 

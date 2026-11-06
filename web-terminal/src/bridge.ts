@@ -115,6 +115,9 @@ export interface Bridge {
   /** Antigravity approves every tool without asking (its --dangerously-skip-permissions). */
   setAgyApproveAll(on: boolean): void;
   getAgyApproveAll(): Promise<boolean>;
+  /** OpenCode's button: its full-screen view instead of the compact one (input at the bottom). */
+  setOpencodeFullscreen(on: boolean): void;
+  getOpencodeFullscreen(): Promise<boolean>;
   getClaudeFullscreen(): Promise<boolean>;
   /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
   setPromptStyle(style: string): void;
@@ -191,6 +194,8 @@ interface AndroidBridgeApi {
   setClaudeFullscreen?(on: boolean): void;
   setAgyApproveAll?(on: boolean): void;
   getAgyApproveAll?(): boolean;
+  setOpencodeFullscreen?(on: boolean): void;
+  getOpencodeFullscreen?(): boolean;
   getClaudeFullscreen?(): boolean;
   setPromptStyle?(style: string): void;
   getPromptStyle?(): string;
@@ -258,6 +263,8 @@ class AndroidHostBridge implements Bridge {
   setClaudeFullscreen(on: boolean) { this.api.setClaudeFullscreen?.(on); }
   setAgyApproveAll(on: boolean) { this.api.setAgyApproveAll?.(on); }
   async getAgyApproveAll() { return this.api.getAgyApproveAll?.() ?? false; }
+  setOpencodeFullscreen(on: boolean) { this.api.setOpencodeFullscreen?.(on); }
+  async getOpencodeFullscreen() { return this.api.getOpencodeFullscreen?.() ?? false; }
   async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
   setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
   async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
@@ -405,6 +412,8 @@ class DevBridge implements Bridge {
   setClaudeFullscreen() {}
   setAgyApproveAll() {}
   async getAgyApproveAll() { return false; }
+  setOpencodeFullscreen() {}
+  async getOpencodeFullscreen() { return false; }
   async getClaudeFullscreen() { return false; }
   setPromptStyle(style: string) {
     try { localStorage.setItem('promptStyle', style); } catch { /* storage unavailable */ }

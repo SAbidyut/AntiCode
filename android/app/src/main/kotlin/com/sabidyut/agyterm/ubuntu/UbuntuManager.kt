@@ -76,6 +76,22 @@ class UbuntuManager private constructor(private val context: Context) {
             } catch (_: Exception) { /* not installed yet */ }
         }
 
+    /**
+     * OpenCode's button opens its full-screen view (its own start page, the input in the
+     * middle) instead of its compact one (`opencode mini`: the input at the bottom).
+     */
+    var opencodeFullscreen: Boolean
+        get() = File(rootfs, OPENCODE_FULLSCREEN).isFile
+        set(v) {
+            try {
+                val f = File(rootfs, OPENCODE_FULLSCREEN)
+                if (v) {
+                    f.parentFile?.mkdirs()
+                    f.writeText("OpenCode's button opens its full-screen view (Settings in the app).\n")
+                } else f.delete()
+            } catch (_: Exception) { /* not installed yet */ }
+        }
+
     var promptStyle: String
         get() = try {
             File(rootfs, "root/.config/agy-terminal/prompt").readText().trim()
@@ -905,6 +921,7 @@ class UbuntuManager private constructor(private val context: Context) {
         }
 
         private const val AGY_APPROVE_ALL = "root/.config/agy-terminal/agy-approve-all"
+        private const val OPENCODE_FULLSCREEN = "root/.config/agy-terminal/opencode-fullscreen"
 
         val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
         private const val UI_PREFS = "anticode-ui"

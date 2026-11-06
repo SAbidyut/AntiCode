@@ -1178,6 +1178,14 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getAgyApproveAll(): Boolean = service?.ubuntu?.agyApproveAll ?: false
 
+        @JavascriptInterface
+        fun setOpencodeFullscreen(on: Boolean) {
+            svc().ubuntu.opencodeFullscreen = on
+        }
+
+        @JavascriptInterface
+        fun getOpencodeFullscreen(): Boolean = service?.ubuntu?.opencodeFullscreen ?: false
+
         /** The shell prompt's look (Settings → Prompt style). */
         @JavascriptInterface
         fun setPromptStyle(style: String) {
