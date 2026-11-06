@@ -1374,6 +1374,11 @@ export class BanglaRenderer {
       let pan = 0;
       if (splitLine >= 0 || lift > 0) {
         pan = 0; // the chat layout already fits the screen
+      } else if (buf.type === 'alternate') {
+        // a full-screen program is sized to the room above the keyboard once it settles (see
+        // TerminalSession.fit) and draws itself in it: sliding its screen up meanwhile only
+        // made it jump twice
+        pan = 0;
       } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal' &&
         !this.anchorBottom && this.el.clientHeight > this.el.clientWidth) {
         // the input line (and what's drawn under it) in the upper half of the screen (not in

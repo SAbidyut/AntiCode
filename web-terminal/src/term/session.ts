@@ -536,7 +536,10 @@ export class TerminalSession {
     const kb = this.term.buffer.active.type === 'alternate' ? 0 : TerminalSession.keyboardInset;
     const { cols, rows } = this.renderer.fit(box.width, box.height + kb);
     if (cols !== this.term.cols || rows !== this.term.rows) {
-      this.renderer.holdForRedraw();
+      // (a full-screen program redraws the whole screen for its new size — slowly under
+      // proot: the last picture stays until it has, not the old screen cut to the new size)
+      if (this.term.buffer.active.type === 'alternate') this.renderer.holdForRedraw(1500, 150);
+      else this.renderer.holdForRedraw();
       this.term.resize(cols, rows);
       this.renderer.schedule();
     }
