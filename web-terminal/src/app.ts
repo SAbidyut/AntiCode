@@ -139,7 +139,6 @@ let accounts = { agy: '', claude: '' };
 let notifyWhenDone = true;
 let claudeFullscreen = false;
 let agyApproveAll = false;
-let opencodeFullscreen = false;
 let restored = false;
 let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
@@ -2374,12 +2373,6 @@ function openSettingsSheet() {
         agyApproveAll = v;
         bridge.setAgyApproveAll(v);
       }),
-    toggle('OpenCode: full-screen view',
-      'Off: the compact view, its input at the bottom from the start. On: OpenCode’s full screen — its start page has the input in the middle. For new OpenCode sessions.',
-      opencodeFullscreen, (v) => {
-        opencodeFullscreen = v;
-        bridge.setOpencodeFullscreen(v);
-      }),
     // rarely needed: folded away
     h('details', { class: 'advanced' },
       h('summary', {}, h('span', {}, 'Advanced'), svg('chevron')),
@@ -2546,7 +2539,6 @@ async function boot() {
   notifyWhenDone = await bridge.getNotifyWhenDone();
   claudeFullscreen = await bridge.getClaudeFullscreen();
   agyApproveAll = await bridge.getAgyApproveAll();
-  opencodeFullscreen = await bridge.getOpencodeFullscreen();
   accounts = await bridge.getAccounts();
   renderHome();
 

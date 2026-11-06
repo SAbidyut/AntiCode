@@ -10,10 +10,7 @@ if command -v opencode >/dev/null 2>&1; then
   printf '\e]7770;exec;%s;opencode\a' "${ANTICODE_LINK_TOKEN:-}"
   # the tab's account: one of the extra ones keeps its sign-ins apart (see anticode-account)
   acct_dir=$(/usr/local/bin/anticode-account opencode)
-  # its compact view — the input at the bottom from the start; Settings → "OpenCode:
-  # full-screen view" for its full screen (whose start page has the input in the middle)
-  if [ -f "$HOME/.config/agy-terminal/opencode-fullscreen" ]; then set --; else set -- mini; fi
-  if [ -n "$acct_dir" ]; then XDG_DATA_HOME=$acct_dir opencode "$@"; else opencode "$@"; fi
+  if [ -n "$acct_dir" ]; then XDG_DATA_HOME=$acct_dir opencode; else opencode; fi
 else
   echo "opencode was not found — run 'opencode-setup' and try again."
 fi

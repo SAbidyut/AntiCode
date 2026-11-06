@@ -1238,14 +1238,6 @@ export class BanglaRenderer {
             break;
           }
         }
-        // OpenCode's input box has no rule above it, a bar at its left (┃): the line before
-        // its first row is where the bottom part starts
-        const barred = (y: number) => /^\s*┃/.test(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
-        if (box < 0 && barred(buf.cursorY)) {
-          let top = buf.cursorY;
-          while (top > 0 && buf.cursorY - top < 12 && barred(top - 1)) top--;
-          if (top > 0) box = top - 1;
-        }
         if (box >= 0) {
           lift = Math.min(free, buf.baseY * lh);
           if (this.scrollPx === 0 && free - lift >= lh) {

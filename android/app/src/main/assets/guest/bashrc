@@ -480,9 +480,6 @@ opencode() {
     env HOME="${ANTICODE_REAL_HOME:-$HOME}" /usr/local/bin/opencode-setup --auto || return
   fi
   [ -t 1 ] && printf '\e]7770;exec;%s;opencode\a' "$__agy_tok"
-  # bare `opencode`: the compact view (input at the bottom) unless Settings → "OpenCode:
-  # full-screen view" is on
-  [ $# -eq 0 ] && [ -t 1 ] && [ ! -f "$HOME/.config/agy-terminal/opencode-fullscreen" ] && set -- mini
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account opencode 2>/dev/null)
   if [ -n "$d" ]; then XDG_DATA_HOME=$d command opencode "$@"; else command opencode "$@"; fi
