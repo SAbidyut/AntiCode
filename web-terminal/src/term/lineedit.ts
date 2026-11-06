@@ -102,7 +102,8 @@ export class LineEditor {
     // (at the shell's prompt a rule line above is what an agent left on the screen; and only
     // an agent's box: a script that printed a rule and asks something would get arrow keys
     // typed into its answer, less would scroll sideways)
-    if (!this.atPrompt && this.agentRuns()) {
+    // (OpenCode's barred box first — see below — a table's border in its reply isn't the box)
+    if (!this.atPrompt && this.agentRuns() && !/^\s*┃/.test(this.text(cur))) {
       for (let y = cur - 1; y >= Math.max(0, cur - 8); y--) {
         if (isRule(this.text(y))) {
           top = y + 1;
@@ -110,8 +111,17 @@ export class LineEditor {
         }
       }
     }
+    // OpenCode's input box: no rules, a bar down its left side (┃) — its rows are the box
+    const barred = (y: number) => /^\s*┃/.test(this.text(y));
+    let barBox = false;
+    if (top < 0 && !this.atPrompt && this.agentRuns() && barred(cur)) {
+      top = cur;
+      while (top > 0 && cur - top < 20 && barred(top - 1)) top--;
+      while (bottom + 1 < buf.length && bottom - cur < 20 && barred(bottom + 1)) bottom++;
+      barBox = true;
+    }
     const box = top >= 0;
-    if (box) {
+    if (box && !barBox) {
       // its rows down to the rule under it (none found: just up to the cursor)
       for (let y = cur + 1; y < Math.min(buf.length, cur + 12); y++) {
         if (isRule(this.text(y))) {
@@ -119,7 +129,7 @@ export class LineEditor {
           break;
         }
       }
-    } else {
+    } else if (!box) {
       if (!this.atPrompt) return null;
       // The command's rows: up to the prompt's row, down while a row runs on into the next.
       // (The terminal's "wrapped" mark alone isn't enough: bash redraws a long line with

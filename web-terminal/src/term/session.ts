@@ -1,8 +1,11 @@
 // One terminal tab: headless xterm (VT parser + buffer) + BanglaRenderer + reader view + input.
 
 import { Terminal } from '@xterm/headless';
-import { installWidths } from './conjuncts';
-import type { Bridge, SessionKind } from '../bridge';
+import { installWidths, widthsOf, type WidthMode } from './conjuncts';
+import { isAgentKind, type Bridge, type SessionKind } from '../bridge';
+
+/** A command line that starts a coding agent. */
+const AGENT_CMD = /^(agy|claude|codex|opencode)$/;
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
 import { LineEditor, type Pos } from './lineedit';
 
@@ -52,7 +55,7 @@ export class TerminalSession {
   /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
   onLink?: (url: string, trusted: boolean) => void;
   /** Count conjuncts the way a running program does (true) or the shell does (false). */
-  private setProgramWidths: (joined: boolean) => void;
+  private setProgramWidths: (mode: WidthMode) => void;
   /** Where the shell is (OSC 7 from its prompt): a tapped file name is looked for there. */
   cwd = '';
   /** The folder the session was started in. */
@@ -66,16 +69,16 @@ export class TerminalSession {
     readonly kind: SessionKind,
     opts: RendererOptions,
   ) {
-    this.title = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
+    this.title = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
     // conjuncts: the shell (and Claude Code) count them by letters, the Antigravity CLI as one
     // character (see conjuncts.ts); its session starts with it running
     this.setProgramWidths = installWidths(this.term);
-    this.setProgramWidths(kind === 'agy');
+    this.setProgramWidths(widthsOf(kind));
     this.renderer = new BanglaRenderer(this.term, opts);
-    this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
+    this.renderer.anchorBottom = isAgentKind(kind);
     this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput,
-      () => this.kind === 'agy' || this.kind === 'claude' || !!this.agent);
+      () => isAgentKind(this.kind) || !!this.agent);
     this.renderer.onLinesRenumbered = (shift) => {
       const sel = this.edit.sel;
       if (sel?.kind !== 'screen') return;
@@ -126,6 +129,10 @@ export class TerminalSession {
     // Replies the terminal generates itself (cursor position reports, device attributes…)
     this.term.onData((d) => this.reply(d));
     this.term.onBinary((d) => this.reply(d));
+    // a full-screen program starting or ending with the keyboard up: sized anew (see fit)
+    this.term.buffer.onBufferChange(() => {
+      if (TerminalSession.keyboardInset) window.setTimeout(() => this.fit(), 0);
+    });
     this.term.onWriteParsed(() => {
       this.saveModes();
       this.renderer.lastOutput = performance.now();
@@ -201,23 +208,23 @@ export class TerminalSession {
         this.renderer.anchorBottom = false;
         this.agent = '';
         this.onMeta?.(); // (the home screen's card: no agent's account any more)
-        this.setProgramWidths(false); // the shell's prompt: its way of counting
+        this.setProgramWidths('letters'); // the shell's prompt: its way of counting
         this.edit.atPrompt = true;
       } else if (cmd === 'exec') {
         // a command starts: by letters… (Antigravity counts conjuncts whole — its start script
         // says "exec;agy" and runs the program itself, not the shell's agy wrapper)
         if (this.replaying) this.replaySawMeta = true;
-        this.setProgramWidths(args[0] === 'agy');
+        this.setProgramWidths(widthsOf(args[0] ?? ''));
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
-        if (/^(agy|claude)$/.test(args[0] ?? '')) {
+        if (AGENT_CMD.test(args[0] ?? '')) {
           this.renderer.anchorBottom = true;
           this.agent = args[0];
           this.onMeta?.(); // (the home screen's card shows the agent's signed-in account)
         }
       }
-      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined'); // …unless it's agy
+      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined' ? 'joined' : args[0] === 'codepoints' ? 'codepoints' : 'letters');
       else if (cmd === 'storage' && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
@@ -352,12 +359,12 @@ export class TerminalSession {
   private lineBuf = '';
 
   get kindLabel() {
-    return { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
+    return { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
   }
   /** The program's own window title when it describes the work (Claude Code: "✳ Fix login"). */
   get topic(): string {
     const t = this.title.replace(/^[^\p{L}\p{N}]+/u, '').trim();
-    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|ubuntu|bash)$/i.test(t)) return '';
+    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|codex|opencode|ubuntu|bash)$/i.test(t)) return '';
     if (/^[~/]/.test(t) || /^[\w.-]+@[\w.-]+:/.test(t)) return ''; // a path or user@host
     return t;
   }
@@ -396,7 +403,7 @@ export class TerminalSession {
     }
     if (rest.length > 1 && rest[0] === '\x1b') return; // arrow keys and other sequences
     for (const ch of rest) {
-      if (ch === '\r' && /^(agy|claude)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
+      if (ch === '\r' && /^(agy|claude|codex|opencode)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
       if (ch === '\r') this.commitLine();
       else if (ch === '\x7f' || ch === '\b') this.lineBuf = Array.from(this.lineBuf).slice(0, -1).join('');
       else if (ch === '\x03' || ch === '\x15' || ch === '\x1b') this.lineBuf = '';
@@ -416,7 +423,7 @@ export class TerminalSession {
     if (!shown.includes(line.slice(-Math.min(line.length, 24)))) return;
     // …nor a pasted token / login code
     if (!line.includes(' ') && line.length > 20 && /^[\w#.+/=-]+$/.test(line)) return;
-    const agent = this.kind === 'agy' || this.kind === 'claude';
+    const agent = isAgentKind(this.kind);
     if (agent && this.task) return; // the first real prompt names the work
     if (!agent && /^(ls|ll|la|cd|clear|pwd|exit|history)( |$)/.test(line)) return;
     this.task = line.slice(0, 80);
@@ -431,6 +438,7 @@ export class TerminalSession {
     this.edit.cancel();
     this.edit.clearSelection();
     this.onTyped?.();
+    this.renderer.lastInput = performance.now();
     this.trackInput(data);
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
@@ -445,6 +453,7 @@ export class TerminalSession {
   /** Keys the app sends for the user (moving the cursor to a tap, a cut). */
   private sendKeys(data: string) {
     if (!this.alive) return;
+    this.renderer.lastInput = performance.now();
     if (this.renderer.scrollPx) {
       this.renderer.scrollPx = 0;
       this.renderer.schedule();
@@ -520,10 +529,17 @@ export class TerminalSession {
   fit(now = false) {
     const box = this.el.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;
-    // The on-screen keyboard doesn't count: size the terminal as if it were closed.
-    const { cols, rows } = this.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
+    // The on-screen keyboard doesn't count: size the terminal as if it were closed (the screen
+    // slides up to keep the cursor in sight). Not for a full-screen program (OpenCode, vim …):
+    // it lays out its whole screen itself — kept at the full height, most of it slid up out of
+    // sight above the keyboard; sized to the room left, it draws everything in it.
+    const kb = this.term.buffer.active.type === 'alternate' ? 0 : TerminalSession.keyboardInset;
+    const { cols, rows } = this.renderer.fit(box.width, box.height + kb);
     if (cols !== this.term.cols || rows !== this.term.rows) {
-      this.renderer.holdForRedraw();
+      // (a full-screen program redraws the whole screen for its new size — slowly under
+      // proot: the last picture stays until it has, not the old screen cut to the new size)
+      if (this.term.buffer.active.type === 'alternate') this.renderer.holdForRedraw(1500, 150);
+      else this.renderer.holdForRedraw();
       this.term.resize(cols, rows);
       this.renderer.schedule();
     }
@@ -874,10 +890,10 @@ export class TerminalSession {
     const [bp, ac, alt, cur, mouse, agent, atPrompt] = k.split(',');
     if (agent !== undefined && !this.replaySawMeta) {
       this.edit.atPrompt = atPrompt === '1';
-      if (/^(agy|claude)$/.test(agent) && !this.agent) {
+      if (AGENT_CMD.test(agent) && !this.agent) {
         this.agent = agent;
         this.renderer.anchorBottom = true;
-        this.setProgramWidths(agent === 'agy');
+        this.setProgramWidths(widthsOf(agent));
         this.onMeta?.();
       }
     }

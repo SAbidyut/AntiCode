@@ -30,6 +30,9 @@ const PATHS: Record<string, string> = {
   eraser: '<path d="m7 21-4-4L14 6l7 7-8 8z"/><path d="M7 21h13M9.5 10.5l7 7"/>',
   power: '<path d="M12 3v8"/><path d="M6.4 6.4a8 8 0 1 0 11.2 0"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  // (shapes of our own, not the makers' logos)
+  codex: '<path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z"/><path d="m8.6 9.6 2.8 2.4-2.8 2.4M12.8 14.6h3"/>',
+  opencode: '<path d="M9 4C7 4 6.2 5 6.2 7v2.2c0 1.4-.8 2.4-2.2 2.8 1.4.4 2.2 1.4 2.2 2.8V17c0 2 .8 3 2.8 3M15 4c2 0 2.8 1 2.8 3v2.2c0 1.4.8 2.4 2.2 2.8-1.4.4-2.2 1.4-2.2 2.8V17c0 2-.8 3-2.8 3"/>',
   claude: '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9"/><circle cx="12" cy="12" r="2.2"/>',
   shield: '<path d="M12 3 4.5 6v6c0 4.5 3.2 7.8 7.5 9 4.3-1.2 7.5-4.5 7.5-9V6z"/>',
 };

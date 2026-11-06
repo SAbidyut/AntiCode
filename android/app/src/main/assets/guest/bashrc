@@ -427,12 +427,12 @@ __agy_ps_powerline() {
 PS0=$'\e]7770;exec;'"${__agy_tok}"$'\a''${PS0:0:$((__agy_t0=SECONDS,0))}'
 
 # ---------------------------------------------------------------- agents on demand
-# Typing 'agy' or 'claude' before they are installed installs them first.
+# Typing 'agy', 'claude', 'codex' or 'opencode' before they are installed installs them first.
 command_not_found_handle() {
   case "$1" in
     # (installed for the real home — in an extra account's tab this runs with that account's
     # HOME; and once only: still missing after it, it says so instead of trying again forever)
-    agy|claude)
+    agy|claude|codex|opencode)
       env HOME="${ANTICODE_REAL_HOME:-$HOME}" -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
         /usr/local/bin/"$1"-setup --auto || return
       hash -r
@@ -464,6 +464,30 @@ agy() {
     ANTICODE_REAL_HOME=$HOME HOME=$h XDG_CONFIG_HOME=$h/.config XDG_DATA_HOME=$h/.local/share \
       XDG_STATE_HOME=$h/.local/state XDG_CACHE_HOME=$h/.cache command agy "${pre[@]}" "$@"
   else command agy "${pre[@]}" "$@"; fi
+}
+codex() {
+  [ -t 1 ] && printf '\e]7770;exec;%s;codex\a' "$__agy_tok"
+  local d=
+  [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account codex 2>/dev/null)
+  /usr/local/bin/anticode-account codex-config "${d:-${CODEX_HOME:-$HOME/.codex}}"
+  if [ -n "$d" ]; then CODEX_HOME=$d command codex "$@"; else command codex "$@"; fi
+}
+opencode() {
+  # (OpenCode 1 put in by an earlier version of the app: OpenCode 2 first)
+  local pkg=
+  [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
+  if [ -e "$HOME/.local/share/opencode-cli" ] && [ "$pkg" != @opencode/cli ]; then
+    # (no connection: the OpenCode that's there, as it is)
+    env HOME="${ANTICODE_REAL_HOME:-$HOME}" /usr/local/bin/opencode-setup --auto ||
+      echo "opencode: couldn't update to OpenCode 2 — starting the one installed" >&2
+    pkg=; [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
+  fi
+  [ -t 1 ] && printf '\e]7770;exec;%s;opencode\a' "$__agy_tok"
+  # bare `opencode`: its compact view, the input at the bottom (as the app's button opens it)
+  [ $# -eq 0 ] && [ -t 1 ] && [ "$pkg" = @opencode/cli ] && set -- mini
+  local d=
+  [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account opencode 2>/dev/null)
+  if [ -n "$d" ]; then XDG_DATA_HOME=$d command opencode "$@"; else command opencode "$@"; fi
 }
 claude() {
   [ -t 1 ] && printf '\e]7770;exec;%s;claude\a' "$__agy_tok"
