@@ -229,7 +229,7 @@ class TermSession(
         // "1 / 2 / 3" to its question starts more work). Typing a prompt doesn't: in a shell
         // it disarms (the user is here), in an agent it changes nothing. Terminal replies
         // (starting with ESC) don't count.
-        val agent = kind == "agy" || kind == "claude"
+        val agent = kind in com.sabidyut.agyterm.ubuntu.UbuntuManager.AGENTS
         val choice = agent && data.size == 1 && data[0] in '1'.code.toByte()..'9'.code.toByte()
         if (data.contains('\r'.code.toByte()) || choice) {
             enterAt = System.currentTimeMillis()

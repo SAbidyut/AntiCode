@@ -1,0 +1,15 @@
+#!/bin/bash
+# Started by the app's "OpenCode" button: install if needed, run opencode, then stay in a shell.
+export PATH="$HOME/.local/bin:$PATH"
+# Ctrl-C stops the agent (or its setup), not this script: the tab goes on to its shell
+trap : INT
+command -v opencode >/dev/null 2>&1 || /usr/local/bin/opencode-setup --auto
+if command -v opencode >/dev/null 2>&1; then
+  printf '\e]7770;exec;%s;opencode\a' "${ANTICODE_LINK_TOKEN:-}"
+  # the tab's account: one of the extra ones keeps its sign-ins apart (see anticode-account)
+  acct_dir=$(/usr/local/bin/anticode-account opencode)
+  if [ -n "$acct_dir" ]; then XDG_DATA_HOME=$acct_dir opencode; else opencode; fi
+else
+  echo "opencode was not found — run 'opencode-setup' and try again."
+fi
+exec bash -l

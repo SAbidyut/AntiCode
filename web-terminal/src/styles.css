@@ -219,8 +219,12 @@ body[data-screen='boot'] #home, body[data-screen='boot'] #term { opacity: 0; vis
 }
 .agent-agy { --agent: #f38ba8; --agent-glow: rgba(243, 139, 168, 0.22); }
 .agent-claude { --agent: #e8906f; --agent-glow: rgba(217, 119, 87, 0.26); }
+.agent-codex { --agent: #89dceb; --agent-glow: rgba(137, 220, 235, 0.2); }
+.agent-opencode { --agent: #f9e2af; --agent-glow: rgba(249, 226, 175, 0.18); }
 body[data-theme='paper'] .agent-claude { --agent: #c15f3c; }
 body[data-theme='paper'] .agent-agy { --agent: #d0477a; }
+body[data-theme='paper'] .agent-codex { --agent: #1e7f93; }
+body[data-theme='paper'] .agent-opencode { --agent: #a07214; }
 .agent-icon {
   width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center;
   color: var(--agent); background: var(--surface-3); margin-bottom: 12px;
@@ -266,6 +270,8 @@ body[data-theme='paper'] .agent-agy { --agent: #d0477a; }
 .li-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; opacity: 0.6; }
 .li-dot.on { background: var(--good); opacity: 1; }
 .list-item .li-icon.kind-claude { color: #e8906f; }
+.list-item .li-icon.kind-codex { color: #89dceb; }
+.list-item .li-icon.kind-opencode { color: #f9e2af; }
 .list-item .li-icon.kind-ubuntu, .list-item .li-icon.kind-android { color: var(--text); }
 .about-line { font-size: 11.5px; color: var(--muted); opacity: 0.75; text-align: center; margin: 18px 0 4px; }
 .sheet-actions { display: flex; gap: 10px; margin-top: 14px; }
@@ -792,6 +798,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   .tab .ic { width: 19px; height: 19px; }
   .tab.kind-agy .ic { color: #f38ba8; }
   .tab.kind-claude .ic { color: #e8906f; }
+  .tab.kind-codex .ic { color: #89dceb; }
+  .tab.kind-opencode .ic { color: #f9e2af; }
   .tab.active { background: var(--surface-3); border-color: var(--line-strong); }
   .tab.active::before {
     content: ''; position: absolute; left: -9px; top: 10px; bottom: 10px; width: 3px;

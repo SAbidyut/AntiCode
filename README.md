@@ -1,6 +1,6 @@
 # AntiCode
 
-ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)** + **Claude Code (`claude`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
+ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)** + **Claude Code (`claude`)** + **Codex CLI (`codex`)** + **OpenCode (`opencode`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
 সাথে Mac/PC তে চলা Antigravity আর Claude Code কে ফোন থেকে **রিমোট কন্ট্রোল** করার শর্টকাট।
 
 ## ফোনে ইনস্টল
@@ -14,6 +14,12 @@
    লগইন লিংক ফোনের ব্রাউজারে খুলে যাবে।
 5. **Claude Code** টাইলে চাপুন। প্রথমবার Anthropic এর অফিসিয়াল ইনস্টলার (`curl -fsSL https://claude.ai/install.sh | bash`,
    ~১২০MB ডাউনলোড) দিয়ে `claude` ইনস্টল হবে, তারপর Claude অ্যাকাউন্টে লগইন চাইবে।
+6. **Codex** টাইলে চাপুন। প্রথমবার OpenAI এর অফিসিয়াল npm প্যাকেজের ফোনের জন্য বানানো প্রোগ্রাম (`@openai/codex`,
+   ~১৭০MB ডাউনলোড; Node.js লাগে না) নামিয়ে `codex` ইনস্টল হবে, তারপর ChatGPT দিয়ে লগইন বা API key চাইবে।
+   Android এ Codex এর sandbox চলে না (Linux namespaces বন্ধ), তাই `~/.codex/config.toml` এ
+   `sandbox_mode = "danger-full-access"` বসানো হয় — কমান্ড চালানোর আগে Codex তবুও অনুমতি চায়।
+7. **OpenCode** টাইলে চাপুন। প্রথমবার তার অফিসিয়াল npm প্যাকেজের প্রোগ্রাম (`opencode-linux-arm64`, ~৮০MB) দিয়ে
+   `opencode` ইনস্টল হবে। `/models` এ মডেল বাছুন (কয়েকটা ফ্রি), `/connect` দিয়ে কোনো provider এ সাইন ইন।
 
 ## ব্যবহার
 
@@ -32,7 +38,7 @@
 | স্ক্রল / ফন্ট | আঙুলে স্ক্রল (মোমেন্টাম সহ), দুই আঙুলে পিঞ্চ; লম্বা চাপ = Reader view |
 | কীবোর্ড ঠিকমতো টাইপ না করলে | Settings → **Keyboard compatibility mode** |
 | prompt এর ডিজাইন | Oh-My-Posh ধাঁচের powerline prompt; `agy-prompt simple` বা `agy-prompt powerline` |
-| আবার সেটআপ | Ubuntu তে `agy-setup` / `claude-setup` (শুধু apt টুল: `term-setup`) |
+| আবার সেটআপ | Ubuntu তে `agy-setup` / `claude-setup` / `codex-setup` / `opencode-setup` (শুধু apt টুল: `term-setup`) |
 | কিছু ঠিকমতো না চললে | ⋮ → **Copy debug log** → চ্যাটে পেস্ট করুন |
 
 অ্যাপ বন্ধ করলেও সেশন চলতে থাকে (নোটিফিকেশনে দেখা যায়); নোটিফিকেশনের "Stop all" দিয়ে থামানো যায়।
@@ -99,4 +105,4 @@ node dev/e2e.mjs             # end-to-end চেক (playwright লাগবে)
 - Kalpurush ফন্ট — Avro Font Development Project, OmicronLab (SIL OFL 1.0); JetBrains Mono, Noto Sans Symbols (SIL OFL 1.1)
 - ble.sh — Koichi Murase (BSD-3-Clause)
 - proot — Termux প্যাকেজ (GPL-2.0), xterm.js (MIT), Apache Commons Compress (Apache-2.0)
-- Antigravity CLI Google এর, Claude Code Anthropic এর; এই অ্যাপ শুধু তাদের অফিসিয়াল ইনস্টলার চালায়।
+- Antigravity CLI Google এর, Claude Code Anthropic এর, Codex CLI OpenAI এর, OpenCode তার নির্মাতাদের; এই অ্যাপ শুধু তাদের অফিসিয়াল ইনস্টলার / প্যাকেজ চালায়।

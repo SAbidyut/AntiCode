@@ -1,0 +1,38 @@
+#!/bin/bash
+# AntiCode — install OpenAI's Codex CLI (run again any time with: codex-setup)
+#   codex-setup --auto   skip the apt step when the basic tools are already there
+# The official npm package's ready-made program for this phone, unpacked as it is (no Node.js
+# needed): ~/.local/share/codex-cli, started as ~/.local/bin/codex.
+set -o pipefail
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+/usr/local/bin/term-setup "$1" || exit 1
+export PATH="$HOME/.local/bin:$PATH"
+fail() { echo -e "${R}$1 — run 'codex-setup' to try again.${N}"; exit 1; }
+case "$(uname -m)" in
+  aarch64|arm64) plat=linux-arm64 triple=aarch64-unknown-linux-musl ;;
+  x86_64) plat=linux-x64 triple=x86_64-unknown-linux-musl ;;
+  *) fail "Codex has no build for this phone's processor ($(uname -m))" ;;
+esac
+if ! codex --version >/dev/null 2>&1; then
+  echo -e "\n${G}▸ Installing the Codex CLI (OpenAI's official package)${N}"
+  echo -e "${Y}  About 170 MB to download, ~390 MB on the phone.${N}"
+  ver=$(curl -fsSL https://registry.npmjs.org/@openai/codex/latest | grep -o '"version":"[^"]*"' | head -n1 | cut -d'"' -f4)
+  [ -n "$ver" ] || fail "Couldn't find Codex's latest version"
+  dir="$HOME/.local/share/codex-cli"
+  tmp=$(mktemp -d) || fail "No room for the download"
+  trap 'rm -rf "$tmp"' EXIT
+  curl -fL --progress-bar "https://registry.npmjs.org/@openai/codex/-/codex-$ver-$plat.tgz" -o "$tmp/codex.tgz" \
+    || fail "Downloading Codex failed"
+  rm -rf "$dir.new" && mkdir -p "$dir.new" || fail "Couldn't make $dir"
+  # (its voice helper needs a desktop's sound system: left out)
+  tar xzf "$tmp/codex.tgz" -C "$dir.new" --strip-components=3 --exclude='*/voice/*' "package/vendor/$triple" \
+    || fail "Unpacking Codex failed"
+  rm -rf "$dir" && mv "$dir.new" "$dir" || fail "Couldn't put Codex in place"
+  mkdir -p "$HOME/.local/bin" && ln -sfn "$dir/bin/codex" "$HOME/.local/bin/codex"
+fi
+codex --version >/dev/null 2>&1 \
+  || fail "Codex was installed but does not start on this phone"
+echo -e "\n${G}✓ All set! Type 'codex' to start Codex.${N}"
+echo -e "  Sign in with ChatGPT when it asks (the sign-in page opens inside the app),"
+echo -e "  or use an API key. Commands run without Codex's sandbox, which Android doesn't allow;"
+echo -e "  Codex still asks before running them.\n"

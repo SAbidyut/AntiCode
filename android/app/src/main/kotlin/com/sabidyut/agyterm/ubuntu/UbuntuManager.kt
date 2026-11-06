@@ -103,6 +103,8 @@ class UbuntuManager private constructor(private val context: Context) {
         val email = try {
             when (kind) {
                 "claude" -> claudeEmail(if (prof.isEmpty()) File(home, ".claude.json") else File(profileDir("claude", prof), ".claude.json"))
+                // (the ChatGPT sign-in's token names the account)
+                "codex" -> codexEmail(File(if (prof.isEmpty()) File(home, ".codex") else profileDir("codex", prof), "auth.json"))
                 // (the account its header showed, which the app remembers; else its files)
                 "agy" -> com.sabidyut.agyterm.Accounts.antigravity(context, prof)?.takeIf { "@" in it }
                     ?: agyEmail(File(if (prof.isEmpty()) home else profileDir("agy", prof), ".gemini"))
@@ -112,6 +114,13 @@ class UbuntuManager private constructor(private val context: Context) {
             ""
         }
         return email.trim().takeIf { Regex("^[^\\s@]+@[^\\s@]+$").matches(it) } ?: ""
+    }
+
+    private fun codexEmail(f: File): String {
+        if (!f.isFile || f.length() > 1_000_000) return ""
+        val m = Regex(""""id_token"\s*:\s*"([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.""").find(f.readText()) ?: return ""
+        val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+        return JSONObject(String(android.util.Base64.decode(m.groupValues[2], flags))).optString("email")
     }
 
     // ~/.claude.json also holds every project's history and can grow to many MB: it is read
@@ -154,7 +163,7 @@ class UbuntuManager private constructor(private val context: Context) {
     /** The extra accounts of [kind] ("agy" / "claude"), as JSON: [{name, email}], oldest first. */
     fun listProfiles(kind: String): String {
         val arr = org.json.JSONArray()
-        if (kind != "agy" && kind != "claude") return arr.toString()
+        if (kind !in AGENTS) return arr.toString()
         val dirs = profilesRoot(kind).listFiles()?.filter { it.isDirectory && !isSymlink(it) && validProfile(it.name) && ownProfileDir(kind, it.name) != null }
             ?.sortedBy { it.lastModified() } ?: emptyList()
         for (d in dirs) arr.put(JSONObject().put("name", d.name).put("email", accountEmail(kind, d.name)))
@@ -192,6 +201,9 @@ class UbuntuManager private constructor(private val context: Context) {
                 val dir = if (prof.isEmpty()) File(home, ".claude") else home
                 gone(File(dir, ".credentials.json"))
             }
+            // (an extra account's folder is its CODEX_HOME / its XDG_DATA_HOME)
+            "codex" -> gone(File(if (prof.isEmpty()) File(home, ".codex") else home, "auth.json"))
+            "opencode" -> gone(File(if (prof.isEmpty()) File(home, ".local/share/opencode") else File(home, "opencode"), "auth.json"))
             else -> return false
         }
         return true
@@ -199,7 +211,7 @@ class UbuntuManager private constructor(private val context: Context) {
 
     /** A new account's folder: "" when made, else why not. */
     fun createProfile(kind: String, name: String): String {
-        if (kind != "agy" && kind != "claude") return "Unknown agent"
+        if (kind !in AGENTS) return "Unknown agent"
         if (!validProfile(name)) return "Use letters, digits and - (up to 20)"
         val d = profileDir(kind, name)
         if (d.exists()) return "There's already an account called $name"
@@ -211,7 +223,7 @@ class UbuntuManager private constructor(private val context: Context) {
      * account's links to the real home) are removed as links — never followed.
      */
     fun deleteProfile(kind: String, name: String): Boolean {
-        if ((kind != "agy" && kind != "claude") || !validProfile(name)) return false
+        if (kind !in AGENTS || !validProfile(name)) return false
         val d = ownProfileDir(kind, name) ?: return false
         if (!d.exists() || isSymlink(d)) return false
         fun remove(f: File) {
@@ -468,7 +480,8 @@ class UbuntuManager private constructor(private val context: Context) {
         fun asset(name: String) = context.assets.open("guest/$name").bufferedReader().use { it.readText() }
         write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
-        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "agy-autocomplete", "anticode-account")) {
+        for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "codex-setup", "codex-start",
+                "opencode-setup", "opencode-start", "agy-autocomplete", "anticode-account")) {
             write("usr/local/bin/$script", asset(script), exec)
         }
         write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)
@@ -655,7 +668,7 @@ class UbuntuManager private constructor(private val context: Context) {
         // view writes to the terminal's scrollback, which the app scrolls smoothly itself.
         if (!claudeFullscreen) args += "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"
         // which account the agent signs in with (one of the profiles; none: the usual one)
-        if ((kind == "agy" || kind == "claude") && validProfile(profile) && profileDir(kind, profile).isDirectory) {
+        if (kind in AGENTS && validProfile(profile) && profileDir(kind, profile).isDirectory) {
             args += "ANTICODE_PROFILE=$profile"
         }
         // the folder picked in the app: the login shell goes there first (profile.sh)
@@ -663,6 +676,8 @@ class UbuntuManager private constructor(private val context: Context) {
         when (kind) {
             "agy" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/agy-start")
             "claude" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/claude-start")
+            "codex" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/codex-start")
+            "opencode" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/opencode-start")
             // used by the debug-only self test (see SessionService.runSelfTest)
             "selftest" -> args += listOf(
                 "/bin/bash", "-lc",
@@ -876,6 +891,18 @@ class UbuntuManager private constructor(private val context: Context) {
     companion object {
         /** A profile's name: a folder name and an environment value, nothing that could be a path. */
         fun validProfile(name: String) = Regex("^[A-Za-z0-9][A-Za-z0-9-]{0,19}$").matches(name)
+
+        /** The coding agents a tab can be opened for (each with its accounts). */
+        val AGENTS = setOf("agy", "claude", "codex", "opencode")
+
+        /** What the app calls an agent. */
+        fun agentName(kind: String) = when (kind) {
+            "agy" -> "Antigravity"
+            "claude" -> "Claude Code"
+            "codex" -> "Codex"
+            "opencode" -> "OpenCode"
+            else -> ""
+        }
 
         private const val AGY_APPROVE_ALL = "root/.config/agy-terminal/agy-approve-all"
 

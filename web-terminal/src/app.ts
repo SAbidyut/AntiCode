@@ -1,5 +1,5 @@
 import './polyfills';
-import { createBridge, type Bridge, type DirListing, type HostState, type SessionKind } from './bridge';
+import { createBridge, isAgentKind, type Bridge, type DirListing, type HostState, type SessionKind } from './bridge';
 import { TerminalSession } from './term/session';
 import { BanglaRenderer, THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
@@ -378,7 +378,7 @@ function rendererOpts() {
 }
 
 // ================================================================ sessions
-const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', ubuntu: 'terminal', android: 'android' };
+const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', codex: 'codex', opencode: 'opencode', ubuntu: 'terminal', android: 'android' };
 
 /** The remote dashboard that belongs to a session: claude.ai/code for Claude Code, else Antigravity's. */
 function openDashboard(which: 'agy' | 'claude') {
@@ -410,7 +410,7 @@ function openLink(url: string, trusted: boolean, from?: TerminalSession) {
 }
 
 /** A sign-in page an agent opens ('google': Antigravity's, 'claude': Claude Code's), or null. */
-function signInSite(url: string): 'google' | 'claude' | null {
+function signInSite(url: string): 'google' | 'claude' | 'openai' | null {
   let u: URL;
   try {
     u = new URL(url);
@@ -419,6 +419,7 @@ function signInSite(url: string): 'google' | 'claude' | null {
   }
   if (u.hostname === 'accounts.google.com') return 'google';
   if (/^(claude\.ai|console\.anthropic\.com|platform\.claude\.com)$/.test(u.hostname) && /oauth|login|authorize/i.test(u.pathname)) return 'claude';
+  if (u.hostname === 'auth.openai.com' && /oauth|authorize/i.test(u.pathname)) return 'openai'; // Codex's ChatGPT sign-in
   return null;
 }
 
@@ -426,8 +427,9 @@ function signInSite(url: string): 'google' | 'claude' | null {
  * Before the browser opens to sign in: which account? The browser on its own goes straight
  * to the account it's signed in to — there was no way to sign an agent in with another one.
  */
-async function askSignInAccount(url: string, site: 'google' | 'claude', from?: TerminalSession) {
-  const kind = site === 'google' ? 'agy' : 'claude';
+async function askSignInAccount(url: string, site: 'google' | 'claude' | 'openai', from?: TerminalSession) {
+  const kind = site === 'google' ? 'agy' : site === 'claude' ? 'claude' : 'codex';
+  const brand = site === 'claude' ? 'Claude' : 'ChatGPT';
   // the accounts the app knows for this agent (the main one and the extra ones) — the tab's
   // own first
   const known: string[] = [];
@@ -442,11 +444,11 @@ async function askSignInAccount(url: string, site: 'google' | 'claude', from?: T
     for (const e of known) rows.push(action('check', e, e === tabEmail ? 'This tab’s account' : 'Signed in before', () => bridge.openSignIn(url, e, false, false)));
     rows.push(action('globe', 'Choose an account on this phone', 'Google lists them — or “Use another account”', () => bridge.openSignIn(url, '', true, false)));
   } else {
-    rows.push(action('external', 'The account signed in to Claude in the browser', known.length ? `Known here: ${known.join(', ')}` : '', () => bridge.openSignIn(url, '', false, false)));
+    rows.push(action('external', `The account signed in to ${brand} in the browser`, known.length ? `Known here: ${known.join(', ')}` : '', () => bridge.openSignIn(url, '', false, false)));
   }
   rows.push(action('shield', 'Another account', 'A private tab: nothing signed in, nothing kept', () => bridge.openSignIn(url, '', site === 'google', true)));
   rows.push(action('x', 'Cancel', '', () => {}));
-  openSheet(`Sign in to ${site === 'google' ? 'Antigravity' : 'Claude Code'}${forTab} with…`,
+  openSheet(`Sign in to ${KIND_NAME[kind]}${forTab} with…`,
     fromOther(from),
     h('div', { class: 'action-list' }, ...rows));
 }
@@ -503,7 +505,7 @@ async function newSession(kind: SessionKind, cwd = '', profile = profileFor(kind
   const s = addSession(id, kind);
   s.notePtySize(cols, rows);
   s.startDir = cwd || homeDir();
-  if (kind === 'agy' || kind === 'claude') s.profile = profile;
+  if (isAgentKind(kind)) s.profile = profile;
   activate(s);
   // The first session: ask (once) to be left alone by battery optimisation — otherwise
   // Android may stop the app, and every session with it, while it's in the background.
@@ -520,7 +522,7 @@ async function reportLostSessions() {
   const lost = await bridge.getLostSessions();
   if (!lost.length) return;
   bridge.forgetLostSessions();
-  const names = lost.map((l) => l.label || ({ agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu shell', android: 'Android shell' }[l.kind] ?? l.kind));
+  const names = lost.map((l) => l.label || KIND_NAME[l.kind] || (l.kind === 'android' ? 'Android shell' : l.kind));
   const unique = [...new Set(names)];
   openSheet(
     lost.length === 1 ? 'A session was stopped' : `${lost.length} sessions were stopped`,
@@ -752,6 +754,8 @@ function renderHome() {
       h('div', { class: 'agents' },
         agentTile('agy', 'sparkle', 'Antigravity', 'Google'),
         agentTile('claude', 'claude', 'Claude Code', 'Anthropic'),
+        agentTile('codex', 'codex', 'Codex', 'OpenAI'),
+        agentTile('opencode', 'opencode', 'OpenCode', 'Open source'),
       ),
       h('div', { class: 'actions' },
         btn('btn-secondary', 'terminal', 'Ubuntu shell', () => askFolder('ubuntu')),
@@ -903,7 +907,7 @@ function renderHomeSessions(force = false) {
 /** A session's name, and the account its agent is signed in with ("Antigravity  you@gmail.com"). */
 function titleWithAccount(s: TerminalSession): HTMLElement {
   const name = s.customName || s.kindLabel;
-  const own = s.kind === 'agy' || s.kind === 'claude';
+  const own = isAgentKind(s.kind);
   const agent = own ? s.kind : s.agent;
   // what the tab's own agent shows (its header) first; else what was remembered for its account
   const email = !agent ? '' : agent === 'agy' && s.email ? s.email : bridge.accountEmail(agent, own ? s.profile : '');
@@ -1779,6 +1783,8 @@ function openNewSessionSheet() {
   openSheet('New session', h('div', { class: 'action-list' },
     action('sparkle', 'Antigravity', 'Launch the Antigravity CLI', () => askFolder('agy')),
     action('claude', 'Claude Code', 'Launch Anthropic’s Claude Code', () => askFolder('claude')),
+    action('codex', 'Codex', 'Launch OpenAI’s Codex CLI', () => askFolder('codex')),
+    action('opencode', 'OpenCode', 'Launch OpenCode — many models, some free', () => askFolder('opencode')),
     action('terminal', 'Ubuntu shell', 'Bash in Ubuntu 24.04', () => askFolder('ubuntu')),
     action('android', 'Android shell', 'The phone’s own /system/bin/sh', () => newSession('android')),
   ));
@@ -1788,7 +1794,7 @@ function openNewSessionSheet() {
 // Antigravity, Claude Code and the shell start in a folder picked here: a recent one with one
 // tap, or one found by browsing (home, the phone's storage).
 const RECENT_DIRS = 'recentDirs';
-const KIND_NAME: Record<string, string> = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu shell' };
+const KIND_NAME: Record<string, string> = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu shell' };
 
 function recentDirs(): string[] {
   try {
@@ -1855,7 +1861,7 @@ function askFolder(kind: SessionKind) {
     );
   }
   const needsAccess = hostState.host === 'android' && !hostState.storage;
-  const accountRow = kind === 'agy' || kind === 'claude' ? accountPicker(kind) : null;
+  const accountRow = isAgentKind(kind) ? accountPicker(kind) : null;
   openSheet(`Open ${KIND_NAME[kind]} in…`,
     ...(accountRow ? [h('div', { class: 'fp-label' }, 'Account'), accountRow] : []),
     h('div', { class: 'fp-label' }, 'Start in'),
@@ -1970,7 +1976,7 @@ async function showFolder(s: TerminalSession, path: string) {
 
 /** The account an agent opens with: the one picked last ('' the usual one). */
 function profileFor(kind: SessionKind): string {
-  return kind === 'agy' || kind === 'claude' ? prefs.lastProfile?.[kind] ?? '' : '';
+  return isAgentKind(kind) ? prefs.lastProfile?.[kind] ?? '' : '';
 }
 function pickProfile(kind: SessionKind, name: string) {
   prefs.lastProfile = { ...(prefs.lastProfile ?? {}), [kind]: name };

@@ -1,6 +1,10 @@
 #!/bin/bash
 # AntiCode: the folder an agent's extra account keeps its sign-in in.
-#   anticode-account agy|claude   prints it (made the first time); nothing for the usual account
+#   anticode-account agy|claude|codex|opencode   prints it (made the first time); nothing for
+#                                                the usual account
+#   anticode-account codex-config DIR   Codex's settings in DIR get "no sandbox" unless they
+#                                       say otherwise (its sandbox needs Linux namespaces,
+#                                       which Android doesn't allow: every command would fail)
 # Which account a tab uses is the app's choice when it opens the tab (ANTICODE_PROFILE).
 #   Claude Code: its config folder (CLAUDE_CONFIG_DIR).
 #   Antigravity: keeps its settings in ~/.gemini and its sign-in in the config folder
@@ -8,8 +12,19 @@
 #   ~/.config ~/.local ~/.cache folders of its own whose other contents are links to the real
 #   home's, like everything else there (git, ssh, the phone's storage, the programs).
 kind=$1
+if [ "$kind" = codex-config ]; then
+  cfg="${2:-$HOME/.codex}/config.toml"
+  grep -qs '^[[:space:]]*sandbox_mode' "$cfg" && exit 0
+  mkdir -p "${cfg%/*}" || exit 0
+  # (first in the file: a setting after a [section] would belong to that section)
+  { printf '%s\n' "# AntiCode: Codex's sandbox can't work on Android (no Linux namespaces) — commands" \
+      "# run without it; Codex still asks before running them (approval_policy)." \
+      'sandbox_mode = "danger-full-access"' ''
+    cat "$cfg" 2>/dev/null || true; } > "$cfg.new" && mv "$cfg.new" "$cfg"
+  exit 0
+fi
 name=${ANTICODE_PROFILE-}
-[[ $kind == agy || $kind == claude ]] || exit 0
+[[ $kind == agy || $kind == claude || $kind == codex || $kind == opencode ]] || exit 0
 [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,19}$ ]] || exit 0
 base=${ANTICODE_REAL_HOME:-$HOME}
 d="$base/.anticode/profiles/$kind/$name"

@@ -1,0 +1,37 @@
+#!/bin/bash
+# AntiCode — install OpenCode (run again any time with: opencode-setup)
+#   opencode-setup --auto   skip the apt step when the basic tools are already there
+# The official npm package's ready-made program for this phone, unpacked as it is (no Node.js
+# needed): ~/.local/share/opencode-cli, started as ~/.local/bin/opencode.
+set -o pipefail
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+/usr/local/bin/term-setup "$1" || exit 1
+export PATH="$HOME/.local/bin:$PATH"
+fail() { echo -e "${R}$1 — run 'opencode-setup' to try again.${N}"; exit 1; }
+case "$(uname -m)" in
+  aarch64|arm64) pkg=opencode-linux-arm64 ;;
+  x86_64) pkg=opencode-linux-x64 ;;
+  *) fail "OpenCode has no build for this phone's processor ($(uname -m))" ;;
+esac
+if ! opencode --version >/dev/null 2>&1; then
+  echo -e "\n${G}▸ Installing OpenCode (its official package)${N}"
+  echo -e "${Y}  About 80 MB to download, ~200 MB on the phone.${N}"
+  ver=$(curl -fsSL "https://registry.npmjs.org/$pkg/latest" | grep -o '"version":"[^"]*"' | head -n1 | cut -d'"' -f4)
+  [ -n "$ver" ] || fail "Couldn't find OpenCode's latest version"
+  dir="$HOME/.local/share/opencode-cli"
+  tmp=$(mktemp -d) || fail "No room for the download"
+  trap 'rm -rf "$tmp"' EXIT
+  curl -fL --progress-bar "https://registry.npmjs.org/$pkg/-/$pkg-$ver.tgz" -o "$tmp/opencode.tgz" \
+    || fail "Downloading OpenCode failed"
+  rm -rf "$dir.new" && mkdir -p "$dir.new" || fail "Couldn't make $dir"
+  tar xzf "$tmp/opencode.tgz" -C "$dir.new" --strip-components=1 package/bin \
+    || fail "Unpacking OpenCode failed"
+  rm -rf "$dir" && mv "$dir.new" "$dir" || fail "Couldn't put OpenCode in place"
+  chmod +x "$dir/bin/opencode"
+  mkdir -p "$HOME/.local/bin" && ln -sfn "$dir/bin/opencode" "$HOME/.local/bin/opencode"
+fi
+opencode --version >/dev/null 2>&1 \
+  || fail "OpenCode was installed but does not start on this phone"
+echo -e "\n${G}✓ All set! Type 'opencode' to start OpenCode.${N}"
+echo -e "  Pick a model with /models — some are free; /connect signs in to a provider"
+echo -e "  (OpenCode Zen, ChatGPT, Claude, GitHub Copilot, an API key …).\n"

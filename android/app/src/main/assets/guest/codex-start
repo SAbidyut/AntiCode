@@ -1,0 +1,16 @@
+#!/bin/bash
+# Started by the app's "Codex" button: install if needed, run codex, then stay in a shell.
+export PATH="$HOME/.local/bin:$PATH"
+# Ctrl-C stops the agent (or its setup), not this script: the tab goes on to its shell
+trap : INT
+command -v codex >/dev/null 2>&1 || /usr/local/bin/codex-setup --auto
+if command -v codex >/dev/null 2>&1; then
+  printf '\e]7770;exec;%s;codex\a' "${ANTICODE_LINK_TOKEN:-}"
+  # the tab's account: one of the extra ones has its own Codex folder (see anticode-account)
+  acct_dir=$(/usr/local/bin/anticode-account codex)
+  /usr/local/bin/anticode-account codex-config "${acct_dir:-$HOME/.codex}"
+  if [ -n "$acct_dir" ]; then CODEX_HOME=$acct_dir codex; else codex; fi
+else
+  echo "codex was not found — run 'codex-setup' and try again."
+fi
+exec bash -l

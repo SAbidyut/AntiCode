@@ -2,7 +2,10 @@
 
 import { Terminal } from '@xterm/headless';
 import { installWidths } from './conjuncts';
-import type { Bridge, SessionKind } from '../bridge';
+import { isAgentKind, type Bridge, type SessionKind } from '../bridge';
+
+/** A command line that starts a coding agent. */
+const AGENT_CMD = /^(agy|claude|codex|opencode)$/;
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
 import { LineEditor, type Pos } from './lineedit';
 
@@ -66,16 +69,16 @@ export class TerminalSession {
     readonly kind: SessionKind,
     opts: RendererOptions,
   ) {
-    this.title = { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
+    this.title = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
     // conjuncts: the shell (and Claude Code) count them by letters, the Antigravity CLI as one
     // character (see conjuncts.ts); its session starts with it running
     this.setProgramWidths = installWidths(this.term);
     this.setProgramWidths(kind === 'agy');
     this.renderer = new BanglaRenderer(this.term, opts);
-    this.renderer.anchorBottom = kind === 'agy' || kind === 'claude';
+    this.renderer.anchorBottom = isAgentKind(kind);
     this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput,
-      () => this.kind === 'agy' || this.kind === 'claude' || !!this.agent);
+      () => isAgentKind(this.kind) || !!this.agent);
     this.renderer.onLinesRenumbered = (shift) => {
       const sel = this.edit.sel;
       if (sel?.kind !== 'screen') return;
@@ -211,7 +214,7 @@ export class TerminalSession {
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
-        if (/^(agy|claude)$/.test(args[0] ?? '')) {
+        if (AGENT_CMD.test(args[0] ?? '')) {
           this.renderer.anchorBottom = true;
           this.agent = args[0];
           this.onMeta?.(); // (the home screen's card shows the agent's signed-in account)
@@ -352,12 +355,12 @@ export class TerminalSession {
   private lineBuf = '';
 
   get kindLabel() {
-    return { agy: 'Antigravity', claude: 'Claude Code', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
+    return { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
   }
   /** The program's own window title when it describes the work (Claude Code: "✳ Fix login"). */
   get topic(): string {
     const t = this.title.replace(/^[^\p{L}\p{N}]+/u, '').trim();
-    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|ubuntu|bash)$/i.test(t)) return '';
+    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|codex|opencode|ubuntu|bash)$/i.test(t)) return '';
     if (/^[~/]/.test(t) || /^[\w.-]+@[\w.-]+:/.test(t)) return ''; // a path or user@host
     return t;
   }
@@ -396,7 +399,7 @@ export class TerminalSession {
     }
     if (rest.length > 1 && rest[0] === '\x1b') return; // arrow keys and other sequences
     for (const ch of rest) {
-      if (ch === '\r' && /^(agy|claude)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
+      if (ch === '\r' && /^(agy|claude|codex|opencode)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
       if (ch === '\r') this.commitLine();
       else if (ch === '\x7f' || ch === '\b') this.lineBuf = Array.from(this.lineBuf).slice(0, -1).join('');
       else if (ch === '\x03' || ch === '\x15' || ch === '\x1b') this.lineBuf = '';
@@ -416,7 +419,7 @@ export class TerminalSession {
     if (!shown.includes(line.slice(-Math.min(line.length, 24)))) return;
     // …nor a pasted token / login code
     if (!line.includes(' ') && line.length > 20 && /^[\w#.+/=-]+$/.test(line)) return;
-    const agent = this.kind === 'agy' || this.kind === 'claude';
+    const agent = isAgentKind(this.kind);
     if (agent && this.task) return; // the first real prompt names the work
     if (!agent && /^(ls|ll|la|cd|clear|pwd|exit|history)( |$)/.test(line)) return;
     this.task = line.slice(0, 80);
@@ -876,7 +879,7 @@ export class TerminalSession {
     const [bp, ac, alt, cur, mouse, agent, atPrompt] = k.split(',');
     if (agent !== undefined && !this.replaySawMeta) {
       this.edit.atPrompt = atPrompt === '1';
-      if (/^(agy|claude)$/.test(agent) && !this.agent) {
+      if (AGENT_CMD.test(agent) && !this.agent) {
         this.agent = agent;
         this.renderer.anchorBottom = true;
         this.setProgramWidths(agent === 'agy');

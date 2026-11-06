@@ -79,7 +79,7 @@ class SessionService : Service() {
             val shellDone = armed && s.promptAt > s.enterAt
             val agentDone = armed && s.outSinceEnter > 200 && s.lastOutputAt - s.enterAt > MIN_WORK_MS &&
                 now - s.lastOutputAt > QUIET_MS && s.promptAt <= s.enterAt &&
-                (s.kind == "claude" || s.kind == "agy")
+                s.kind in UbuntuManager.AGENTS
             // A program's own "done" signal (OSC 9 / 777) counts only after the user asked for
             // something — Claude Code also sends one when it has been idle for a minute
             // ("waiting for your input"), which is not news.
@@ -90,7 +90,7 @@ class SessionService : Service() {
             if (shellDone && !done) s.enterAt = 0 // a quick command: nothing to report
             // the same for an agent's quick answer: written and quiet again within moments
             // (else its idle "waiting for your input" a minute later would count as a reply)
-            val agentQuick = armed && !done && explicit == null && (s.kind == "claude" || s.kind == "agy") &&
+            val agentQuick = armed && !done && explicit == null && s.kind in UbuntuManager.AGENTS &&
                 s.outSinceEnter > 0 && now - s.lastOutputAt > QUIET_MS && s.lastOutputAt - s.enterAt <= MIN_WORK_MS
             if (agentQuick) s.enterAt = 0
             if (!done) continue
@@ -101,12 +101,8 @@ class SessionService : Service() {
     }
 
     private fun notifyFinished(s: TermSession, message: String?) {
-        val who = when (s.kind) {
-            "claude" -> "Claude Code"
-            "agy" -> "Antigravity"
-            else -> "Command"
-        }
-        val title = if (s.kind == "claude" || s.kind == "agy") "$who replied" else "$who finished"
+        val who = UbuntuManager.agentName(s.kind).ifEmpty { "Command" }
+        val title = if (s.kind in UbuntuManager.AGENTS) "$who replied" else "$who finished"
         val text = message?.takeIf { it.isNotBlank() } ?: s.label.ifBlank { "Tap to see the result" }
         val open = PendingIntent.getActivity(
             this, s.id.hashCode(),
@@ -200,13 +196,15 @@ class SessionService : Service() {
 
     fun createSession(kind: String, cols: Int, rows: Int, cwd: String = "", profile: String = ""): TermSession {
         val launch = when (kind) {
-            "ubuntu", "agy", "claude", "selftest" -> ubuntu.launch(kind, cwd, profile)
+            "ubuntu", "agy", "claude", "codex", "opencode", "selftest" -> ubuntu.launch(kind, cwd, profile)
             else -> ubuntu.launchAndroidShell()
         }
         val id = UUID.randomUUID().toString().substring(0, 8)
         val title = when (kind) {
             "agy" -> "Antigravity"
             "claude" -> "Claude Code"
+            "codex" -> "Codex"
+            "opencode" -> "OpenCode"
             "ubuntu" -> "Ubuntu"
             else -> "Android"
         }
@@ -214,7 +212,7 @@ class SessionService : Service() {
             id, kind, title, launch.command, launch.args, launch.env, launch.cwd, rows, cols,
         ) { s -> sessionEnded(s) }
         if (kind != "android") session.startDir = ubuntu.normalizeGuestPath(cwd.ifEmpty { "~" }) ?: "/root"
-        if ((kind == "agy" || kind == "claude") && UbuntuManager.validProfile(profile)) session.profile = profile
+        if (kind in UbuntuManager.AGENTS && UbuntuManager.validProfile(profile)) session.profile = profile
         sessions[id] = session
         // gone already (it failed to start): its end was reported before it was listed — once more
         if (!session.alive) mainHandler.post { onSessionExit?.invoke(session) }
