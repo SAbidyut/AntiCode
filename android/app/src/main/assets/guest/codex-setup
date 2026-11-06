@@ -41,5 +41,5 @@ codex --version >/dev/null 2>&1 \
   || fail "Codex was installed but does not start on this phone"
 echo -e "\n${G}✓ All set! Type 'codex' to start Codex.${N}"
 echo -e "  Sign in with ChatGPT when it asks (the sign-in page opens inside the app),"
-echo -e "  or use an API key. Commands run without Codex's sandbox, which Android doesn't allow;"
-echo -e "  Codex still asks before running them.\n"
+echo -e "  or use an API key. Commands run without Codex's sandbox, which Android doesn't allow"
+echo -e "  (/permissions in Codex sets when it asks before running them).\n"
