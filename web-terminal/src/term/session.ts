@@ -1,7 +1,7 @@
 // One terminal tab: headless xterm (VT parser + buffer) + BanglaRenderer + reader view + input.
 
 import { Terminal } from '@xterm/headless';
-import { installWidths } from './conjuncts';
+import { installWidths, widthsOf, type WidthMode } from './conjuncts';
 import { isAgentKind, type Bridge, type SessionKind } from '../bridge';
 
 /** A command line that starts a coding agent. */
@@ -55,7 +55,7 @@ export class TerminalSession {
   /** A program asked to open a link; untrusted = not from our xdg-open (ask first). */
   onLink?: (url: string, trusted: boolean) => void;
   /** Count conjuncts the way a running program does (true) or the shell does (false). */
-  private setProgramWidths: (joined: boolean) => void;
+  private setProgramWidths: (mode: WidthMode) => void;
   /** Where the shell is (OSC 7 from its prompt): a tapped file name is looked for there. */
   cwd = '';
   /** The folder the session was started in. */
@@ -74,7 +74,7 @@ export class TerminalSession {
     // conjuncts: the shell (and Claude Code) count them by letters, the Antigravity CLI as one
     // character (see conjuncts.ts); its session starts with it running
     this.setProgramWidths = installWidths(this.term);
-    this.setProgramWidths(kind === 'agy');
+    this.setProgramWidths(widthsOf(kind));
     this.renderer = new BanglaRenderer(this.term, opts);
     this.renderer.anchorBottom = isAgentKind(kind);
     this.edit = new LineEditor(this.term, (d) => this.sendKeys(d), () => this.renderer.lastOutput,
@@ -204,13 +204,13 @@ export class TerminalSession {
         this.renderer.anchorBottom = false;
         this.agent = '';
         this.onMeta?.(); // (the home screen's card: no agent's account any more)
-        this.setProgramWidths(false); // the shell's prompt: its way of counting
+        this.setProgramWidths('letters'); // the shell's prompt: its way of counting
         this.edit.atPrompt = true;
       } else if (cmd === 'exec') {
         // a command starts: by letters… (Antigravity counts conjuncts whole — its start script
         // says "exec;agy" and runs the program itself, not the shell's agy wrapper)
         if (this.replaying) this.replaySawMeta = true;
-        this.setProgramWidths(args[0] === 'agy');
+        this.setProgramWidths(widthsOf(args[0] ?? ''));
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
@@ -220,7 +220,7 @@ export class TerminalSession {
           this.onMeta?.(); // (the home screen's card shows the agent's signed-in account)
         }
       }
-      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined'); // …unless it's agy
+      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined' ? 'joined' : args[0] === 'codepoints' ? 'codepoints' : 'letters');
       else if (cmd === 'storage' && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
@@ -882,7 +882,7 @@ export class TerminalSession {
       if (AGENT_CMD.test(agent) && !this.agent) {
         this.agent = agent;
         this.renderer.anchorBottom = true;
-        this.setProgramWidths(agent === 'agy');
+        this.setProgramWidths(widthsOf(agent));
         this.onMeta?.();
       }
     }

@@ -11,9 +11,20 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
  *   consonant + virama + consonant): "ক্ষ" = 1 cell. Counted by letters, its tables came
  *   apart — every conjunct pushed the column lines one cell further.
  *
- * So the terminal counts by letters, and the joined way while agy runs (the shell's `agy`
- * says so when it starts; the prompt coming back ends it).
+ * - OpenCode counts the joined way too.
+ * - Codex counts every code point on its own: a vowel sign that sits beside its letter
+ *   (ি ী ে ৈ ো ৌ, ং ঃ) takes a cell of its own — "কি" = 2 cells — and the virama none; so
+ *   do া and ৗ, which Unicode counts as extending the letter (Other_Grapheme_Extend): "যা" = 1.
+ *
+ * So the terminal counts by letters, and another way while one of those runs (the shell
+ * says which program starts; the prompt coming back ends it).
  */
+export type WidthMode = 'letters' | 'joined' | 'codepoints';
+
+/** How the program [name] counts. */
+export function widthsOf(name: string): WidthMode {
+  return name === 'agy' || name === 'opencode' ? 'joined' : name === 'codex' ? 'codepoints' : 'letters';
+}
 
 type Provider = {
   version: string;
@@ -69,8 +80,32 @@ class ConjunctProvider implements Provider {
   }
 }
 
-/** Loads grapheme handling into [term]; the returned function switches conjunct counting. */
-export function installWidths(term: Terminal): (joined: boolean) => void {
+/** Each code point on its own (xterm's own table), the way Codex counts. */
+class CodepointsProvider implements Provider {
+  readonly version = 'codepoints';
+  constructor(private inner: Provider) {}
+
+  wcwidth(codepoint: number) {
+    // Bangla's two "extending" vowel signs (Other_Grapheme_Extend): no cell of their own
+    if (codepoint === 0x09be || codepoint === 0x09d7) return 0;
+    return this.inner.wcwidth(codepoint);
+  }
+
+  // (as xterm's: a zero-width character joins the cell before it)
+  charProperties(codepoint: number, preceding: number): number {
+    let width: number = this.wcwidth(codepoint);
+    let join = width === 0 && preceding !== 0;
+    if (join) {
+      const before = (preceding >> 1) & 3;
+      if (before === 0) join = false;
+      else if (before > width) width = before;
+    }
+    return (width << 1) | (join ? 1 : 0);
+  }
+}
+
+/** Loads grapheme handling into [term]; the returned function switches the way of counting. */
+export function installWidths(term: Terminal): (mode: WidthMode) => void {
   const addon = new UnicodeGraphemesAddon();
   term.loadAddon(addon as never);
   // the add-on's grapheme provider, taken from a stand-in (it isn't exported)
@@ -80,8 +115,12 @@ export function installWidths(term: Terminal): (joined: boolean) => void {
   if (!graphemes) return () => {};
   const conjuncts = new ConjunctProvider(graphemes);
   term.unicode.register(conjuncts as never);
-  return (joined) => {
-    const v = joined ? conjuncts.version : '15-graphemes';
+  const v6 = (term as unknown as { _core?: { unicodeService?: { _providers?: Record<string, Provider> } } })
+    ._core?.unicodeService?._providers?.['6'];
+  const codepoints = v6 ? new CodepointsProvider(v6) : null;
+  if (codepoints) term.unicode.register(codepoints as never);
+  return (mode) => {
+    const v = mode === 'joined' ? conjuncts.version : mode === 'codepoints' ? codepoints?.version ?? '6' : '15-graphemes';
     if (term.unicode.activeVersion !== v) term.unicode.activeVersion = v;
   };
 }
