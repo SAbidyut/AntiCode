@@ -16,6 +16,10 @@ interface Prefs {
   remoteUrl: string;
   /** Claude Code's remote dashboard (Remote Control sessions). */
   claudeUrl: string;
+  /** Codex's web dashboard (its cloud tasks). */
+  codexUrl: string;
+  /** OpenCode's site. */
+  opencodeUrl: string;
   cursor: CursorStyle;
   /** Keyboard compatibility mode (keyboards that misbehave with raw keys). */
   kbCompat: boolean;
@@ -38,6 +42,8 @@ const DEFAULT_PREFS: Prefs = {
   bnScale: 1,
   remoteUrl: 'https://antigravity.google.com',
   claudeUrl: 'https://claude.ai/code',
+  codexUrl: 'https://chatgpt.com/codex',
+  opencodeUrl: 'https://opencode.ai',
   cursor: 'block',
   kbCompat: false,
   kbSmart: true,
@@ -381,9 +387,11 @@ function rendererOpts() {
 const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', codex: 'codex', opencode: 'opencode', ubuntu: 'terminal', android: 'android' };
 
 /** The remote dashboard that belongs to a session: claude.ai/code for Claude Code, else Antigravity's. */
-function openDashboard(which: 'agy' | 'claude') {
-  if (which === 'claude') bridge.openRemote(prefs.claudeUrl, 'Claude Code');
-  else bridge.openRemote(prefs.remoteUrl, 'Antigravity');
+type Dashboard = 'agy' | 'claude' | 'codex' | 'opencode';
+const DASHBOARD_URL: Record<Dashboard, 'remoteUrl' | 'claudeUrl' | 'codexUrl' | 'opencodeUrl'> =
+  { agy: 'remoteUrl', claude: 'claudeUrl', codex: 'codexUrl', opencode: 'opencodeUrl' };
+function openDashboard(which: Dashboard) {
+  bridge.openRemote(prefs[DASHBOARD_URL[which]], KIND_NAME[which]);
 }
 
 /**
@@ -2181,6 +2189,9 @@ function openMoreSheet() {
     }),
     action('remote', 'Antigravity dashboard', '', () => openDashboard('agy')),
     action('claude', 'Claude Code dashboard', '', () => openDashboard('claude')),
+    // (Codex's / OpenCode's: in a tab running it)
+    ...(['codex', 'opencode'] as const).filter((k) => s && (s.kind === k || s.agent === k))
+      .map((k) => action(k, `${KIND_NAME[k]} dashboard`, '', () => openDashboard(k))),
     s && action('eraser', 'Clear screen', '', () => {
       s.term.clear();
       s.scrollToBottom();
@@ -2307,7 +2318,7 @@ function openSettingsSheet() {
     bridge.resetDashboardChoices();
     toast('Dashboards will open in the app again');
   };
-  const urlField = (key: 'remoteUrl' | 'claudeUrl') => {
+  const urlField = (key: 'remoteUrl' | 'claudeUrl' | 'codexUrl' | 'opencodeUrl') => {
     const input = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
     input.value = prefs[key];
     input.onchange = () => {
@@ -2392,6 +2403,12 @@ function openSettingsSheet() {
         h('div', { class: 's-title' }, 'Claude Code dashboard address'),
         urlField('claudeUrl')),
       h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Codex dashboard address'),
+        urlField('codexUrl')),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'OpenCode dashboard address'),
+        urlField('opencodeUrl')),
+      h('div', { class: 'setting' },
         h('div', { class: 's-title' }, 'claude.ai after a Google sign-in'),
         h('div', { class: 's-sub' }, 'Opens in Chrome for a week (Google sign-in needs it).'),
         resetBtn),
@@ -2404,8 +2421,22 @@ function openSettingsSheet() {
           return b;
         })()),
     ),
-    h('p', { class: 'about-line' }, 'AntiCode · fonts: Kalpurush, JetBrains Mono, Noto Sans Symbols (SIL Open Font License)'),
+    h('div', { class: 'about' },
+      h('p', { class: 'about-dev' }, 'Developed by ', h('b', {}, 'Resonance Automaton')),
+      siteLink(),
+      h('p', { class: 'about-line' }, 'AntiCode · fonts: Kalpurush, JetBrains Mono, Noto Sans Symbols (SIL Open Font License)')),
   );
+}
+
+/** "Visit rapti.net": the developer's site, in the browser. */
+function siteLink(): HTMLElement {
+  const a = h('a', { class: 'about-link', href: 'https://rapti.net' }, 'Visit ', h('b', {}, 'rapti.net'), svg('external'));
+  a.onclick = (e) => {
+    e.preventDefault();
+    haptic();
+    bridge.openUrl('https://rapti.net');
+  };
+  return h('p', { class: 'about-visit' }, a);
 }
 
 function applyTheme() {
@@ -2431,7 +2462,11 @@ function bindChrome() {
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
   // (Claude Code started in a shell tab too)
-  $('#remote-top-btn').onclick = () => openDashboard(active?.kind === 'claude' || active?.agent === 'claude' ? 'claude' : 'agy');
+  // (the tab's agent's dashboard — started in a shell tab too)
+  $('#remote-top-btn').onclick = () => {
+    const k = (['claude', 'codex', 'opencode'] as const).find((x) => active?.kind === x || active?.agent === x);
+    openDashboard(k ?? 'agy');
+  };
   $('#settings-btn').onclick = () => openSettingsSheet();
   $('#sheet-backdrop').onclick = () => closeSheet();
   $('#remote-btn').onclick = () => openDashboard('agy');
