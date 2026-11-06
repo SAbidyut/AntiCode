@@ -129,6 +129,10 @@ export class TerminalSession {
     // Replies the terminal generates itself (cursor position reports, device attributes…)
     this.term.onData((d) => this.reply(d));
     this.term.onBinary((d) => this.reply(d));
+    // a full-screen program starting or ending with the keyboard up: sized anew (see fit)
+    this.term.buffer.onBufferChange(() => {
+      if (TerminalSession.keyboardInset) window.setTimeout(() => this.fit(), 0);
+    });
     this.term.onWriteParsed(() => {
       this.saveModes();
       this.renderer.lastOutput = performance.now();
@@ -525,8 +529,12 @@ export class TerminalSession {
   fit(now = false) {
     const box = this.el.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;
-    // The on-screen keyboard doesn't count: size the terminal as if it were closed.
-    const { cols, rows } = this.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
+    // The on-screen keyboard doesn't count: size the terminal as if it were closed (the screen
+    // slides up to keep the cursor in sight). Not for a full-screen program (OpenCode, vim …):
+    // it lays out its whole screen itself — kept at the full height, most of it slid up out of
+    // sight above the keyboard; sized to the room left, it draws everything in it.
+    const kb = this.term.buffer.active.type === 'alternate' ? 0 : TerminalSession.keyboardInset;
+    const { cols, rows } = this.renderer.fit(box.width, box.height + kb);
     if (cols !== this.term.cols || rows !== this.term.rows) {
       this.renderer.holdForRedraw();
       this.term.resize(cols, rows);
