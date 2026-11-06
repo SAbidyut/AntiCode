@@ -473,6 +473,12 @@ codex() {
   if [ -n "$d" ]; then CODEX_HOME=$d command codex "$@"; else command codex "$@"; fi
 }
 opencode() {
+  # (OpenCode 1 put in by an earlier version of the app: OpenCode 2 first)
+  local pkg=
+  [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
+  if [ -e "$HOME/.local/share/opencode-cli" ] && [ "$pkg" != @opencode/cli ]; then
+    env HOME="${ANTICODE_REAL_HOME:-$HOME}" /usr/local/bin/opencode-setup --auto || return
+  fi
   [ -t 1 ] && printf '\e]7770;exec;%s;opencode\a' "$__agy_tok"
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account opencode 2>/dev/null)

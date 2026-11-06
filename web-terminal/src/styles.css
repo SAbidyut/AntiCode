@@ -546,8 +546,10 @@ body[data-screen='home']::before {
 .sel-bar button[hidden] { display: none; }
 .sel-bar button:active { background: var(--line-strong); }
 @keyframes sel-bar-in { from { opacity: 0; } to { opacity: 1; } }
+/* (above the rows: a full-screen program — OpenCode, Codex — paints a background in every
+   cell, and a cursor under the rows was hidden behind its input box) */
 .term-cursor {
-  position: absolute; left: 0; top: 0;
+  position: absolute; left: 0; top: 0; z-index: 2;
   width: var(--cw); height: var(--lh);
   pointer-events: none;
   border-radius: 2px;

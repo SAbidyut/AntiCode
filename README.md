@@ -18,7 +18,7 @@
    ~১৭০MB ডাউনলোড; Node.js লাগে না) নামিয়ে `codex` ইনস্টল হবে, তারপর ChatGPT দিয়ে লগইন বা API key চাইবে।
    Android এ Codex এর sandbox চলে না (Linux namespaces বন্ধ), তাই `~/.codex/config.toml` এ
    `sandbox_mode = "danger-full-access"` বসানো হয় — কমান্ড চালানোর আগে Codex তবুও অনুমতি চায়।
-7. **OpenCode** টাইলে চাপুন। প্রথমবার তার অফিসিয়াল npm প্যাকেজের প্রোগ্রাম (`opencode-linux-arm64`, ~৮০MB) দিয়ে
+7. **OpenCode** টাইলে চাপুন। প্রথমবার OpenCode 2 এর অফিসিয়াল npm প্যাকেজের প্রোগ্রাম (`@opencode/cli-linux-arm64`, ~১২০MB) দিয়ে
    `opencode` ইনস্টল হবে। `/models` এ মডেল বাছুন (কয়েকটা ফ্রি), `/connect` দিয়ে কোনো provider এ সাইন ইন।
 
 ## ব্যবহার
