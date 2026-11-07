@@ -453,7 +453,7 @@ command_not_found_handle() {
 # in it sign in with that account too (see anticode-account).
 agy() {
   # (to the app — on the terminal only: `agy -p … > out.md` gets agy's output, nothing else)
-  [ -t 1 ] && printf '\e]7770;exec;%s;agy\a' "$__agy_tok"
+  [ -t 1 ] && printf '\e]7770;exec;%s;agy;%s\a' "$__agy_tok" "${1//[[:cntrl:];]/}"
   local -a pre=()
   if [ -f "$HOME/.config/agy-terminal/agy-approve-all" ] && { [ $# -eq 0 ] || [[ $1 == -* ]]; }; then
     pre=(--dangerously-skip-permissions)
@@ -466,7 +466,7 @@ agy() {
   else command agy "${pre[@]}" "$@"; fi
 }
 codex() {
-  [ -t 1 ] && printf '\e]7770;exec;%s;codex\a' "$__agy_tok"
+  [ -t 1 ] && printf '\e]7770;exec;%s;codex;%s\a' "$__agy_tok" "${1//[[:cntrl:];]/}"
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account codex 2>/dev/null)
   /usr/local/bin/anticode-account codex-config "${d:-${CODEX_HOME:-$HOME/.codex}}"
@@ -482,15 +482,15 @@ opencode() {
       echo "opencode: couldn't update to OpenCode 2 — starting the one installed" >&2
     pkg=; [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
   fi
-  [ -t 1 ] && printf '\e]7770;exec;%s;opencode\a' "$__agy_tok"
-  # bare `opencode`: its compact view, the input at the bottom (as the app's button opens it)
-  [ $# -eq 0 ] && [ -t 1 ] && [ "$pkg" = @opencode/cli ] && set -- mini
+  [ -t 1 ] && printf '\e]7770;exec;%s;opencode;%s\a' "$__agy_tok" "${1//[[:cntrl:];]/}"
+  # bare `opencode`: its compact view when Settings says so (as the app's button opens it)
+  [ $# -eq 0 ] && [ -t 1 ] && [ "$pkg" = @opencode/cli ] && [ -f "$HOME/.config/agy-terminal/opencode-mini" ] && set -- mini
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account opencode 2>/dev/null)
   if [ -n "$d" ]; then XDG_DATA_HOME=$d command opencode "$@"; else command opencode "$@"; fi
 }
 claude() {
-  [ -t 1 ] && printf '\e]7770;exec;%s;claude\a' "$__agy_tok"
+  [ -t 1 ] && printf '\e]7770;exec;%s;claude;%s\a' "$__agy_tok" "${1//[[:cntrl:];]/}"
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account claude 2>/dev/null)
   if [ -n "$d" ]; then CLAUDE_CONFIG_DIR=$d command claude "$@"; else command claude "$@"; fi
@@ -562,10 +562,12 @@ if [[ ${BLE_VERSION-} ]]; then
   # (ble.sh runs commands itself: say when one starts from its hook as well — with the
   # command's name, so the app knows an agent started however the line was typed)
   function __agy_preexec {
-    local w=${1#"${1%%[![:space:]]*}"}
+    local w=${1#"${1%%[![:space:]]*}"} r
+    # the word after it too (`opencode auth login` isn't the chat screen)
+    r=${w#"${w%%[[:space:]]*}"}; r=${r#"${r%%[![:space:]]*}"}; r=${r%%[[:space:]]*}
     w=${w%%[[:space:]]*}
-    w=${w//[[:cntrl:];]/}
-    printf '\e]7770;exec;%s;%s\a' "$__agy_tok" "${w:0:40}"
+    w=${w//[[:cntrl:];]/}; r=${r//[[:cntrl:];]/}
+    printf '\e]7770;exec;%s;%s;%s\a' "$__agy_tok" "${w:0:40}" "${r:0:40}"
     __agy_t0=$SECONDS
   }
   blehook PREEXEC+='__agy_preexec "$1"' 2>/dev/null

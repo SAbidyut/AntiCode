@@ -188,6 +188,24 @@ const OVERSCAN = 10;
 const PAN_WINDOW_MS = 500;
 /** The cursor stops blinking this long after it last moved (see armBlinkRest). */
 const BLINK_FOR_MS = 12_000;
+/**
+ * Under an agent's input box new output glides in while the box stays where it is: up to this
+ * many new lines at once (more — a flood — just jumps), over this long (ms).
+ */
+const BOX_SLIDE_MAX = 12;
+const BOX_SLIDE_MS = 160;
+/** The easing of the screen's own slide (the same curve, so the box can stand still against it). */
+const SLIDE_EASE = 'cubic-bezier(0.25, 0.8, 0.3, 1)';
+/** The cursor stays in the input box this long after the program last had it there. */
+const CURSOR_HOLD_MS = 700;
+/**
+ * A program redrawing the live part of its screen (cursor up, erase below, the lines again) is
+ * drawn when it's whole: after this much quiet (ms), and not later than SETTLE_MAX_MS after the
+ * first piece. Without it the half-drawn frames in between — the box gone, the cursor halfway up —
+ * flashed by on every piece of a reply.
+ */
+const SETTLE_QUIET_MS = 20;
+const SETTLE_MAX_MS = 60;
 /** How long a moment's miss of an agent's input box is bridged (no layout flip-flop). */
 const BOX_MEMORY_MS = 400;
 
@@ -225,6 +243,15 @@ export class BanglaRenderer {
   private lastCursorLine = -1;
   private cursorOnTop = false;
   private typingTimer = 0;
+  /** Running "hold still" glides of the rows under an agent's input box (see render). */
+  private slideAnims = new WeakMap<HTMLElement, Animation>();
+  /** The screen layer's own glide under an agent's input box, and where it's heading. */
+  private viewAnim: Animation | null = null;
+  private viewAnimTo = 0;
+  /** Where the cursor last was in the input box (rows below its top, column), and when. */
+  private boxCursor: { dy: number; x: number } | null = null;
+  private boxCursorAt = 0;
+  private holdTimer = 0;
   /**
    * The cursor blinks for a while after it last moved, then stays solid (as GTK terminals
    * do): an endless blink kept the page drawing 60 frames a second while nothing happened —
@@ -735,6 +762,37 @@ export class BanglaRenderer {
     this.holdUntil = this.holdFrom + ms;
     this.holdQuiet = quiet;
   }
+  /**
+   * A program starts redrawing the live part of its screen (see SETTLE_QUIET_MS). Not again
+   * while a hold runs: it ends at its time, so a steady stream is still drawn about every
+   * SETTLE_MAX_MS, never starved.
+   */
+  settle() {
+    if (performance.now() < this.holdUntil) return;
+    this.holdForRedraw(SETTLE_MAX_MS, SETTLE_QUIET_MS);
+  }
+  /** The screen layer's vertical position as drawn right now (in the middle of a slide too). */
+  private viewportY(): number {
+    const m = getComputedStyle(this.viewport).transform;
+    if (!m || m === 'none') return 0;
+    try {
+      return new DOMMatrixReadOnly(m).m42;
+    } catch {
+      return 0;
+    }
+  }
+  /** [el] stays where it is on the screen while the layer under it slides by [delta] px. */
+  private holdStill(el: HTMLElement, y: number, delta: number, ms: number) {
+    this.slideAnims.get(el)?.cancel();
+    if (!el.animate) return;
+    this.slideAnims.set(
+      el,
+      el.animate(
+        [{ transform: `translateY(${y + delta}px)` }, { transform: `translateY(${y}px)` }],
+        { duration: ms, easing: SLIDE_EASE },
+      ),
+    );
+  }
   /** The pan to show now, given the one wanted (see panHist). */
   private settlePan(want: number, backDown: boolean): number {
     const now = performance.now();
@@ -1109,6 +1167,8 @@ export class BanglaRenderer {
   }
 
   private recycle(el: HTMLDivElement) {
+    this.slideAnims.get(el)?.cancel();
+    this.slideAnims.delete(el);
     el.remove();
     el.classList.remove('row-in');
     el.style.animationDelay = '';
@@ -1435,12 +1495,36 @@ export class BanglaRenderer {
     // the output, and only for a few lines — a flood just jumps).
     const grew = buf.baseY - this.animBaseY;
     this.animBaseY = buf.baseY;
-    // (not under an agent's input box: the box, drawn at once on its new lines, dipped a line
-    // and glided back up on every new line of a reply)
-    const slide = motion && this.scrollPx === 0 && grew > 0 && grew <= 4 && !(this.anchorBottom && boxTop >= 0);
-    const dur = slide ? '140ms' : '0s';
+    // Under an agent's input box the text glides but the box stays where it is: the box is
+    // drawn at once on its new lines, so on its own it dipped a line and glided back up on every
+    // new line of a reply — its rows (and the cursor, if it's in them) move against the slide.
+    const inBoxLayout = this.anchorBottom && boxTop >= 0;
+    const slide = motion && this.scrollPx === 0 && grew > 0 && grew <= (inBoxLayout ? BOX_SLIDE_MAX : 4);
+    const slideMs = inBoxLayout ? BOX_SLIDE_MS : 140;
+    const dur = slide && !inBoxLayout ? `${slideMs}ms` : '0s';
     if (this.viewport.style.transitionDuration !== dur) this.viewport.style.transitionDuration = dur;
-    this.viewport.style.transform = `translateY(${(-topPx).toFixed(2)}px)`;
+    const vNew = -topPx;
+    // (where the layer is drawn now: a slide already under way counts)
+    const vNow = slide && inBoxLayout ? this.viewportY() : vNew;
+    this.viewport.style.transform = `translateY(${vNew.toFixed(2)}px)`;
+    // Under the box the layer slides by an animation of its own, started together with the
+    // rows' and the cursor's counter-motion: a CSS transition began a frame ahead of them and
+    // the box dipped by that much on every new line.
+    let slideBy = 0;
+    if (slide && inBoxLayout && Math.abs(vNew - vNow) > 0.5 && this.viewport.animate) {
+      slideBy = vNew - vNow;
+      this.viewAnim?.cancel();
+      this.viewAnim = this.viewport.animate(
+        [{ transform: `translateY(${vNow.toFixed(2)}px)` }, { transform: `translateY(${vNew.toFixed(2)}px)` }],
+        { duration: slideMs, easing: SLIDE_EASE },
+      );
+      this.viewAnimTo = vNew;
+      for (const [i, r] of this.rows) if (i >= boxTop) this.holdStill(r.el, rowY(i), slideBy, slideMs);
+    } else if (this.viewAnim && Math.abs(vNew - this.viewAnimTo) > 0.5) {
+      // the screen moved some other way (the box changed size): no glide towards the old place
+      this.viewAnim.cancel();
+      this.viewAnim = null;
+    }
     const h = `${rows * lh}px`;
     if (this.zoomLayer.style.height !== h) this.zoomLayer.style.height = h;
     // When the keyboard covers part of the screen the terminal is NOT resized (that makes
@@ -1469,9 +1553,10 @@ export class BanglaRenderer {
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
         pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
-        // an agent at work hides its cursor and leaves it wherever it last wrote: nothing
-        // to follow then — stay put (only less, when what's drawn got shorter)
-        if (this.anchorBottom && !this.cursorVisible) pan = Math.max(0, Math.min(this.pan, overflow, below));
+        // an agent at work hides its cursor and leaves it wherever it last wrote: nothing to
+        // follow then — the screen goes by what's drawn instead, its last line stays above the
+        // keyboard (staying put left a prompt's last lines under it)
+        if (this.anchorBottom && !this.cursorVisible) pan = Math.max(0, Math.min(overflow, below));
       }
       pan = this.settlePan(pan, backDown);
       // ease small moves that come from new content; follow the keyboard exactly
@@ -1534,9 +1619,27 @@ export class BanglaRenderer {
       this.preeditEl.style.transform = `translate(${x.toFixed(2)}px, ${y}px)`;
     }
     if (showCursor) {
+      // An agent writing its reply parks the cursor where it writes — above its input box — for
+      // a moment between pieces, and puts it back in the input: drawn as it is, the cursor hopped
+      // up and down the screen. It stays in the box until the program has kept it elsewhere for
+      // a while.
+      let curLine = cursorLine;
+      let curX = buf.cursorX;
+      if (inBoxLayout && buf.type === 'normal') {
+        const now = performance.now();
+        if (cursorLine >= boxTop) {
+          this.boxCursor = { dy: cursorLine - boxTop, x: buf.cursorX };
+          this.boxCursorAt = now;
+        } else if (this.boxCursor && now - this.boxCursorAt < CURSOR_HOLD_MS) {
+          curLine = boxTop + this.boxCursor.dy;
+          curX = this.boxCursor.x;
+          clearTimeout(this.holdTimer);
+          this.holdTimer = window.setTimeout(() => this.schedule(), CURSOR_HOLD_MS - (now - this.boxCursorAt) + 20);
+        }
+      } else this.boxCursor = null;
       // Over a cell the program painted (OpenCode's, Codex's input box) the cursor goes on top
       // — under the row it was hidden; elsewhere under the text, the letter showing through
-      const under = buf.getLine(cursorLine)?.getCell(Math.min(buf.cursorX, cols - 1), this.probe);
+      const under = buf.getLine(curLine)?.getCell(Math.min(curX, cols - 1), this.probe);
       if (under) this.probe = under;
       const painted = !!under && !under.isBgDefault();
       if (painted !== this.cursorOnTop) {
@@ -1544,25 +1647,38 @@ export class BanglaRenderer {
         this.cursorEl.classList.toggle('on-top', painted);
       }
       // cursorX == cols while a line wrap is pending: keep it on the grid
-      const t = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(cursorLine)}px)`;
+      const t = `translate(${(Math.min(curX, cols - 1) * this.cellWidth).toFixed(2)}px, ${rowY(curLine)}px)`;
+      // (in the input box while the text glides: it stands still with the box)
+      const holdCursor = Math.abs(slideBy) > 0.5 && curLine >= boxTop;
+      if (holdCursor) {
+        this.slideAnims.get(this.cursorEl)?.cancel();
+        const [cx, cy] = [Math.min(curX, cols - 1) * this.cellWidth, rowY(curLine)];
+        this.slideAnims.set(
+          this.cursorEl,
+          this.cursorEl.animate(
+            [{ transform: `translate(${cx.toFixed(2)}px, ${cy + slideBy}px)` }, { transform: t }],
+            { duration: BOX_SLIDE_MS, easing: SLIDE_EASE },
+          ),
+        );
+      }
       if (t !== this.lastCursorT) {
         // glide to the next cell / line; jump when it reappears or moves far (TUIs)
         // jump when it reappears, moves far (TUIs), or the layout itself moved
         // Typing moves it along its line: there it jumps at once (a glide trails behind the
         // letters and makes typing feel slow). It glides only to another line (after Enter).
-        const sameLine = cursorLine === this.lastCursorLine;
+        const sameLine = curLine === this.lastCursorLine;
         // typing on past the end of the row (or ⌫ back over it): the line wraps — no slide
         // diagonally across the text
-        const lower = Math.max(cursorLine, this.lastCursorLine);
-        const wrapped = Math.abs(cursorLine - this.lastCursorLine) === 1 && !!buf.getLine(lower)?.isWrapped;
+        const lower = Math.max(curLine, this.lastCursorLine);
+        const wrapped = Math.abs(curLine - this.lastCursorLine) === 1 && !!buf.getLine(lower)?.isWrapped;
         // … and when the screen itself slides (new line at the bottom, keyboard pan): the
         // cursor rides along inside it instead of a second, out-of-step glide (it dipped)
-        const far = !wasShown || sameLine || wrapped || Math.abs(cursorLine - this.lastCursorLine) > 2 || splitMoved ||
+        const far = !wasShown || sameLine || wrapped || Math.abs(curLine - this.lastCursorLine) > 2 || splitMoved ||
           this.insetsMoving || slide || panEased;
         this.cursorEl.style.transitionDuration = motion && !far ? '' : '0s';
         this.cursorEl.style.transform = t;
         this.lastCursorT = t;
-        this.lastCursorLine = cursorLine;
+        this.lastCursorLine = curLine;
         // keep it solid while it moves (typing); blink again when it rests
         this.cursorEl.classList.add('moving');
         clearTimeout(this.typingTimer);

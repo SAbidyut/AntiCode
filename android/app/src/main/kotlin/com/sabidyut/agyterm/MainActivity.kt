@@ -120,16 +120,34 @@ class MainActivity : ComponentActivity() {
     // once a second, so output handed to it then piled up in the page (megabytes while an
     // agent worked away) faster than it could take it in — memory the rest of the phone was
     // short of. Now the output waits here and the page gets it in one go when the app is
-    // back. Away for long, a lot printed meanwhile, or the phone short of memory: the page is
-    // let go altogether (its memory goes back to the phone) and loads again when the app is
-    // back, replaying each session's saved output, as after Android rebuilt the app's screen.
+    // back (drawn once, not flickering through what was missed — see onCatchUp). Only when a
+    // lot printed meanwhile, or Android is about to stop the app for memory, is the page let go
+    // altogether (its memory goes back to the phone) and loaded again when the app is back,
+    // replaying each session's saved output; a cover in the app's colour hides that until the
+    // page says it's ready.
     /** The app is in the background (between onStop and onStart). */
     @Volatile private var outOfSight = false
     /** The page was let go (or is being): output isn't kept for it. (under pendingLock) */
     private var dropOutput = false
     /** The page is about:blank now: load it again when the app is back. */
     private var pageReleased = false
-    private val releaseWhenAway = Runnable { if (outOfSight) releasePage() }
+    /** Hides the page while it loads again, until it says it is ready (see pageReady). */
+    private lateinit var cover: View
+    private val hideCoverLater = Runnable { hideCover() }
+    /** The held output goes to the page next: it draws it once when it's all in (under pendingLock). */
+    private var catchUp = false
+
+    private fun showCover() {
+        cover.animate().cancel()
+        cover.alpha = 1f
+        cover.visibility = View.VISIBLE
+    }
+
+    private fun hideCover() {
+        main.removeCallbacks(hideCoverLater)
+        if (cover.visibility != View.VISIBLE) return
+        cover.animate().alpha(0f).setDuration(180).withEndAction { cover.visibility = View.GONE }.start()
+    }
 
     /**
      * A query the terminal answers (CSI … n / c / t, CSI > q, CSI ? u, CSI … $ p, OSC …;?,
@@ -182,6 +200,7 @@ class MainActivity : ComponentActivity() {
             pending.clear()
         }
         pageReleased = true
+        showCover()
         if (outOfSight) web.loadUrl("about:blank") else reloadPage()
     }
 
@@ -193,26 +212,36 @@ class MainActivity : ComponentActivity() {
             pending.clear()
         }
         lastInsets = ""
+        showCover()
+        // (if the page never says it's ready: not hidden for good)
+        main.removeCallbacks(hideCoverLater)
+        main.postDelayed(hideCoverLater, 5000)
         web.loadUrl(START_URL)
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // the phone is short of memory while we're in the background: give the page's back
+        // Android is about to stop the app for memory (it's in the middle or at the end of the
+        // list of processes to go): give the page's back — better than losing every session.
+        // (Not for the milder levels: it only costs the page a restart and the screen a flash.)
         @Suppress("DEPRECATION")
-        val low = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
-            level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
-        if (outOfSight && low) main.post { if (outOfSight) releasePage() }
+        val critical = level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE
+        if (outOfSight && critical) main.post { if (outOfSight) releasePage() }
     }
 
     private fun flush() {
         lastFlush = SystemClock.uptimeMillis()
         val batch: List<Pair<String, ByteArray>>
+        val catching: Boolean
         synchronized(pendingLock) {
             batch = pending.map { (id, buf) -> id to buf.toByteArray() }
             pending.clear()
             flushScheduled = false
+            catching = catchUp
+            catchUp = false
         }
+        // what piled up while the app was away: the page draws it once, when it's all in
+        if (catching && batch.isNotEmpty()) js("__native.onCatchUp && __native.onCatchUp(true)")
         for ((id, bytes) in batch) {
             var off = 0
             while (off < bytes.size) {
@@ -222,6 +251,7 @@ class MainActivity : ComponentActivity() {
                 off += n
             }
         }
+        if (catching && batch.isNotEmpty()) js("__native.onCatchUp && __native.onCatchUp(false)")
     }
 
     private fun js(code: String) {
@@ -281,9 +311,15 @@ class MainActivity : ComponentActivity() {
         })
         keys.compatMode = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_COMPAT, false)
         keys.smart = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_KEYBOARD_SMART, true)
+        cover = View(this).apply {
+            setBackgroundColor(Color.parseColor(BG))
+            visibility = View.GONE
+            isClickable = true // (touches don't reach the page while it loads)
+        }
         val root = FrameLayout(this).apply {
             addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(keys, FrameLayout.LayoutParams(1, 1))
+            addView(cover, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         }
         panel = RemotePanel(
             this,
@@ -556,13 +592,15 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         TermSession.paceOutput = true
         service?.uiVisible = true
-        main.removeCallbacks(releaseWhenAway)
         synchronized(pendingLock) {
             outOfSight = false
             // what was printed while away, in one go
-            if (!dropOutput && pending.isNotEmpty() && !flushScheduled) {
-                flushScheduled = true
-                main.post(::flush)
+            if (!dropOutput && pending.isNotEmpty()) {
+                catchUp = true
+                if (!flushScheduled) {
+                    flushScheduled = true
+                    main.post(::flush)
+                }
             }
         }
         if (pageReleased) reloadPage()
@@ -601,9 +639,6 @@ class MainActivity : ComponentActivity() {
         TermSession.paceOutput = false
         service?.uiVisible = false
         outOfSight = true
-        main.removeCallbacks(releaseWhenAway)
-        // (not in the self test, which looks at the page while the screen may be off)
-        if (!selftestEnabled()) main.postDelayed(releaseWhenAway, RELEASE_AFTER_MS)
         // Opening the app again must not pop the keyboard up by itself: let go of the
         // terminal's keyboard focus (a tap on the terminal brings it back).
         if (keys.hasFocus()) {
@@ -1308,6 +1343,21 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun getAgyApproveAll(): Boolean = service?.ubuntu?.agyApproveAll ?: false
 
+        /** The page has restored its sessions and drawn them: the cover (after a release) goes. */
+        @JavascriptInterface
+        fun pageReady() {
+            main.post { hideCover() }
+        }
+
+        /** OpenCode's compact view (opencode mini) instead of its full screen. */
+        @JavascriptInterface
+        fun setOpencodeMini(on: Boolean) {
+            svc().ubuntu.opencodeMini = on
+        }
+
+        @JavascriptInterface
+        fun getOpencodeMini(): Boolean = service?.ubuntu?.opencodeMini ?: false
+
         /** The shell prompt's look (Settings → Prompt style). */
         @JavascriptInterface
         fun setPromptStyle(style: String) {
@@ -1394,9 +1444,7 @@ class MainActivity : ComponentActivity() {
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
         /** Output kept for the page per session while away (more: the page starts afresh). */
-        private const val HOLD_MAX = 1024 * 1024
-        /** Away this long: the page is let go (loaded again when the app is back). */
-        private const val RELEASE_AFTER_MS = 3 * 60_000L
+        private const val HOLD_MAX = 4 * 1024 * 1024
         /** The most the clipboard is given at once (the system refuses ~1 MB and more). */
         private const val MAX_CLIP = 300_000
         private const val BG = "#0b0d12"

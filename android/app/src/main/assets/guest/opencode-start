@@ -10,11 +10,12 @@ if command -v opencode >/dev/null 2>&1; then
   printf '\e]7770;exec;%s;opencode\a' "${ANTICODE_LINK_TOKEN:-}"
   # the tab's account: one of the extra ones keeps its sign-ins apart (see anticode-account)
   acct_dir=$(/usr/local/bin/anticode-account opencode)
-  # its compact view (opencode mini): drawn inline like Claude Code, the input at the
-  # bottom from the start (the full screen's start page has it in the middle)
+  # OpenCode's own full screen; Settings → "OpenCode: compact view (mini)" opens its compact
+  # view instead (opencode mini): drawn inline like Claude Code, the input at the bottom from
+  # the start (the full screen's start page has it in the middle)
   # (OpenCode 1, kept when it couldn't be updated: no mini view)
   pkg=; [ -r "$HOME/.local/share/opencode-cli/.package" ] && read -r pkg < "$HOME/.local/share/opencode-cli/.package"
-  if [ "$pkg" = @opencode/cli ]; then set -- mini; else set --; fi
+  if [ "$pkg" = @opencode/cli ] && [ -f "$HOME/.config/agy-terminal/opencode-mini" ]; then set -- mini; else set --; fi
   if [ -n "$acct_dir" ]; then XDG_DATA_HOME=$acct_dir opencode "$@"; else opencode "$@"; fi
 else
   echo "opencode was not found — run 'opencode-setup' and try again."

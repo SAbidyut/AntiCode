@@ -145,9 +145,19 @@ let accounts = { agy: '', claude: '' };
 let notifyWhenDone = true;
 let claudeFullscreen = false;
 let agyApproveAll = false;
+let opencodeMini = false;
 let restored = false;
 let pendingOpen = '';
 const early = new Map<string, Uint8Array[]>();
+/** Sessions whose saved output is still being replayed (after the page loaded). */
+const replaying = new Set<string>();
+let readySent = false;
+/** Tells the app the sessions are restored and drawn: it lifts the cover it put over the page while it loaded. */
+function signalReady() {
+  if (readySent) return;
+  readySent = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => bridge.pageReady()));
+}
 let active: TerminalSession | null = null;
 let hostState: HostState = { host: 'dev', ubuntu: 'none' };
 /** getState() has answered (until then the home screen shows a neutral "starting"). */
@@ -203,6 +213,11 @@ const bridge: Bridge = createBridge({
   },
   onReplayed(id) {
     sessions.get(id)?.restoreModes();
+    // all the restored sessions are in (and drawn a moment later): the app may lift its cover
+    if (replaying.delete(id) && !replaying.size) window.setTimeout(signalReady, 120);
+  },
+  onCatchUp(on) {
+    for (const s of sessions.values()) s.catchUp(on);
   },
   onState(state) {
     hostState = state;
@@ -2384,6 +2399,12 @@ function openSettingsSheet() {
         agyApproveAll = v;
         bridge.setAgyApproveAll(v);
       }),
+    toggle('OpenCode: compact view (mini)',
+      'Off: OpenCode’s own full screen, as it was. On: its compact view, drawn inline with the input at the bottom from the start — it may move a little while a reply streams. For new OpenCode sessions.',
+      opencodeMini, (v) => {
+        opencodeMini = v;
+        bridge.setOpencodeMini(v);
+      }),
     // rarely needed: folded away
     h('details', { class: 'advanced' },
       h('summary', {}, h('span', {}, 'Advanced'), svg('chevron')),
@@ -2574,6 +2595,7 @@ async function boot() {
   notifyWhenDone = await bridge.getNotifyWhenDone();
   claudeFullscreen = await bridge.getClaudeFullscreen();
   agyApproveAll = await bridge.getAgyApproveAll();
+  opencodeMini = await bridge.getOpencodeMini();
   accounts = await bridge.getAccounts();
   renderHome();
 
@@ -2601,6 +2623,7 @@ async function boot() {
       // replay the saved output at the size it was written for (background tabs too)
       if (info.cols && info.rows) s.notePtySize(info.cols, info.rows);
       s.beginReplay();
+      replaying.add(info.id);
       bridge.attach(info.id); // its saved output, then onReplayed → restoreModes()
     }
     if (list.length && !userOpened) {
@@ -2617,6 +2640,9 @@ async function boot() {
     if (!sessions.size && !sheetOpen()) await reportLostSessions();
   } catch { /* nothing to restore */ }
   if (document.body.dataset.screen === 'boot') enterHome();
+  // (nothing to replay: ready now; else when the replays are in — or in a moment, whatever happens)
+  if (!replaying.size) signalReady();
+  else window.setTimeout(signalReady, 3000);
 
   new ResizeObserver(() => {
     active?.renderer.schedule(); // re-pan right away; resize (if any) once things settle

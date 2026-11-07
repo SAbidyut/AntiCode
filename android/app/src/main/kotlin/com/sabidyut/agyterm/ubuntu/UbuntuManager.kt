@@ -76,6 +76,23 @@ class UbuntuManager private constructor(private val context: Context) {
             } catch (_: Exception) { /* not installed yet */ }
         }
 
+    /**
+     * OpenCode's button (and a bare `opencode` in a shell) opens its compact view (`opencode
+     * mini`: drawn inline, its input at the bottom) instead of its own full screen. Off by
+     * default; Settings. A file inside Ubuntu, like the Antigravity one above.
+     */
+    var opencodeMini: Boolean
+        get() = File(rootfs, OPENCODE_MINI).isFile
+        set(v) {
+            try {
+                val f = File(rootfs, OPENCODE_MINI)
+                if (v) {
+                    f.parentFile?.mkdirs()
+                    f.writeText("OpenCode opens its compact view, opencode mini (Settings in the app).\n")
+                } else f.delete()
+            } catch (_: Exception) { /* not installed yet */ }
+        }
+
     var promptStyle: String
         get() = try {
             File(rootfs, "root/.config/agy-terminal/prompt").readText().trim()
@@ -908,6 +925,7 @@ class UbuntuManager private constructor(private val context: Context) {
         }
 
         private const val AGY_APPROVE_ALL = "root/.config/agy-terminal/agy-approve-all"
+        private const val OPENCODE_MINI = "root/.config/agy-terminal/opencode-mini"
 
         val PROMPT_STYLES = setOf("powerline", "pure", "rainbow", "lean", "capsule", "simple")
         private const val UI_PREFS = "anticode-ui"

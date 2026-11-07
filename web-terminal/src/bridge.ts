@@ -68,6 +68,11 @@ export interface BridgeEvents {
   onKeyboardReleased(): void;
   /** Show this session (e.g. its "task finished" notification was tapped). */
   onOpenSession(id: string): void;
+  /**
+   * The app was out of sight and the output that piled up meanwhile is coming in one go (true),
+   * until it's all been sent (false): draw it once when it's in, not flickering through it.
+   */
+  onCatchUp?(on: boolean): void;
 }
 
 export interface Bridge {
@@ -115,6 +120,9 @@ export interface Bridge {
   /** Antigravity approves every tool without asking (its --dangerously-skip-permissions). */
   setAgyApproveAll(on: boolean): void;
   getAgyApproveAll(): Promise<boolean>;
+  /** OpenCode opens its compact view (`opencode mini`) instead of its full screen. */
+  setOpencodeMini(on: boolean): void;
+  getOpencodeMini(): Promise<boolean>;
   getClaudeFullscreen(): Promise<boolean>;
   /** The shell prompt's look (written inside Ubuntu; the next prompt shows it). */
   setPromptStyle(style: string): void;
@@ -155,6 +163,8 @@ export interface Bridge {
   getLostSessions(): Promise<{ kind: SessionKind; label: string; dir?: string; profile?: string }[]>;
   forgetLostSessions(): void;
   exitApp(): void;
+  /** The sessions are restored and drawn: the app lifts its cover (after the page was let go). */
+  pageReady(): void;
 }
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -191,6 +201,8 @@ interface AndroidBridgeApi {
   setClaudeFullscreen?(on: boolean): void;
   setAgyApproveAll?(on: boolean): void;
   getAgyApproveAll?(): boolean;
+  setOpencodeMini?(on: boolean): void;
+  getOpencodeMini?(): boolean;
   getClaudeFullscreen?(): boolean;
   setPromptStyle?(style: string): void;
   getPromptStyle?(): string;
@@ -215,6 +227,7 @@ interface AndroidBridgeApi {
   getLostSessions?(): string;
   forgetLostSessions?(): void;
   exitApp(): void;
+  pageReady?(): void;
 }
 
 declare global {
@@ -258,6 +271,8 @@ class AndroidHostBridge implements Bridge {
   setClaudeFullscreen(on: boolean) { this.api.setClaudeFullscreen?.(on); }
   setAgyApproveAll(on: boolean) { this.api.setAgyApproveAll?.(on); }
   async getAgyApproveAll() { return this.api.getAgyApproveAll?.() ?? false; }
+  setOpencodeMini(on: boolean) { this.api.setOpencodeMini?.(on); }
+  async getOpencodeMini() { return this.api.getOpencodeMini?.() ?? false; }
   async getClaudeFullscreen() { return this.api.getClaudeFullscreen?.() ?? false; }
   setPromptStyle(style: string) { this.api.setPromptStyle?.(style); }
   async getPromptStyle() { return this.api.getPromptStyle?.() ?? 'powerline'; }
@@ -309,6 +324,7 @@ class AndroidHostBridge implements Bridge {
   }
   forgetLostSessions() { this.api.forgetLostSessions?.(); }
   exitApp() { this.api.exitApp(); }
+  pageReady() { this.api.pageReady?.(); }
 }
 
 /** Development bridge: talks JSON over a WebSocket to dev/bridge-server.mjs (real bash via node-pty). */
@@ -405,6 +421,8 @@ class DevBridge implements Bridge {
   setClaudeFullscreen() {}
   setAgyApproveAll() {}
   async getAgyApproveAll() { return false; }
+  setOpencodeMini() {}
+  async getOpencodeMini() { return false; }
   async getClaudeFullscreen() { return false; }
   setPromptStyle(style: string) {
     try { localStorage.setItem('promptStyle', style); } catch { /* storage unavailable */ }
@@ -436,6 +454,7 @@ class DevBridge implements Bridge {
   }
   forgetLostSessions() {}
   exitApp() {}
+  pageReady() {}
 }
 
 export function createBridge(events: BridgeEvents): Bridge {
@@ -453,6 +472,7 @@ export function createBridge(events: BridgeEvents): Bridge {
     onInsets: (t: number, b: number, k: boolean, s: boolean, l?: number, r?: number, f?: boolean) => events.onInsets(t, b, k, s, l, r, f),
     onKeyboardReleased: () => events.onKeyboardReleased(),
     onOpenSession: (id: string) => events.onOpenSession(id),
+    onCatchUp: (on: boolean) => events.onCatchUp?.(on),
   };
   if (window.AndroidBridge) return new AndroidHostBridge(window.AndroidBridge);
   const port = new URLSearchParams(location.search).get('bridge') ?? '7681';

@@ -6,10 +6,36 @@ import { isAgentKind, type Bridge, type SessionKind } from '../bridge';
 
 /** A command line that starts a coding agent. */
 const AGENT_CMD = /^(agy|claude|codex|opencode)$/;
+/**
+ * What follows an agent's name when the program isn't its chat screen: `opencode auth login`,
+ * `claude mcp list`, `codex login`, `--version` … They print their own prompts and lists, so
+ * they get the ordinary terminal layout (the chat layout left their last lines under the keyboard).
+ */
+const NOT_A_CHAT: Record<string, RegExp> = {
+  opencode: /^(auth|providers|run|models|serve|web|upgrade|uninstall|export|import|stats|github|mcp|agent|session|debug|completion|version|help|-v|--version|-h|--help)$/,
+  claude: /^(mcp|config|update|doctor|install|migrate-installer|setup-token|plugin|plugins|-v|--version|-h|--help|-p|--print)$/,
+  codex: /^(login|logout|exec|e|mcp|mcp-server|proto|completion|apply|a|cloud|-V|--version|-h|--help)$/,
+  agy: /^(plugin|plugins|version|help|-v|--version|-h|--help|-p|--print)$/,
+};
+/** [cmd] (with [sub], the word after it) opens an agent's chat screen. */
+function startsChat(cmd: string, sub: string): boolean {
+  return AGENT_CMD.test(cmd) && !NOT_A_CHAT[cmd]?.test(sub);
+}
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
 import { LineEditor, type Pos } from './lineedit';
 
 const RAW_KEEP = 64 * 1024;
+
+/** The output starts redrawing a live region in place: a cursor-up or an erase-below (CSI n A, CSI n J). */
+function startsRedraw(d: Uint8Array): boolean {
+  for (let i = 0; i + 2 < d.length; i++) {
+    if (d[i] !== 0x1b || d[i + 1] !== 0x5b) continue;
+    let j = i + 2;
+    while (j < d.length && d[j] >= 0x30 && d[j] <= 0x39) j++;
+    if (j < d.length && (d[j] === 0x41 || d[j] === 0x4a)) return true;
+  }
+  return false;
+}
 
 /** '#14161f' → 'rgb:1414/1616/1f1f' (the format xterm uses in colour reports). */
 function xtermRgb(hex: string): string {
@@ -218,7 +244,7 @@ export class TerminalSession {
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
-        if (AGENT_CMD.test(args[0] ?? '')) {
+        if (startsChat(args[0] ?? '', args[1] ?? '')) {
           this.renderer.anchorBottom = true;
           this.agent = args[0];
           this.onMeta?.(); // (the home screen's card shows the agent's signed-in account)
@@ -312,6 +338,8 @@ export class TerminalSession {
 
   write(data: Uint8Array) {
     if (this.kind === 'agy' || this.agent === 'agy') this.spotAccount(data);
+    // an agent starting to redraw its live part: drawn once it's whole (see BanglaRenderer.settle)
+    if (this.renderer.anchorBottom && !this.replaying && startsRedraw(data)) this.renderer.settle();
     this.raw.push(data);
     this.rawSize += data.length;
     while (this.rawSize > RAW_KEEP && this.raw.length > 1) this.rawSize -= this.raw.shift()!.length;
@@ -403,7 +431,10 @@ export class TerminalSession {
     }
     if (rest.length > 1 && rest[0] === '\x1b') return; // arrow keys and other sequences
     for (const ch of rest) {
-      if (ch === '\r' && /^(agy|claude|codex|opencode)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
+      if (ch === '\r') {
+        const w = /^(\S+)(?:\s+(\S+))?/.exec(this.lineBuf.trim());
+        if (w && startsChat(w[1], w[2] ?? '')) this.renderer.anchorBottom = true;
+      }
       if (ch === '\r') this.commitLine();
       else if (ch === '\x7f' || ch === '\b') this.lineBuf = Array.from(this.lineBuf).slice(0, -1).join('');
       else if (ch === '\x03' || ch === '\x15' || ch === '\x1b') this.lineBuf = '';
@@ -872,6 +903,33 @@ export class TerminalSession {
   }
 
   /**
+   * The app was out of sight and what its sessions printed meanwhile comes in one go (the
+   * bridge's onCatchUp): drawn once when it's all in, not flickering through the pieces.
+   */
+  private catching = false;
+  private catchTimer = 0;
+  catchUp(on: boolean) {
+    if (on) {
+      this.catching = true;
+      this.renderer.paused = true;
+      clearTimeout(this.catchTimer);
+      this.catchTimer = window.setTimeout(() => this.endCatchUp(), 4000); // (in case the end never comes)
+      return;
+    }
+    // the last piece may still be parsed: after it
+    this.term.write('', () => this.endCatchUp());
+  }
+  private endCatchUp() {
+    if (!this.catching) return;
+    this.catching = false;
+    clearTimeout(this.catchTimer);
+    if (this.replaying) return; // a replay's own end draws
+    this.renderer.paused = false;
+    this.renderer.suppressReveal = true; // old output: no fade-in
+    this.renderer.schedule();
+  }
+
+  /**
    * After a restored session's saved output has been replayed (the service keeps only its
    * last 512 KB, which may have lost the escapes that turned these modes on): turn on what
    * the replay didn't. Not before it — a replay that starts on the shell and then enters
@@ -913,9 +971,12 @@ export class TerminalSession {
       if (cur === '0' && this.renderer.cursorVisible && !seen(25)) seq += '\x1b[?25l';
       if (mouseMode[mouse] && m.mouseTrackingMode === 'none' && !seen(9, 1000, 1002, 1003)) seq += `\x1b[?${mouseMode[mouse]}h\x1b[?1006h`;
       if (seq) this.term.write(seq);
-      if (lostAlt && this.alive) {
-        // its screen wasn't in the replay: a size change makes the program draw it again
+      // Its screen wasn't in the replay (lostAlt), or an agent's live part — drawn by moves
+      // relative to the cursor (up, erase) — starts in the middle of the saved output and may be
+      // left half drawn (its input box gone): a size change makes the program draw it all again.
+      if ((lostAlt || this.agent) && this.alive) {
         const { cols, rows } = this.term;
+        if (!lostAlt) this.renderer.holdForRedraw(700, 90); // (not its steps in between)
         this.bridge.resize(this.id, cols, Math.max(4, rows - 1));
         window.setTimeout(() => this.bridge.resize(this.id, this.term.cols, this.term.rows), 150);
       }
@@ -925,6 +986,7 @@ export class TerminalSession {
   dispose() {
     clearTimeout(this.resizeTimer);
     clearTimeout(this.readerFrame);
+    clearTimeout(this.catchTimer);
     this.renderer.dispose();
     try {
       localStorage.removeItem(`modes:${this.id}`);
