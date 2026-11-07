@@ -662,6 +662,9 @@ class UbuntuManager private constructor(private val context: Context) {
             // a program printed, e.g. `cat` of a downloaded file)
             "ANTICODE_LINK_TOKEN=$linkToken",
             timeZoneEnv(), // the phone's time, not UTC (the prompt's clock, `date`, logs)
+            // glibc gives every busy thread its own malloc arena (up to 8 per core), each
+            // holding on to freed memory: two are plenty on a phone, and use far less of it
+            "MALLOC_ARENA_MAX=2",
         )
         // Claude Code's full-screen view keeps its own scrollback: every swipe is a wheel event
         // it answers by redrawing the whole screen — slow under proot on a phone. Its classic

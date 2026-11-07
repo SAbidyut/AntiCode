@@ -26,6 +26,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.content.ComponentCallbacks2
 import android.util.Base64
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
@@ -80,7 +81,28 @@ class MainActivity : ComponentActivity() {
 
     private fun queue(id: String, data: ByteArray, len: Int) {
         synchronized(pendingLock) {
-            pending.getOrPut(id) { ByteArrayOutputStream() }.write(data, 0, len)
+            // the page was let go: what's printed now is in the session's saved output, which
+            // the page gets when it's loaded again
+            if (dropOutput) return
+            val buf = pending.getOrPut(id) { ByteArrayOutputStream() }
+            buf.write(data, 0, len)
+            if (outOfSight) {
+                if (buf.size() > HOLD_MAX) {
+                    // a lot printed while away: no point handing all of it over — the page
+                    // starts afresh with the saved output instead
+                    dropOutput = true
+                    pending.clear()
+                    main.post { releasePage() }
+                    return
+                }
+                // a question for the terminal (where is the cursor, what are you): the program
+                // may wait for the answer — that goes to the page now
+                if (!flushScheduled && asksTerminal(data, len)) {
+                    flushScheduled = true
+                    main.post(::flush)
+                }
+                return
+            }
             if (!flushScheduled) {
                 flushScheduled = true
                 // the echo of a key (nothing sent for a frame): right away; a stream of output
@@ -92,6 +114,96 @@ class MainActivity : ComponentActivity() {
     }
 
     @Volatile private var lastFlush = 0L
+
+    // ---------------------------------------------------------------- out of sight
+    // In the background the page draws nothing and the system slows its timers down to about
+    // once a second, so output handed to it then piled up in the page (megabytes while an
+    // agent worked away) faster than it could take it in — memory the rest of the phone was
+    // short of. Now the output waits here and the page gets it in one go when the app is
+    // back. Away for long, a lot printed meanwhile, or the phone short of memory: the page is
+    // let go altogether (its memory goes back to the phone) and loads again when the app is
+    // back, replaying each session's saved output, as after Android rebuilt the app's screen.
+    /** The app is in the background (between onStop and onStart). */
+    @Volatile private var outOfSight = false
+    /** The page was let go (or is being): output isn't kept for it. (under pendingLock) */
+    private var dropOutput = false
+    /** The page is about:blank now: load it again when the app is back. */
+    private var pageReleased = false
+    private val releaseWhenAway = Runnable { if (outOfSight) releasePage() }
+
+    /**
+     * A query the terminal answers (CSI … n / c / t, CSI > q, CSI ? u, CSI … $ p, OSC …;?,
+     * DCS): device status, cursor position, attributes, colours, modes.
+     */
+    private fun asksTerminal(b: ByteArray, n: Int): Boolean {
+        var i = 0
+        while (i < n - 1) {
+            if (b[i] != 0x1b.toByte()) { i++; continue }
+            when (b[i + 1].toInt().toChar()) {
+                'P' -> return true
+                ']' -> {
+                    var j = i + 2
+                    while (j < n - 1 && j < i + 40 && b[j] != 0x07.toByte() && b[j] != 0x1b.toByte()) {
+                        if (b[j] == ';'.code.toByte() && b[j + 1] == '?'.code.toByte()) return true
+                        j++
+                    }
+                }
+                '[' -> {
+                    var j = i + 2
+                    val first = if (j < n) b[j].toInt().toChar() else ' '
+                    while (j < n && j < i + 24 && b[j] in 0x20..0x3f) j++
+                    if (j < n) {
+                        val prev = b[j - 1].toInt().toChar()
+                        when (b[j].toInt().toChar()) {
+                            'n', 'c', 't' -> return true
+                            'q' -> if (first == '>') return true
+                            'u' -> if (first == '?') return true
+                            'p' -> if (prev == '$') return true
+                        }
+                    }
+                }
+            }
+            i++
+        }
+        return false
+    }
+
+    /** Lets the page go (the app out of sight): its memory goes back to the phone. */
+    private fun releasePage() {
+        if (pageReleased || rebuilding || web.url == null) {
+            synchronized(pendingLock) { if (!pageReleased) dropOutput = false }
+            return
+        }
+        Log.i("AgyWeb", "releasing the page while out of sight")
+        // (the sessions keep their output; the new page asks for it)
+        service?.let { svc -> for (s in svc.sessions.values) s.attach(null) }
+        synchronized(pendingLock) {
+            dropOutput = true
+            pending.clear()
+        }
+        pageReleased = true
+        if (outOfSight) web.loadUrl("about:blank") else reloadPage()
+    }
+
+    /** Back in sight after the page was let go: the UI starts again (sessions re-attach). */
+    private fun reloadPage() {
+        pageReleased = false
+        synchronized(pendingLock) {
+            dropOutput = false
+            pending.clear()
+        }
+        lastInsets = ""
+        web.loadUrl(START_URL)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // the phone is short of memory while we're in the background: give the page's back
+        @Suppress("DEPRECATION")
+        val low = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
+            level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
+        if (outOfSight && low) main.post { if (outOfSight) releasePage() }
+    }
 
     private fun flush() {
         lastFlush = SystemClock.uptimeMillis()
@@ -154,7 +266,9 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        browser = InAppBrowser(this).apply { warmup() }
+        // (no Custom Tabs warm-up: it started the whole browser in the background on every
+        // launch — a hundred MB or more — for a page that's rarely opened; it opens without)
+        browser = InAppBrowser(this)
 
         web = TermWebView(this)
         web.setBackgroundColor(Color.parseColor(BG))
@@ -442,6 +556,16 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         TermSession.paceOutput = true
         service?.uiVisible = true
+        main.removeCallbacks(releaseWhenAway)
+        synchronized(pendingLock) {
+            outOfSight = false
+            // what was printed while away, in one go
+            if (!dropOutput && pending.isNotEmpty() && !flushScheduled) {
+                flushScheduled = true
+                main.post(::flush)
+            }
+        }
+        if (pageReleased) reloadPage()
     }
 
     // ---------------------------------------------------------------- "task finished" taps
@@ -466,7 +590,7 @@ class MainActivity : ComponentActivity() {
     /** Show the session whose notification was tapped (the page keeps it if still starting). */
     private fun deliverOpenSession() {
         val id = openSessionId ?: return
-        if (web.url == null) return // delivered from onPageFinished
+        if (web.url == null || pageReleased) return // delivered from onPageFinished
         openSessionId = null
         service?.clearFinished(id)
         js("__native.onOpenSession(${JSONObject.quote(id)})")
@@ -476,6 +600,10 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         TermSession.paceOutput = false
         service?.uiVisible = false
+        outOfSight = true
+        main.removeCallbacks(releaseWhenAway)
+        // (not in the self test, which looks at the page while the screen may be off)
+        if (!selftestEnabled()) main.postDelayed(releaseWhenAway, RELEASE_AFTER_MS)
         // Opening the app again must not pop the keyboard up by itself: let go of the
         // terminal's keyboard focus (a tap on the terminal brings it back).
         if (keys.hasFocus()) {
@@ -956,6 +1084,8 @@ class MainActivity : ComponentActivity() {
             main.post {
                 flush() // the history first, then what depends on it (modes, exit banner)
                 js("__native.onReplayed('$id')")
+                // (a password asked for while the page was gone: the new page hides it too)
+                if (s.hiddenInput) js("__native.onHiddenInput && __native.onHiddenInput('$id', true)")
                 if (!s.alive) js("__native.onExit('$id', ${s.exitCode})")
             }
         }
@@ -1263,6 +1393,10 @@ class MainActivity : ComponentActivity() {
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
+        /** Output kept for the page per session while away (more: the page starts afresh). */
+        private const val HOLD_MAX = 1024 * 1024
+        /** Away this long: the page is let go (loaded again when the app is back). */
+        private const val RELEASE_AFTER_MS = 3 * 60_000L
         /** The most the clipboard is given at once (the system refuses ~1 MB and more). */
         private const val MAX_CLIP = 300_000
         private const val BG = "#0b0d12"

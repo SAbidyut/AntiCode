@@ -186,6 +186,8 @@ interface Row {
 const OVERSCAN = 10;
 /** The keyboard pan goes where the cursor was for most (60 %) of this long (ms). */
 const PAN_WINDOW_MS = 500;
+/** The cursor stops blinking this long after it last moved (see armBlinkRest). */
+const BLINK_FOR_MS = 12_000;
 /** How long a moment's miss of an agent's input box is bridged (no layout flip-flop). */
 const BOX_MEMORY_MS = 400;
 
@@ -223,6 +225,21 @@ export class BanglaRenderer {
   private lastCursorLine = -1;
   private cursorOnTop = false;
   private typingTimer = 0;
+  /**
+   * The cursor blinks for a while after it last moved, then stays solid (as GTK terminals
+   * do): an endless blink kept the page drawing 60 frames a second while nothing happened —
+   * CPU, GPU and battery the rest of the phone could use.
+   */
+  private restTimer = 0;
+  private armBlinkRest() {
+    this.cursorEl.classList.remove('rest');
+    this.dockCursor?.classList.remove('rest');
+    clearTimeout(this.restTimer);
+    this.restTimer = window.setTimeout(() => {
+      this.cursorEl.classList.add('rest');
+      this.dockCursor?.classList.add('rest');
+    }, BLINK_FOR_MS);
+  }
   private animBaseY = 0;
   // ---- right-aligned labels (the prompt's clock): drawn by us at the right edge of a
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
@@ -603,6 +620,7 @@ export class BanglaRenderer {
     clearTimeout(this.frame);
     this.frame = 0;
     clearTimeout(this.typingTimer);
+    clearTimeout(this.restTimer);
     clearTimeout(this.panTimer);
     this.trimMarker?.dispose();
     this.trimMarker = null;
@@ -1549,7 +1567,9 @@ export class BanglaRenderer {
         this.cursorEl.classList.add('moving');
         clearTimeout(this.typingTimer);
         this.typingTimer = window.setTimeout(() => this.cursorEl.classList.remove('moving'), 600);
+        this.armBlinkRest();
       }
+      if (this.focused && !this.cursorEl.classList.contains('focused')) this.armBlinkRest();
       this.cursorEl.classList.toggle('focused', this.focused);
     }
     this.drawSelection(rowY, first, last);
@@ -1620,6 +1640,7 @@ export class BanglaRenderer {
     if (inBox) {
       c.style.transform = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${(cursorLine - boxTop) * lh}px)`;
       c.classList.toggle('focused', this.focused);
+      c.classList.toggle('rest', this.cursorEl.classList.contains('rest'));
     }
     this.dockEl.hidden = false;
     // (the "back to the bottom" button sits above it)
