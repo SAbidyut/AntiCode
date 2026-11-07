@@ -498,7 +498,8 @@ class UbuntuManager private constructor(private val context: Context) {
         write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
         for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "codex-setup", "codex-start",
-                "opencode-setup", "opencode-start", "agy-autocomplete", "anticode-account")) {
+                "opencode-setup", "opencode-start", "agy-autocomplete", "anticode-account",
+                "gemini-key", "gemini-mode", "claude-gemini", "gemini-proxy.py")) {
             write("usr/local/bin/$script", asset(script), exec)
         }
         write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)

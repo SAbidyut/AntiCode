@@ -491,6 +491,14 @@ opencode() {
 }
 claude() {
   [ -t 1 ] && printf '\e]7770;exec;%s;claude;%s\a' "$__agy_tok" "${1//[[:cntrl:];]/}"
+  # Settings → "Claude Code: use Gemini models": answered by Gemini (not Claude Code's own
+  # subcommands: `claude mcp …`, `claude --version`)
+  if [ -f "$HOME/.config/agy-terminal/claude-gemini" ]; then
+    case ${1-} in
+      mcp|config|update|doctor|install|migrate-installer|setup-token|plugin|plugins|-v|--version|-h|--help) ;;
+      *) command /usr/local/bin/claude-gemini "$@"; return ;;
+    esac
+  fi
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account claude 2>/dev/null)
   if [ -n "$d" ]; then CLAUDE_CONFIG_DIR=$d command claude "$@"; else command claude "$@"; fi

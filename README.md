@@ -46,6 +46,25 @@
 অ্যাপ ব্যাকগ্রাউন্ডে গেলে টার্মিনালের স্ক্রিন কোনো কাজ করে না (আউটপুট অ্যাপের ভিতরে জমা থাকে), ফিরে এলে সব একবারে আঁকা হয় — ঝিলিক ছাড়া।
 শুধু অনেক আউটপুট জমলে বা Android অ্যাপটা বন্ধ করে দেওয়ার মুখে থাকলে স্ক্রিনটা ছেড়ে দেয় (মেমোরি অন্য অ্যাপ পায়); ফিরে এলে সেশনগুলো আগের মতো আবার দেখা যায়।
 
+## Claude Code এ Gemini model
+
+Google AI Studio এর API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) দিয়ে Claude Code এর ভিতরেই Gemini এর সব model চালানো যায়:
+
+```bash
+gemini-key set        # key বসান (লেখা দেখা যায় না); নতুন key দিলে পুরোনোটা বদলে যায়
+claude-gemini         # Claude Code, উত্তর দেয় Gemini
+gemini-mode on        # Claude Code টাইল আর `claude` সবসময় Gemini দিয়ে চলবে (off = আগের মতো Claude অ্যাকাউন্ট)
+```
+
+Claude Code এর ভিতরে `/model` দিলে Gemini এর সব model এর তালিকা আসে (`anthropic/` লেখা নামে — Claude Code এর নিয়মের কারণে);
+Opus / Sonnet / Haiku মানে Gemini এর সবচেয়ে নতুন Pro / Flash / Flash-Lite। `gemini-key remove` key মুছে দেয়; `gemini-key check` key চলছে কিনা দেখে।
+Key শুধু ফোনে `~/.config/agy-terminal/gemini-api-key` এ থাকে (শুধু আপনি পড়তে পারেন)।
+
+ভিতরে একটা ছোট স্থানীয় অনুবাদক (`gemini-proxy.py`, Python লাগে — প্রথমবার নিজে ইনস্টল হয়, ~২৫MB) Claude Code এর অনুরোধ Gemini API তে বদলে দেয়;
+সে শুধু `127.0.0.1` এ চলে, একটা গোপন টোকেন চায় (ফোনের অন্য অ্যাপ আপনার key ব্যবহার করতে পারে না), আর Claude Code বন্ধ হলে নিজেও বন্ধ হয়।
+সতর্কতা: Anthropic Claude Code কে Claude ছাড়া অন্য model এ চালানো সমর্থন করে না — কাজ করে, তবে কিছু জায়গায় খুঁত থাকতে পারে।
+পরীক্ষা: `python3 scripts/gemini-proxy-test.py --claude` (নকল Gemini সার্ভার দিয়ে; key বা নেটওয়ার্ক লাগে না)।
+
 ## Mac/PC এর রিমোট কন্ট্রোল
 
 ### Antigravity

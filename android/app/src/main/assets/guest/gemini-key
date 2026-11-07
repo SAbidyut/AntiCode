@@ -1,0 +1,79 @@
+#!/bin/bash
+# AntiCode: the Google AI Studio (Gemini) API key that "Claude Code with Gemini" uses.
+#   gemini-key            show whether a key is saved (never the whole key); asks for one if not
+#   gemini-key set [KEY]  save a new key — asked hidden if not given (a new key replaces the old)
+#   gemini-key check      ask Google whether the saved key works
+#   gemini-key remove     forget the key
+# The key is kept only here, in ~/.config/agy-terminal/gemini-api-key (readable by you alone);
+# the app's Settings → "Gemini API key" writes the same file. Get a key at aistudio.google.com/apikey.
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+dir="$HOME/.config/agy-terminal"
+file="$dir/gemini-api-key"
+api="${GEMINI_API_BASE:-https://generativelanguage.googleapis.com/v1beta}"
+
+masked() {  # AIza…Xy12
+  local k=$1
+  if [ ${#k} -le 10 ]; then printf '%s' '…'; else printf '%s…%s' "${k:0:4}" "${k: -4}"; fi
+}
+current() { [ -r "$file" ] && grep -v '^[[:space:]]*#' "$file" | grep -m1 . | tr -d '[:space:]'; }
+
+check_key() {  # 0 works, 1 refused, 2 can't tell (offline)
+  local code
+  code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' -H "x-goog-api-key: $1" "$api/models?pageSize=1" 2>/dev/null)
+  case $code in
+    200) return 0 ;;
+    400|401|403) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+save_key() {
+  local k=$1
+  k=$(printf '%s' "$k" | tr -d '[:space:]"'"'")
+  if [ -z "$k" ] || [ ${#k} -lt 20 ] || [ ${#k} -gt 200 ] || [[ $k == *[!A-Za-z0-9_.-]* ]]; then
+    echo -e "${R}That doesn't look like a Gemini API key (it is one long word of letters, digits, - and _).${N}" >&2
+    return 1
+  fi
+  mkdir -p "$dir" && chmod 700 "$dir"
+  ( umask 077; printf '%s\n' "$k" > "$file.new" ) && mv "$file.new" "$file" && chmod 600 "$file" || {
+    echo -e "${R}Could not save the key.${N}" >&2; return 1; }
+  echo -e "${G}✓ Key saved: $(masked "$k")${N}"
+  if command -v curl >/dev/null 2>&1; then
+    check_key "$k"
+    case $? in
+      0) echo -e "${G}✓ Google accepts it.${N}" ;;
+      1) echo -e "${Y}! Google says this key isn't valid — check it at aistudio.google.com/apikey (it is saved anyway; 'gemini-key set' replaces it).${N}" ;;
+      *) echo -e "${Y}  (Couldn't reach Google to check it — are you online?)${N}" ;;
+    esac
+  fi
+}
+
+ask_key() {
+  local k
+  echo -e "${Y}Paste your Google AI Studio API key (it stays hidden), then Enter:${N}"
+  read -rsp "Gemini API key: " k; echo
+  [ -n "$k" ] || { echo "Nothing entered."; return 1; }
+  save_key "$k"
+}
+
+case ${1:-status} in
+  set) if [ -n "$2" ]; then save_key "$2"; else ask_key; fi ;;
+  check)
+    k=$(current); [ -n "$k" ] || { echo "No key saved — run: gemini-key set"; exit 1; }
+    check_key "$k"
+    case $? in
+      0) echo -e "${G}✓ $(masked "$k") works.${N}" ;;
+      1) echo -e "${R}Google refuses $(masked "$k") — run: gemini-key set${N}"; exit 1 ;;
+      *) echo -e "${Y}Couldn't reach Google to check.${N}"; exit 2 ;;
+    esac ;;
+  remove|rm|delete) rm -f "$file" && echo "Key removed." ;;
+  status|"")
+    k=$(current)
+    if [ -n "$k" ]; then
+      echo -e "${G}A Gemini key is saved: $(masked "$k")${N}   (replace it: gemini-key set · forget it: gemini-key remove)"
+    else
+      echo "No Gemini key saved yet."
+      [ -t 0 ] && ask_key
+    fi ;;
+  *) echo "Usage: gemini-key [set [KEY] | check | remove]"; exit 2 ;;
+esac

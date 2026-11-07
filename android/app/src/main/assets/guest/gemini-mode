@@ -1,0 +1,22 @@
+#!/bin/bash
+# AntiCode: should the Claude Code button (and `claude` in a shell) use Gemini models?
+#   gemini-mode on       yes — Claude Code is answered by Gemini (needs a key: gemini-key set)
+#   gemini-mode off      no — Claude Code as usual, with your Claude account
+#   gemini-mode          say which it is
+# `claude-gemini` starts Claude Code on Gemini whatever this says.
+G='\033[1;32m'; Y='\033[1;33m'; N='\033[0m'
+dir="$HOME/.config/agy-terminal"
+flag="$dir/claude-gemini"
+case ${1:-status} in
+  on)
+    mkdir -p "$dir" && printf '%s\n' "Claude Code is answered by Gemini models (gemini-mode off turns it off)." > "$flag"
+    echo -e "${G}✓ Claude Code now uses Gemini models${N} (new Claude Code tabs, and \`claude\` in a shell)."
+    grep -qs '[^[:space:]]' "$dir/gemini-api-key" || echo -e "${Y}  It still needs a key: run  gemini-key set${N}" ;;
+  off)
+    rm -f "$flag"
+    echo -e "${G}✓ Claude Code uses your Claude account again.${N}" ;;
+  status|"")
+    if [ -f "$flag" ]; then echo "Claude Code: Gemini models (gemini-mode off to go back)"
+    else echo "Claude Code: your Claude account (gemini-mode on for Gemini models)"; fi ;;
+  *) echo "Usage: gemini-mode [on|off]"; exit 2 ;;
+esac

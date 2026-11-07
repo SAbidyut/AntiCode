@@ -1,0 +1,65 @@
+#!/bin/bash
+# AntiCode: Claude Code with Google Gemini models.
+#   claude-gemini [claude arguments…]
+# Claude Code talks to a small local translator (gemini-proxy.py) that turns its requests into
+# Gemini API calls, using the key saved by `gemini-key` (Settings → "Gemini API key" too). Inside
+# Claude Code, /model lists every Gemini model; Opus / Sonnet / Haiku mean Gemini Pro / Flash /
+# Flash-Lite. The translator lives as long as this Claude Code does. Anthropic does not support
+# running Claude Code on non-Claude models; it works, but expect rough edges.
+export PATH="$HOME/.local/bin:$PATH"
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+keyfile="$HOME/.config/agy-terminal/gemini-api-key"
+proxy=/usr/local/bin/gemini-proxy.py
+
+# 1. a key
+if ! grep -qs '[^[:space:]]' "$keyfile"; then
+  echo -e "${Y}Claude Code with Gemini needs a Google AI Studio API key (aistudio.google.com/apikey).${N}"
+  /usr/local/bin/gemini-key set || exit 1
+fi
+# 2. Claude Code itself, and Python for the translator
+command -v claude >/dev/null 2>&1 || /usr/local/bin/claude-setup --auto || exit 1
+if ! command -v python3 >/dev/null 2>&1; then
+  echo -e "${G}▸ Installing Python (for the Gemini translator, ~25 MB, once)${N}"
+  /usr/local/bin/term-setup --auto
+  DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 \
+    || { echo -e "${R}Installing Python failed — check the connection and run claude-gemini again.${N}"; exit 1; }
+fi
+
+# 3. the translator: its own secret token (no other app on the phone can use your key through
+#    it), a free port of its own, gone when Claude Code ends
+tok=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+work=$(mktemp -d /tmp/gemini-proxy.XXXXXX) || exit 1
+GEMINI_PROXY_TOKEN=$tok GEMINI_KEY_FILE=$keyfile python3 "$proxy" --port-file "$work/port" 2>"$work/log" &
+pid=$!
+cleanup() { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; rm -rf "$work"; }
+trap cleanup EXIT
+trap : INT   # Ctrl-C stops Claude Code's work, not this launcher
+for _ in $(seq 1 100); do [ -s "$work/port" ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+if [ ! -s "$work/port" ]; then
+  echo -e "${R}The Gemini translator did not start:${N}"; cat "$work/log" 2>/dev/null; exit 1
+fi
+
+# 4. Claude Code, pointed at it
+export ANTHROPIC_BASE_URL="http://127.0.0.1:$(cat "$work/port")"
+export ANTHROPIC_AUTH_TOKEN=$tok
+unset ANTHROPIC_API_KEY ANTHROPIC_MODEL
+# a Claude Code folder of its own: its sign-in (or none), its theme, its history stay apart
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude-gemini}"
+# /model lists what the translator offers (ids with "anthropic/" in front, which Claude Code needs
+# to show them); Opus / Sonnet / Haiku are Gemini's newest Pro / Flash / Flash-Lite
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+export ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic/gemini-pro-latest
+export ANTHROPIC_DEFAULT_SONNET_MODEL=anthropic/gemini-flash-latest
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=anthropic/gemini-flash-lite-latest
+export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="Gemini Pro (newest)"
+export ANTHROPIC_DEFAULT_SONNET_MODEL_NAME="Gemini Flash (newest)"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="Gemini Flash-Lite (newest)"
+# Gemini's window is 1M tokens; what Claude Code sends is Anthropic-shaped
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
+export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1   # (Google doesn't know Anthropic's betas)
+export DISABLE_PROMPT_CACHING=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 # (no calls to Anthropic from this mode)
+# (the local call must not go through a web proxy)
+export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
+claude "$@"
