@@ -133,10 +133,16 @@ class TermSession(
             off = len - RING_SIZE
             len = RING_SIZE
         }
-        for (i in 0 until len) {
-            ring[(ringStart + ringLen) % RING_SIZE] = b[off + i]
-            if (ringLen < RING_SIZE) ringLen++ else ringStart = (ringStart + 1) % RING_SIZE
-        }
+        // (in at most two block copies, not byte by byte: this runs for every read)
+        val end = (ringStart + ringLen) % RING_SIZE
+        val first = minOf(len, RING_SIZE - end)
+        System.arraycopy(b, off, ring, end, first)
+        if (len > first) System.arraycopy(b, off + first, ring, 0, len - first)
+        val total = ringLen + len
+        if (total > RING_SIZE) {
+            ringStart = (ringStart + total - RING_SIZE) % RING_SIZE
+            ringLen = RING_SIZE
+        } else ringLen = total
     }
 
     /**
@@ -151,7 +157,9 @@ class TermSession(
         }
         if (withSnapshot != null) {
             val snap = ByteArray(ringLen)
-            for (i in 0 until ringLen) snap[i] = ring[(ringStart + i) % RING_SIZE]
+            val first = minOf(ringLen, RING_SIZE - ringStart)
+            System.arraycopy(ring, ringStart, snap, 0, first)
+            if (ringLen > first) System.arraycopy(ring, 0, snap, first, ringLen - first)
             withSnapshot(snap)
         }
     }
