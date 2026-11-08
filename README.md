@@ -81,7 +81,7 @@ openrouter-mode on     # Claude Code টাইল আর `claude` সবসম�
 সুইচে: `gemini-mode on` আর `openrouter-mode on` একটা আরেকটাকে বদলে দেয়। অন্য model এ Claude Code ঠিকমতো না-ও চলতে পারে (Claude এর জন্যই বানানো)।
 পরীক্ষা: `python3 scripts/openrouter-proxy-test.py --claude`।
 
-ভুল command লিখলে (`claude-geminiha`) ঠিক নামটা বলে দেয়: `Did you mean: claude-gemini ?`
+ভুল command লিখলে (`claude-geminiha`) লেখার সময়ই নাম লাল রঙে দেখায় (ঠিক command সবুজ; আর্গুমেন্টের ফাইল-যাচাই বন্ধ, তাই ধীর হয় না), আর Enter দিলে ঠিক নামটা বলে দেয়: `Did you mean: claude-gemini ?`
 
 ## Mac/PC এর রিমোট কন্ট্রোল
 

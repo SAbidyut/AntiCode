@@ -548,9 +548,19 @@ if [[ ${BLE_VERSION-} ]]; then
   # - the history search is cheap and gives way to the next key: the suggestion shows with
   #   the letter typed, not a moment later as a separate redraw
   bleopt complete_auto_delay=30
-  # - no file checks for every word typed (a stat per word, per key; on /storage each is
-  #   slow), and no second redraw when they ran late
-  bleopt highlight_filename=
+  # - no file checks for the arguments typed (a stat per word, per key; on /storage each is
+  #   slow), and no second redraw when they ran late. The command word is looked up all the
+  #   same (one cheap check, kept for the line), so a mistyped command shows in red. ble.sh
+  #   loads its syntax part later and would overwrite this: it is done once that has loaded.
+  function anticode/ble-highlight {
+    function ble/progcolor/highlight-filename.wattr {
+      local p0=$1 p1=$2
+      ((p0<p1&&wtype==_ble_ctx_CMDI)) || return 0
+      ble/syntax:bash/simple-word/is-simple "${text:p0:p1-p0}" || return 0
+      ble/progcolor/highlight-filename/.single.wattr "$p0:$p1"
+    }
+  }
+  ble/util/import/eval-after-load lib/core-syntax anticode/ble-highlight 2>/dev/null || anticode/ble-highlight
   bleopt highlight_timeout_sync=20 complete_timeout_auto=800 2>/dev/null
   bleopt complete_menu_style=align-nowrap
   bleopt edit_abell= edit_vbell=       # no beeps or flashes
@@ -562,9 +572,8 @@ if [[ ${BLE_VERSION-} ]]; then
   bleopt canvas_winch_action=redraw-prev
   bleopt prompt_eol_mark=$'\e[38;2;108;112;134m⏎\e[m'
   ble-face auto_complete='fg=#6c7086'
-  # Calm colours. The command word is green as it's typed: with the file checks off it isn't
-  # looked up (its colour would be ble.sh's "brown" — this theme's red, every command looking
-  # wrong), and it doesn't flash red while half typed. A syntax error is soft red text.
+  # Calm colours: a command that exists is green, one that doesn't (a typo) soft red — as it
+  # is half typed too, like in any shell that checks. A syntax error is soft red text.
   ble-face syntax_command='fg=#a6e3a1'
   ble-face command_builtin='fg=#a6e3a1' command_file='fg=#a6e3a1' command_function='fg=#cba6f7'
   ble-face command_alias='fg=#a6e3a1' command_keyword='fg=#89b4fa'
