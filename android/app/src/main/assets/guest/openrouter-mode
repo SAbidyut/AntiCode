@@ -1,0 +1,29 @@
+#!/bin/bash
+# AntiCode: should the Claude Code button (and `claude` in a shell) use OpenRouter models?
+#   openrouter-mode on     yes — Claude Code runs on OpenRouter (needs a key: openrouter-key set)
+#   openrouter-mode off    no — Claude Code as usual, with your Claude account
+#   openrouter-mode        say which it is
+# `claude-openrouter` starts Claude Code on OpenRouter whatever this says. (The same switch as
+# gemini-mode: one at a time.)
+G='\033[1;32m'; Y='\033[1;33m'; N='\033[0m'
+dir="$HOME/.config/agy-terminal"
+flag="$dir/claude-provider"
+now=; [ -r "$flag" ] && read -r now < "$flag"
+[ -f "$dir/claude-gemini" ] && now=gemini   # (set by an earlier version)
+case ${1:-status} in
+  on)
+    mkdir -p "$dir" && rm -f "$dir/claude-gemini" && printf 'openrouter\n' > "$flag"
+    echo -e "${G}✓ Claude Code now uses OpenRouter models${N} (new Claude Code tabs, and \`claude\` in a shell)."
+    grep -qs '[^[:space:]]' "$dir/openrouter-api-key" || echo -e "${Y}  It still needs a key: run  openrouter-key set${N}" ;;
+  off)
+    [ "$now" = openrouter ] && rm -f "$flag"
+    echo -e "${G}✓ Claude Code no longer uses OpenRouter.${N}"
+    [ "$now" = gemini ] && echo "  (It is set to Gemini models: gemini-mode off turns that off.)" ;;
+  status|"")
+    case $now in
+      openrouter) echo "Claude Code: OpenRouter models (openrouter-mode off to go back)" ;;
+      gemini) echo "Claude Code: Gemini models (openrouter-mode on for OpenRouter instead)" ;;
+      *) echo "Claude Code: your Claude account (openrouter-mode on for OpenRouter models)" ;;
+    esac ;;
+  *) echo "Usage: openrouter-mode [on|off]"; exit 2 ;;
+esac

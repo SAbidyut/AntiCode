@@ -8,9 +8,11 @@ if command -v claude >/dev/null 2>&1; then
   printf '\e]7770;exec;%s;claude\a' "${ANTICODE_LINK_TOKEN:-}"
   # the tab's account: one of the extra ones has its own config folder (see anticode-account)
   acct_dir=$(/usr/local/bin/anticode-account claude)
-  if [ -f "$HOME/.config/agy-terminal/claude-gemini" ]; then
-    # Settings → "Claude Code: use Gemini models": the same Claude Code, answered by Gemini
-    /usr/local/bin/claude-gemini
+  # gemini-mode / openrouter-mode: the same Claude Code, answered by Gemini or OpenRouter models
+  prov=; [ -r "$HOME/.config/agy-terminal/claude-provider" ] && read -r prov < "$HOME/.config/agy-terminal/claude-provider"
+  [ -f "$HOME/.config/agy-terminal/claude-gemini" ] && prov=gemini   # (set by an earlier version)
+  if [ "$prov" = gemini ] || [ "$prov" = openrouter ]; then
+    /usr/local/bin/claude-$prov
   elif [ -n "$acct_dir" ]; then CLAUDE_CONFIG_DIR=$acct_dir claude; else claude; fi
 else
   echo "claude was not found — run 'claude-setup' and try again."

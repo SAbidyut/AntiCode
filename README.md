@@ -65,6 +65,24 @@ Key শুধু ফোনে `~/.config/agy-terminal/gemini-api-key` এ থা
 সতর্কতা: Anthropic Claude Code কে Claude ছাড়া অন্য model এ চালানো সমর্থন করে না — কাজ করে, তবে কিছু জায়গায় খুঁত থাকতে পারে।
 পরীক্ষা: `python3 scripts/gemini-proxy-test.py --claude` (নকল Gemini সার্ভার দিয়ে; key বা নেটওয়ার্ক লাগে না)।
 
+## Claude Code এ OpenRouter এর model
+
+[OpenRouter](https://openrouter.ai/keys) এর API key দিয়ে Claude Code এর ভিতরে OpenRouter এর যেকোনো model (যেটা tool চালাতে পারে) চালানো যায়:
+
+```bash
+openrouter-key set     # key বসান (লেখা দেখা যায় না); নতুন key দিলে পুরোনোটা বদলে যায়
+claude-openrouter      # Claude Code, model আসে OpenRouter থেকে
+openrouter-mode on     # Claude Code টাইল আর `claude` সবসময় OpenRouter দিয়ে চলবে (off = আগের মতো)
+```
+
+`/model` এ OpenRouter এর model এর তালিকা আসে (`anthropic/` লেখা নামে — Claude Code এর নিয়মের কারণে); Opus / Sonnet / Haiku মানে OpenRouter এর
+সবচেয়ে নতুন Claude Opus / Sonnet / Haiku। পছন্দের model এর id (যেমন `openai/gpt-5`) `~/.config/agy-terminal/openrouter-models` ফাইলে এক লাইনে একটা করে লিখলে
+সেগুলো তালিকার শুরুতে আসে। `openrouter-key check` key চলছে কিনা দেখে, `openrouter-key remove` মুছে দেয়। Gemini আর OpenRouter একসাথে একটাই `claude-provider`
+সুইচে: `gemini-mode on` আর `openrouter-mode on` একটা আরেকটাকে বদলে দেয়। অন্য model এ Claude Code ঠিকমতো না-ও চলতে পারে (Claude এর জন্যই বানানো)।
+পরীক্ষা: `python3 scripts/openrouter-proxy-test.py --claude`।
+
+ভুল command লিখলে (`claude-geminiha`) ঠিক নামটা বলে দেয়: `Did you mean: claude-gemini ?`
+
 ## Mac/PC এর রিমোট কন্ট্রোল
 
 ### Antigravity

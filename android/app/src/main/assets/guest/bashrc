@@ -440,9 +440,40 @@ command_not_found_handle() {
       type -P "$1" >/dev/null || { printf '%s: still not found after setup — try %s-setup\n' "$1" "$1" >&2; return 127; }
       command "$@"; return ;;
   esac
+  # a slip in one of this app's own commands (claude-geminiha, gemini-ke …): say which was meant
+  __anticode_didyoumean "$1" && return 127
   if [ -x /usr/lib/command-not-found ]; then /usr/lib/command-not-found -- "$1"; return $?; fi
   printf '%s: command not found\n' "$1" >&2
   return 127
+}
+# how many letters two words differ by (Levenshtein)
+__anticode_dist() {
+  local a=$1 b=$2 i j cost
+  local -a prev cur
+  for ((j=0; j<=${#b}; j++)); do prev[j]=$j; done
+  for ((i=1; i<=${#a}; i++)); do
+    cur[0]=$i
+    for ((j=1; j<=${#b}; j++)); do
+      [ "${a:i-1:1}" = "${b:j-1:1}" ] && cost=0 || cost=1
+      cur[j]=$(( prev[j]+1 < cur[j-1]+1 ? prev[j]+1 : cur[j-1]+1 ))
+      (( prev[j-1]+cost < cur[j] )) && cur[j]=$(( prev[j-1]+cost ))
+    done
+    prev=("${cur[@]}")
+  done
+  echo "${prev[${#b}]}"
+}
+# "$1: command not found" and the app's command it looks like, when there is one (returns 1: none)
+__anticode_didyoumean() {
+  local w=${1//_/-} c best= d bd=3
+  [ ${#w} -ge 4 ] || return 1
+  for c in claude-gemini claude-openrouter gemini-key gemini-mode openrouter-key openrouter-mode claude-setup \
+           agy-setup codex-setup opencode-setup term-setup agy-prompt agy-autocomplete setup-storage; do
+    if [[ $w == "$c"* || $c == "$w"* ]]; then best=$c; break; fi
+    d=$(__anticode_dist "$w" "$c")
+    (( d < bd )) && { bd=$d; best=$c; }
+  done
+  [ -n "$best" ] || return 1
+  printf '%s: command not found\nDid you mean: %s ?\n' "$1" "$best" >&2
 }
 # Antigravity counts a Bangla conjunct (ক্ষ) as one character, as Unicode 15.1 does; the shell
 # and other programs (Claude Code too) count its letters. The terminal draws it the program's
@@ -491,12 +522,14 @@ opencode() {
 }
 claude() {
   [ -t 1 ] && printf '\e]7770;exec;%s;claude;%s\a' "$__agy_tok" "${1//[[:cntrl:];]/}"
-  # Settings → "Claude Code: use Gemini models": answered by Gemini (not Claude Code's own
+  # gemini-mode / openrouter-mode: answered by Gemini or OpenRouter models (not Claude Code's own
   # subcommands: `claude mcp …`, `claude --version`)
-  if [ -f "$HOME/.config/agy-terminal/claude-gemini" ]; then
+  local prov=; [ -r "$HOME/.config/agy-terminal/claude-provider" ] && read -r prov < "$HOME/.config/agy-terminal/claude-provider"
+  [ -f "$HOME/.config/agy-terminal/claude-gemini" ] && prov=gemini   # (set by an earlier version)
+  if [ "$prov" = gemini ] || [ "$prov" = openrouter ]; then
     case ${1-} in
       mcp|config|update|doctor|install|migrate-installer|setup-token|plugin|plugins|-v|--version|-h|--help) ;;
-      *) command /usr/local/bin/claude-gemini "$@"; return ;;
+      *) command /usr/local/bin/claude-$prov "$@"; return ;;
     esac
   fi
   local d=
