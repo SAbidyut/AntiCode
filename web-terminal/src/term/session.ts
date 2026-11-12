@@ -47,7 +47,6 @@ export class TerminalSession {
   private raw: Uint8Array[] = [];
   private rawSize = 0;
   onTitle?: () => void;
-  onActivity?: () => void;
   /** A restored session's saved output is being replayed (see beginReplay). */
   private replaying = false;
   /** Mouse reports in SGR form (CSI ? 1006 h); otherwise the classic CSI M bytes. */
@@ -139,7 +138,6 @@ export class TerminalSession {
       this.renderer.scheduleEager();
       this.edit.check();
       if (this.readerOpen) this.scheduleReader();
-      this.onActivity?.();
     });
     this.term.onTitleChange((t) => {
       if (t.trim()) {
@@ -862,6 +860,20 @@ export class TerminalSession {
     // draw it once, when it's all in — not flickering through the old screens
     this.renderer.paused = true;
     window.setTimeout(() => this.endReplayPause(), 4000); // in case the end never comes
+  }
+
+  /**
+   * The app was out of sight and this session printed more than the page was sent (megabytes
+   * piled up in it otherwise): the screen as it stood is dropped, and the latest output —
+   * what the app keeps for a restored session — is taken in its place.
+   */
+  resync() {
+    this.edit.cancel();
+    this.edit.clearSelection();
+    this.beginReplay();
+    // (a full reset, after whatever is still waiting to be read: the old screen and history go)
+    this.term.write('\x1bc');
+    this.bridge.attach(this.id); // its saved output, then onReplayed → restoreModes()
   }
 
   private endReplayPause() {

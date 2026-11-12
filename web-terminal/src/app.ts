@@ -204,10 +204,17 @@ const bridge: Bridge = createBridge({
   onReplayed(id) {
     sessions.get(id)?.restoreModes();
   },
+  onResync(id) {
+    const s = sessions.get(id);
+    if (!s) return;
+    if (selOwner === s) endSelection();
+    s.resync();
+  },
   onState(state) {
     hostState = state;
     stateKnown = true;
     renderHome();
+    updateFront(); // (the app tells its state whenever it comes back to the front)
   },
   onImeComposing(text) {
     const s = typingTarget();
@@ -500,9 +507,7 @@ async function newSession(kind: SessionKind, cwd = '', profile = profileFor(kind
   }
   showTerm();
   const box = $('#sessions').getBoundingClientRect();
-  const probe = new TerminalSession(bridge, '_probe', kind, rendererOpts());
-  const { cols, rows } = probe.renderer.fit(box.width, box.height + TerminalSession.keyboardInset);
-  probe.dispose();
+  const { cols, rows } = BanglaRenderer.gridFor(prefs.fontSize, box.width, box.height + TerminalSession.keyboardInset);
   console.info(`newSession ${kind}: area ${Math.round(box.width)}x${Math.round(box.height)}px (+${TerminalSession.keyboardInset}px keyboard) → ${cols}x${rows}`);
   const id = await bridge.createSession(kind, cols, rows, cwd, profile);
   if (!id) {
@@ -708,10 +713,17 @@ function updateFront() {
   const shown = !document.hidden && screen === 'term';
   for (const x of sessions.values()) {
     x.setInFront(shown && x === active);
-    x.setOnScreen(screen === 'term' && x === active);
+    // (the app in the background counts as off screen too: a busy agent's output was still
+    // drawn there, chunk by chunk, for nobody)
+    x.setOnScreen(shown && x === active);
   }
 }
 document.addEventListener('visibilitychange', updateFront);
+// (drawing stops while the page is hidden: should the word that it shows again ever be
+// missed, coming back into view or the first touch starts it again)
+window.addEventListener('pageshow', updateFront);
+window.addEventListener('focus', updateFront);
+document.addEventListener('pointerdown', updateFront, { capture: true, passive: true });
 /** The first appearance of the home screen: its parts rise in one after another. */
 function enterHome() {
   const home = $('#home');
@@ -1215,7 +1227,7 @@ function bindTerminalGestures(s: TerminalSession) {
     const spot = s.editSpot(x, ay, true);
     if (spot) s.edit.setSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
   };
-  let startX = 0, startY = 0, lastY = 0, lastT = 0, acc = 0, moved = false, t0 = 0;
+  let startX = 0, startY = 0, lastY = 0, acc = 0, moved = false, t0 = 0;
   /** The long-press fired: until the finger lifts, nothing scrolls or taps. */
   let pressed = false;
   /** The finger's recent positions: a fling's speed is measured over them, not two events. */
@@ -1387,9 +1399,8 @@ function bindTerminalGestures(s: TerminalSession) {
     downAt = performance.now();
     startX = e.clientX;
     startY = lastY = e.clientY;
-    lastT = performance.now();
     acc = 0;
-    track = [[lastT, e.clientY]];
+    track = [[downAt, e.clientY]];
     moved = false;
     pressed = false;
     t0 = Date.now();
@@ -1436,7 +1447,6 @@ function bindTerminalGestures(s: TerminalSession) {
     track.push([now, e.clientY]);
     if (track.length > 24) track.shift();
     lastY = e.clientY;
-    lastT = now;
     dragScroll(dy, e.clientX, e.clientY);
   });
   const end = (e: PointerEvent) => {
@@ -1644,7 +1654,6 @@ interface KeyDef {
   text?: string;
   latch?: 'ctrl' | 'alt';
   act?: 'keyboard';
-  small?: boolean;
   repeat?: boolean;
 }
 // One row of the keys a phone keyboard lacks (everything else is on the keyboard).
@@ -1664,7 +1673,7 @@ function buildKeyBar() {
   const bar = $('#extra-keys');
   {
     for (const k of KEYS) {
-      const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') + (k.small ? ' small' : '') });
+      const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') });
       if (k.icon) b.append(svg(k.icon));
       else b.textContent = k.label!;
       if (k.act === 'keyboard') b.setAttribute('aria-label', 'Keyboard');
@@ -1752,6 +1761,7 @@ function openSheet(title: string, ...content: Kid[]) {
     }
     body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
   }
+  if (sample && !body.contains(sample.renderer.el)) dropSample(); // (Settings was replaced)
   // the terminal's keyboard would squeeze the sheet into a strip above it (not for a sheet
   // that wants typing: the keyboard moves on to its field)
   if (keyboardShown && screen === 'term' && !body.querySelector('[data-autofocus]')) hideKeyboard();
@@ -1773,6 +1783,9 @@ function closeSheet() {
     backdrop.hidden = true;
     sheet.classList.remove('closing');
     backdrop.classList.remove('closing');
+    // (what it showed isn't kept: a folder's thousand rows, Settings' preview terminal)
+    sheet.querySelector('.sheet-body')?.replaceChildren();
+    dropSample();
   }, 190);
 }
 function action(ic: string, title: string, sub: string, run: () => void, danger = false) {
@@ -2216,6 +2229,11 @@ function copyDebugLog() {
 
 // ================================================================ settings
 let sample: TerminalSession | null = null;
+/** The preview's terminal lives only while Settings shows it. */
+function dropSample() {
+  sample?.dispose();
+  sample = null;
+}
 function samplePreview(): HTMLElement {
   sample?.dispose();
   sample = new TerminalSession({ write() {}, resize() {} } as unknown as Bridge, '_sample', 'ubuntu', rendererOpts());

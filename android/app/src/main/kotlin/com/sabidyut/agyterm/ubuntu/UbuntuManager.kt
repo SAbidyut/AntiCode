@@ -58,7 +58,6 @@ class UbuntuManager private constructor(private val context: Context) {
         get() = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).getBoolean("claudeFullscreen", false)
         set(v) = context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE).edit().putBoolean("claudeFullscreen", v).apply()
 
-    /** The shell prompt's look (Settings → Prompt style): Ubuntu's ~/.config/agy-terminal/prompt. */
     /**
      * Antigravity approves every tool by itself (its --dangerously-skip-permissions), set in
      * Settings. A file inside Ubuntu, so the Antigravity button and `agy` typed in a shell
@@ -76,6 +75,7 @@ class UbuntuManager private constructor(private val context: Context) {
             } catch (_: Exception) { /* not installed yet */ }
         }
 
+    /** The shell prompt's look (Settings → Prompt style): Ubuntu's ~/.config/agy-terminal/prompt. */
     var promptStyle: String
         get() = try {
             File(rootfs, "root/.config/agy-terminal/prompt").readText().trim()
@@ -132,12 +132,48 @@ class UbuntuManager private constructor(private val context: Context) {
         val size = f.length()
         claudeSeen[f.path]?.let { if (it.first == modified && it.second == size) return it.third }
         if (!f.isFile || size > 64L * 1024 * 1024) return ""
-        val text = f.readText()
-        val at = text.indexOf("\"oauthAccount\"")
-        val email = if (at < 0) "" else Regex("\"emailAddress\"\\s*:\\s*\"([^\"]*)\"")
-            .find(text.substring(at, minOf(text.length, at + 4096)))?.groupValues?.get(1).orEmpty()
+        val email = Regex("\"emailAddress\"\\s*:\\s*\"([^\"]*)\"")
+            .find(textAfter(f, "\"oauthAccount\"", 4096))?.groupValues?.get(1).orEmpty()
         claudeSeen[f.path] = Triple(modified, size, email)
         return email
+    }
+
+    /**
+     * The [count] bytes of [f] that follow the first [marker] (as text; "" if it isn't there).
+     * Read in pieces: the file was read whole — megabytes of it, twice over as text — on every
+     * change, while the page waited for the answer.
+     */
+    private fun textAfter(f: File, marker: String, count: Int): String {
+        val needle = marker.toByteArray(Charsets.UTF_8)
+        val block = ByteArray(64 * 1024)
+        // (what's looked through: the end of the last piece — a marker may straddle two — and the new one)
+        var window = ByteArray(0)
+        f.inputStream().use { inp ->
+            while (true) {
+                val n = inp.read(block)
+                if (n <= 0) return ""
+                val keep = minOf(window.size, needle.size - 1)
+                val joined = ByteArray(keep + n)
+                System.arraycopy(window, window.size - keep, joined, 0, keep)
+                System.arraycopy(block, 0, joined, keep, n)
+                window = joined
+                var at = -1
+                search@ for (i in 0..window.size - needle.size) {
+                    for (j in needle.indices) if (window[i + j] != needle[j]) continue@search
+                    at = i
+                    break
+                }
+                if (at < 0) continue
+                val out = java.io.ByteArrayOutputStream(count)
+                out.write(window, at, minOf(count, window.size - at))
+                while (out.size() < count) {
+                    val m = inp.read(block, 0, minOf(block.size, count - out.size()))
+                    if (m <= 0) break
+                    out.write(block, 0, m)
+                }
+                return out.toString("UTF-8")
+            }
+        }
     }
 
     // ---- more than one account per agent ("profiles") ----
@@ -342,11 +378,20 @@ class UbuntuManager private constructor(private val context: Context) {
     private fun downloadAndExtract(url: String) {
         Log.i(TAG, "downloading $url")
         val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 20_000
-        conn.readTimeout = 60_000
-        if (conn.responseCode == 404) throw java.io.FileNotFoundException(url)
-        if (conn.responseCode != 200) throw java.io.IOException("HTTP ${conn.responseCode}")
-        val total = conn.contentLengthLong.coerceAtLeast(1)
+        try {
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 60_000
+            if (conn.responseCode == 404) throw java.io.FileNotFoundException(url)
+            if (conn.responseCode != 200) throw java.io.IOException("HTTP ${conn.responseCode}")
+            downloadAndExtract(conn)
+        } finally {
+            conn.disconnect() // (also after a 404 or a failure half way: the connection was left open)
+        }
+    }
+
+    private fun downloadAndExtract(conn: HttpURLConnection) {
+        // (-1: the server didn't say how big it is)
+        val total = conn.contentLengthLong
 
         var read = 0L
         var lastReport = 0L
@@ -358,8 +403,12 @@ class UbuntuManager private constructor(private val context: Context) {
                     if (read - lastReport > 256 * 1024) {
                         lastReport = read
                         val mb = read / (1024 * 1024)
-                        val totalMb = total / (1024 * 1024)
-                        update(State.INSTALLING, 0.95 * read / total, "Downloading Ubuntu… $mb / $totalMb MB")
+                        if (total > 0) {
+                            update(State.INSTALLING, (0.95 * read / total).coerceAtMost(0.95), "Downloading Ubuntu… $mb / ${total / (1024 * 1024)} MB")
+                        } else {
+                            // (size unknown: the bar ran past its end and the text read "x / 0 MB")
+                            update(State.INSTALLING, (0.95 * mb / 40.0).coerceAtMost(0.9), "Downloading Ubuntu… $mb MB")
+                        }
                     }
                 }
                 return n

@@ -23,8 +23,6 @@ object Pty {
     /** Blocks until [pid] exits; returns the exit code or -signal. */
     @JvmStatic external fun waitFor(pid: Int): Int
 
-    @JvmStatic external fun close(fd: Int)
-
     @JvmStatic external fun sendSignal(pid: Int, signal: Int)
 
     /** The program reads a hidden answer (a password): echo off, whole lines. */

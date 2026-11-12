@@ -1,7 +1,6 @@
 package com.sabidyut.agyterm
 
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -13,7 +12,6 @@ import android.widget.Toast
 import androidx.browser.customtabs.CustomTabColorSchemeParams
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
-import androidx.browser.customtabs.CustomTabsServiceConnection
 
 /**
  * Opens web pages (the Antigravity remote dashboard, login links) *inside* the app as a
@@ -32,30 +30,9 @@ class InAppBrowser(private val activity: Activity) {
             ?: CustomTabsClient.getPackageName(activity, emptyList<String>())
     }
 
-    private var connection: CustomTabsServiceConnection? = null
-
-    /** Start the browser process early so the dashboard opens quickly. */
-    fun warmup() {
-        val pkg = provider ?: return
-        val conn = object : CustomTabsServiceConnection() {
-            override fun onCustomTabsServiceConnected(name: ComponentName, client: CustomTabsClient) {
-                client.warmup(0)
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {}
-        }
-        if (CustomTabsClient.bindCustomTabsService(activity, pkg, conn)) connection = conn
-    }
-
-    fun release() {
-        connection?.let {
-            try {
-                activity.unbindService(it)
-            } catch (_: IllegalArgumentException) {
-            }
-        }
-        connection = null
-    }
+    // (The browser isn't started ahead of time any more: "warming it up" at every start of the
+    // app kept a whole browser process in memory next to Ubuntu and the agents, for a link
+    // that may never be opened. It starts when the first page opens.)
 
     /** The app's theme (from the page): the tab's toolbar matches it. */
     var toolbarColor = Color.parseColor("#0B0D12")

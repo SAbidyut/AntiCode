@@ -64,8 +64,13 @@ class MainActivity : ComponentActivity() {
     // ---------------------------------------------------------------- output pump
     // PTY output arrives on reader threads; batch it and hand it to the web UI ~60×/s.
     private val pendingLock = Any()
-    private val pending = LinkedHashMap<String, ByteArrayOutputStream>()
+    private var pending = LinkedHashMap<String, OutBuffer>()
     private var flushScheduled = false
+
+    /** A session's output waiting for the page, encoded straight from where it was gathered. */
+    private class OutBuffer : ByteArrayOutputStream(8192) {
+        fun base64(off: Int, len: Int): String = Base64.encodeToString(buf, off, len, Base64.NO_WRAP)
+    }
 
     private val outputListener = object : TermSession.OutputListener {
         override fun onOutput(session: TermSession, data: ByteArray, len: Int) = queue(session.id, data, len)
@@ -80,43 +85,59 @@ class MainActivity : ComponentActivity() {
 
     private fun queue(id: String, data: ByteArray, len: Int) {
         synchronized(pendingLock) {
-            pending.getOrPut(id) { ByteArrayOutputStream() }.write(data, 0, len)
+            pending.getOrPut(id) { OutBuffer() }.write(data, 0, len)
             if (!flushScheduled) {
                 flushScheduled = true
                 // the echo of a key (nothing sent for a frame): right away; a stream of output
-                // still goes in batches
+                // still goes in batches, about one a frame (the page draws no more often)
                 val idle = SystemClock.uptimeMillis() - lastFlush > 16
-                if (idle) main.post(::flush) else main.postDelayed(::flush, 8)
+                if (idle) main.post(flushTask) else main.postDelayed(flushTask, BATCH_MS)
             }
         }
     }
 
     @Volatile private var lastFlush = 0L
 
+    private val flushTask = Runnable { flush() }
+
+    /** (main thread) */
     private fun flush() {
         lastFlush = SystemClock.uptimeMillis()
-        val batch: List<Pair<String, ByteArray>>
+        // (the gathered buffers are taken as they are — not copied out, then encoded, then
+        // pasted into the script, then into another: this runs for every frame of output)
+        val batch: Map<String, OutBuffer>
         synchronized(pendingLock) {
-            batch = pending.map { (id, buf) -> id to buf.toByteArray() }
-            pending.clear()
+            if (pending.isEmpty()) {
+                flushScheduled = false
+                return
+            }
+            batch = pending
+            pending = LinkedHashMap()
             flushScheduled = false
         }
-        for ((id, bytes) in batch) {
+        if (destroyed) return
+        for ((id, buf) in batch) {
+            val size = buf.size()
             var off = 0
-            while (off < bytes.size) {
-                val n = minOf(CHUNK, bytes.size - off)
-                val b64 = Base64.encodeToString(bytes, off, n, Base64.NO_WRAP)
-                js("__native.onOutput('$id','$b64')")
+            while (off < size) {
+                val n = minOf(CHUNK, size - off)
+                val b64 = buf.base64(off, n)
+                val script = StringBuilder(b64.length + 64)
+                    .append("window.__native&&__native.onOutput('").append(id).append("','").append(b64).append("')")
+                web.evaluateJavascript(script.toString(), null)
                 off += n
             }
         }
     }
 
+    /** The activity is gone (its WebViews destroyed): nothing more is sent to the page. */
+    private var destroyed = false
+
     private fun js(code: String) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            web.evaluateJavascript("window.__native && ($code)", null)
+            if (!destroyed) web.evaluateJavascript("window.__native && ($code)", null)
         } else {
-            main.post { web.evaluateJavascript("window.__native && ($code)", null) }
+            main.post { if (!destroyed) web.evaluateJavascript("window.__native && ($code)", null) }
         }
     }
 
@@ -154,7 +175,7 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        browser = InAppBrowser(this).apply { warmup() }
+        browser = InAppBrowser(this)
 
         web = TermWebView(this)
         web.setBackgroundColor(Color.parseColor(BG))
@@ -177,7 +198,14 @@ class MainActivity : ComponentActivity() {
             chooseFiles = { cb ->
                 fileCallback?.onReceiveValue(null)
                 fileCallback = cb
-                pickFiles.launch("*/*")
+                try {
+                    pickFiles.launch("*/*")
+                } catch (_: android.content.ActivityNotFoundException) {
+                    // (a phone without a file picker: the page is told "none chosen")
+                    fileCallback = null
+                    cb.onReceiveValue(null)
+                    Toast.makeText(this, "No app on this phone picks files", Toast.LENGTH_SHORT).show()
+                }
             },
             // while the panel covers the terminal, no session is "being watched"
             onOpened = { service?.activeSessionId = null },
@@ -212,6 +240,7 @@ class MainActivity : ComponentActivity() {
                 // the page missed the insets sent while it was loading
                 lastInsets = ""
                 ViewCompat.requestApplyInsets(view)
+                pageReady = true
                 deliverOpenSession()
             }
 
@@ -274,6 +303,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         service?.let { svc ->
             for (s in svc.sessions.values) s.attach(null)
             svc.onSessionExit = null
@@ -281,10 +311,19 @@ class MainActivity : ComponentActivity() {
             svc.updateForeground()
         }
         unbindService(connection)
-        browser.release()
+        // (nothing posted earlier runs against the destroyed WebViews, or holds this activity)
+        main.removeCallbacksAndMessages(null)
+        synchronized(pendingLock) { pending.clear() }
         panel.destroy()
         web.destroy()
         super.onDestroy()
+    }
+
+    /** The app went out of sight, or the phone is short of memory: a closed dashboard's page goes now. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        @Suppress("DEPRECATION") // (still what Android before 14 sends while the app is in front)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && ::panel.isInitialized) panel.trimMemory()
     }
 
     // ---------------------------------------------------------------- insets / keyboard animation
@@ -427,7 +466,11 @@ class MainActivity : ComponentActivity() {
                 )
                 Toast.makeText(this, "Turn on \"Allow access to manage all files\", then come back", Toast.LENGTH_LONG).show()
             } catch (_: Exception) {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                try {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                } catch (_: Exception) {
+                    Toast.makeText(this, "Open Settings → Apps → AntiCode → Permissions → Files", Toast.LENGTH_LONG).show()
+                }
             }
         }
         pushState()
@@ -441,11 +484,19 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         TermSession.paceOutput = true
-        service?.uiVisible = true
+        val svc = service ?: return
+        svc.uiVisible = true
+        // sessions that printed more than the page could take while the app was away (see
+        // TermSession.behind): the page drops their screens and takes the latest output
+        for (s in svc.sessions.values) {
+            if (s.behind) js("__native.onResync && __native.onResync('${s.id}')")
+        }
     }
 
     // ---------------------------------------------------------------- "task finished" taps
     private var openSessionId: String? = null
+    /** The page has loaded (its `__native` is there to be told things). */
+    private var pageReady = false
     /** The session the page shows (set from JS). */
     @Volatile private var shownSessionId: String? = null
 
@@ -466,7 +517,8 @@ class MainActivity : ComponentActivity() {
     /** Show the session whose notification was tapped (the page keeps it if still starting). */
     private fun deliverOpenSession() {
         val id = openSessionId ?: return
-        if (web.url == null) return // delivered from onPageFinished
+        // (delivered from onPageFinished: told while the page was still loading, the tap was lost)
+        if (!pageReady) return
         openSessionId = null
         service?.clearFinished(id)
         js("__native.onOpenSession(${JSONObject.quote(id)})")
@@ -1263,6 +1315,8 @@ class MainActivity : ComponentActivity() {
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
+        /** A stream of output is gathered this long before it's handed to the page. */
+        private const val BATCH_MS = 12L
         /** The most the clipboard is given at once (the system refuses ~1 MB and more). */
         private const val MAX_CLIP = 300_000
         private const val BG = "#0b0d12"

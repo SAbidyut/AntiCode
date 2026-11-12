@@ -64,9 +64,14 @@ class TermSession(
     @Volatile var label: String = ""
     /** When the user last pressed Enter; 0 once that run was reported (or more was typed). */
     @Volatile var enterAt = 0L
-    /** Output bytes since that Enter, and when the last ones arrived. */
+    /** Output bytes since that Enter, and when the last ones arrived (at first: when it started). */
     @Volatile var outSinceEnter = 0L
-    @Volatile var lastOutputAt = 0L
+    @Volatile var lastOutputAt = System.currentTimeMillis()
+    /**
+     * Something is going on in it again — Enter pressed, or output after a quiet while. (The
+     * service stops watching sessions where nothing happens; called on any thread.)
+     */
+    @Volatile var onActive: (() -> Unit)? = null
     /** A notification the program asked for (OSC 9 / OSC 777), or "bell". */
     @Volatile var alert: String? = null
     /** The shell printed its prompt again (OSC 7770;done from the guest bashrc). */
@@ -77,14 +82,41 @@ class TermSession(
     private val out: FileOutputStream
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "pty-writer-$id") }
 
+    // ---- flow control ----
+    // The page says how much output it has taken in (ack). A program printing faster than the
+    // screen can follow (yes, cat of a huge log) then waits for it, as on any terminal — the
+    // output used to pile up by the megabyte in the page until it dropped some or froze.
+    private val ackLock = Object()
+    private var unacked = 0L
+    /**
+     * The page fell too far behind while the app was out of sight (the system slows it down
+     * there, and the program isn't held back for it): nothing more is sent to it — megabytes
+     * piled up in it otherwise. The ring keeps the latest output; the page takes that afresh
+     * when the app is back (the activity asks it to: attach).
+     */
+    @Volatile var behind = false
+        private set
+
+    private val fdLock = Object()
+    private var fdOpen = true
+
+    private val doneMark = "7770;done;${com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken}"
+
     init {
         val pidOut = IntArray(1)
         fd = Pty.createSubprocess(command, cwd, args, env, pidOut, rows, cols)
         pid = pidOut[0]
         pfd = ParcelFileDescriptor.adoptFd(fd)
-        val input = FileInputStream(pfd.fileDescriptor)
         out = FileOutputStream(pfd.fileDescriptor)
+    }
 
+    /**
+     * The reader and the waiter, started by the last initialiser of the class (see the end):
+     * started any earlier, they ran while the fields declared after that point were still
+     * unset — a program that printed or ended at once crashed the app with every session.
+     */
+    private fun startThreads() {
+        val input = FileInputStream(pfd.fileDescriptor)
         val reader = Thread({
             val buf = ByteArray(16 * 1024)
             try {
@@ -93,10 +125,15 @@ class TermSession(
                     if (n <= 0) break
                     val shown = synchronized(lock) {
                         append(buf, n)
-                        listener?.onOutput(this, buf, n)
-                        listener != null
+                        val l = listener
+                        if (l != null && !behind) {
+                            l.onOutput(this, buf, n)
+                            true
+                        } else false
                     }
-                    lastOutputAt = System.currentTimeMillis()
+                    val now = System.currentTimeMillis()
+                    if (now - lastOutputAt > ACTIVE_GAP_MS) onActive?.invoke()
+                    lastOutputAt = now
                     outSinceEnter += n
                     scanForAlerts(buf, n)
                     val hide = synchronized(fdLock) { fdOpen && Pty.hiddenInput(fd) }
@@ -129,14 +166,43 @@ class TermSession(
     private fun append(b: ByteArray, n: Int) {
         var off = 0
         var len = n
-        if (len >= RING_SIZE) {
+        if (len > RING_SIZE) {
             off = len - RING_SIZE
             len = RING_SIZE
         }
-        for (i in 0 until len) {
-            ring[(ringStart + ringLen) % RING_SIZE] = b[off + i]
-            if (ringLen < RING_SIZE) ringLen++ else ringStart = (ringStart + 1) % RING_SIZE
+        // (in one or two pieces, not byte by byte: this runs for every read)
+        val pos = (ringStart + ringLen) % RING_SIZE
+        val first = minOf(len, RING_SIZE - pos)
+        System.arraycopy(b, off, ring, pos, first)
+        if (first < len) System.arraycopy(b, off + first, ring, 0, len - first)
+        val over = ringLen + len - RING_SIZE
+        if (over > 0) {
+            ringStart = (ringStart + over) % RING_SIZE
+            ringLen = RING_SIZE
+        } else ringLen += len
+    }
+
+    /** Everything kept (call with [lock] held). */
+    private fun snapshot(): ByteArray {
+        var start = ringStart
+        var len = ringLen
+        if (len == RING_SIZE) {
+            // The ring is full: its first bytes are the middle of something — the second half
+            // of a letter, the tail of an escape sequence (shown as stray text at the top).
+            // Start after the first line break, if one comes soon.
+            for (i in 0 until minOf(len, 8192)) {
+                if (ring[(start + i) % RING_SIZE] == '\n'.code.toByte()) {
+                    start = (start + i + 1) % RING_SIZE
+                    len -= i + 1
+                    break
+                }
+            }
         }
+        val snap = ByteArray(len)
+        val first = minOf(len, RING_SIZE - start)
+        System.arraycopy(ring, start, snap, 0, first)
+        if (first < len) System.arraycopy(ring, 0, snap, first, len - first)
+        return snap
     }
 
     /**
@@ -150,9 +216,8 @@ class TermSession(
             ackLock.notifyAll()
         }
         if (withSnapshot != null) {
-            val snap = ByteArray(ringLen)
-            for (i in 0 until ringLen) snap[i] = ring[(ringStart + i) % RING_SIZE]
-            withSnapshot(snap)
+            behind = false // (it gets everything that's kept: up to date again)
+            withSnapshot(snapshot())
         }
     }
 
@@ -180,8 +245,6 @@ class TermSession(
         }
     }
 
-    private val DONE = "7770;done;${com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken}"
-
     private fun finishOsc() {
         val s = osc.toString("UTF-8")
         when {
@@ -191,16 +254,9 @@ class TermSession(
             s.startsWith("777;notify;") -> alert = s.substring(11).split(';').filter { it.isNotBlank() }.joinToString(" — ")
             // (signed by the guest bashrc with the app's token, like every 7770 message: the
             // same text printed by a program doesn't count as the prompt coming back)
-            s == DONE -> promptAt = System.currentTimeMillis()
+            s == doneMark -> promptAt = System.currentTimeMillis()
         }
     }
-
-    // ---- flow control ----
-    // The page says how much output it has taken in (ack). A program printing faster than the
-    // screen can follow (yes, cat of a huge log) then waits for it, as on any terminal — the
-    // output used to pile up by the megabyte in the page until it dropped some or froze.
-    private val ackLock = Object()
-    private var unacked = 0L
 
     fun ack(n: Int) = synchronized(ackLock) {
         unacked = maxOf(0L, unacked - n)
@@ -210,8 +266,12 @@ class TermSession(
     private fun waitForRoom(n: Int) = synchronized(ackLock) {
         unacked += n
         // (the app out of sight: its page may be slowed down by the system — an agent working
-        // in the background isn't held back by it)
-        if (!paceOutput) return@synchronized
+        // in the background isn't held back by it; a page that isn't keeping up at all is left
+        // alone until the app is back: see [behind])
+        if (!paceOutput) {
+            if (unacked > BEHIND_LIMIT) behind = true
+            return@synchronized
+        }
         val until = android.os.SystemClock.uptimeMillis() + ACK_GIVE_UP_MS
         while (unacked > HIGH_WATER && alive && paceOutput) {
             val left = until - android.os.SystemClock.uptimeMillis()
@@ -232,9 +292,11 @@ class TermSession(
         val agent = kind in com.sabidyut.agyterm.ubuntu.UbuntuManager.AGENTS
         val choice = agent && data.size == 1 && data[0] in '1'.code.toByte()..'9'.code.toByte()
         if (data.contains('\r'.code.toByte()) || choice) {
+            alert = null // (a bell rung before this run isn't its "done")
             enterAt = System.currentTimeMillis()
             outSinceEnter = 0
             promptAt = 0
+            onActive?.invoke()
         } else if (!agent && data.isNotEmpty() && data[0] != 0x1b.toByte()) {
             enterAt = 0
         }
@@ -250,9 +312,6 @@ class TermSession(
             // closed meanwhile (a key typed as the tab closed)
         }
     }
-
-    private val fdLock = Object()
-    private var fdOpen = true
 
     /** Closes the PTY master once (the fd number may be reused right after). */
     private fun closePty() = synchronized(fdLock) {
@@ -291,11 +350,19 @@ class TermSession(
         writer.shutdown()
     }
 
+    init {
+        startThreads() // (last: every field above is set — see startThreads)
+    }
+
     companion object {
         const val RING_SIZE = 512 * 1024
         /** Output the page may be behind by before the program has to wait. */
         private const val HIGH_WATER = 1024 * 1024L
         private const val ACK_GIVE_UP_MS = 4000L
+        /** …and, with the app out of sight, before the page is sent no more (see [behind]). */
+        private const val BEHIND_LIMIT = 4 * 1024 * 1024L
+        /** Output after this long a silence says "active again" (see [onActive]). */
+        private const val ACTIVE_GAP_MS = 20_000L
         /** The app is on screen: output keeps pace with its page (set by the activity). */
         @Volatile var paceOutput = true
         private val OSC9_SUBCOMMAND = Regex("^9;\\d+(;|$)")
