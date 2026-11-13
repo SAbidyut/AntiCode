@@ -47,56 +47,19 @@ class SessionService : Service() {
         get() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_NOTIFY, true)
         set(v) = getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_NOTIFY, v).apply()
 
-    // The sessions are looked at every 1.5 s only while a command or an answer is under way
-    // (to tell when it's done); every half minute while something still prints now and then;
-    // not at all — and the phone isn't kept awake — while every session just sits at its
-    // prompt. (One idle tab used to hold the wake lock, and wake the app every 1.5 s, for as
-    // long as it stayed open: all night.) A session that comes to life says so: onActive.
     private val watcher = object : Runnable {
         override fun run() {
             checkFinished()
-            syncWakeLock()
-            val live = sessions.values.filter { it.alive }
-            when {
-                live.any { it.enterAt > 0 || it.alert != null } -> {
-                    watchingSlowly = false
-                    mainHandler.postDelayed(this, WATCH_MS)
-                }
-                busy() -> {
-                    watchingSlowly = true
-                    mainHandler.postDelayed(this, IDLE_CHECK_MS)
-                }
-                else -> watching = false
-            }
+            if (sessions.values.any { it.alive }) mainHandler.postDelayed(this, WATCH_MS)
+            else watching = false
         }
     }
     private var watching = false
-    private var watchingSlowly = false
 
-    /** (main thread) */
     private fun startWatching() {
-        if (watching && !watchingSlowly) return
-        mainHandler.removeCallbacks(watcher)
+        if (watching) return
         watching = true
-        watchingSlowly = false
-        syncWakeLock()
         mainHandler.postDelayed(watcher, WATCH_MS)
-    }
-
-    /**
-     * Something is going on in a session: a command or an answer under way (Enter pressed, not
-     * reported done yet — a server, a build, ssh count for as long as they run), or output in
-     * the last few minutes. A prompt that just sits there isn't.
-     */
-    private fun busy(): Boolean {
-        val now = System.currentTimeMillis()
-        return sessions.values.any { it.alive && (it.enterAt > 0 || now - it.lastOutputAt < IDLE_MS) }
-    }
-
-    /** The phone is kept awake only while something runs (or Ubuntu is being installed). */
-    @Synchronized
-    private fun syncWakeLock() {
-        if (busy() || ubuntu.state == UbuntuManager.State.INSTALLING) acquireWakeLock() else releaseWakeLock()
     }
 
     /**
@@ -248,7 +211,6 @@ class SessionService : Service() {
         val session = TermSession(
             id, kind, title, launch.command, launch.args, launch.env, launch.cwd, rows, cols,
         ) { s -> sessionEnded(s) }
-        session.onActive = { mainHandler.post { startWatching() } }
         if (kind != "android") session.startDir = ubuntu.normalizeGuestPath(cwd.ifEmpty { "~" }) ?: "/root"
         if (kind in UbuntuManager.AGENTS && UbuntuManager.validProfile(profile)) session.profile = profile
         sessions[id] = session
@@ -361,7 +323,7 @@ class SessionService : Service() {
         } catch (e: RuntimeException) {
             Log.w("SessionService", "could not go to the foreground", e)
         }
-        syncWakeLock()
+        if (running > 0 || installing) acquireWakeLock() else releaseWakeLock()
     }
 
     private fun buildNotification(running: Int, open: Int, installing: Boolean): Notification {
@@ -453,10 +415,6 @@ class SessionService : Service() {
         /** Only for runs that took a while (not `ls`). */
         private const val MIN_WORK_MS = 5000L
         private const val WATCH_MS = 1500L
-        /** How often sessions that only print now and then are looked at. */
-        private const val IDLE_CHECK_MS = 30_000L
-        /** No command under way and no output for this long: the session is idle. */
-        private const val IDLE_MS = 5 * 60_000L
         private const val SELFTEST = "AgySelfTest"
         const val ACTION_STOP = "com.sabidyut.agyterm.STOP"
         const val ACTION_RESHOW = "com.sabidyut.agyterm.RESHOW"

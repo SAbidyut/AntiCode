@@ -204,12 +204,6 @@ const bridge: Bridge = createBridge({
   onReplayed(id) {
     sessions.get(id)?.restoreModes();
   },
-  onResync(id) {
-    const s = sessions.get(id);
-    if (!s) return;
-    if (selOwner === s) endSelection();
-    s.resync();
-  },
   onState(state) {
     hostState = state;
     stateKnown = true;

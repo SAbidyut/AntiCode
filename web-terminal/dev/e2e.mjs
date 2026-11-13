@@ -159,26 +159,7 @@ const rowCheck = await page.evaluate(() => {
 check(`history rows stay right while lines are deleted (${rowCheck.bad} wrong)`, rowCheck.scrolled && rowCheck.bad === 0);
 await page.evaluate(() => window.__selftest.session().scrollToBottom());
 
-// 10. a session that fell behind while the app was away (the host says so: onResync) drops
-//     its screen and takes the kept output afresh — shown once, and typing goes on
-await send('clear; echo RESYNC-$((50+5))');
-await waitFor(async () => (await screenText()).includes('RESYNC-55'));
-await page.evaluate(() => window.__native.onResync(window.__selftest.session().id));
-await page.waitForTimeout(1000);
-const resynced = await page.evaluate(() => window.__selftest.screen());
-check('a resynced session shows its output once', (resynced.match(/^RESYNC-55$/gm) ?? []).length === 1);
-await send('echo AGAIN-$((60+6))');
-check('…and takes typing again', await waitFor(async () => (await screenText()).includes('AGAIN-66')));
-
-// 11. the cursor rests blinking by a timer (no endless animation keeping frames coming),
-//     and the home screen isn't painted under the terminal
-await page.evaluate(() => window.__selftest.focusKeys());
-await page.waitForTimeout(900);
-const cursorIdle = await page.evaluate(() => {
-  const c = document.querySelector('.session:not([hidden]) .term-cursor');
-  return { blink: c.classList.contains('blink'), anim: getComputedStyle(c).animationName };
-});
-check('cursor blinks without a running animation', cursorIdle.blink && cursorIdle.anim === 'none');
+// 10. the home screen isn't painted under the terminal
 check('home screen hidden under the terminal', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).visibility === 'hidden'));
 
 check('no JavaScript errors', pageErrors.length === 0);

@@ -862,20 +862,6 @@ export class TerminalSession {
     window.setTimeout(() => this.endReplayPause(), 4000); // in case the end never comes
   }
 
-  /**
-   * The app was out of sight and this session printed more than the page was sent (megabytes
-   * piled up in it otherwise): the screen as it stood is dropped, and the latest output —
-   * what the app keeps for a restored session — is taken in its place.
-   */
-  resync() {
-    this.edit.cancel();
-    this.edit.clearSelection();
-    this.beginReplay();
-    // (a full reset, after whatever is still waiting to be read: the old screen and history go)
-    this.term.write('\x1bc');
-    this.bridge.attach(this.id); // its saved output, then onReplayed → restoreModes()
-  }
-
   private endReplayPause() {
     if (!this.renderer.paused) return;
     this.renderer.paused = false;

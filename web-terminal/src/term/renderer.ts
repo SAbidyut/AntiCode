@@ -246,33 +246,6 @@ export class BanglaRenderer {
   private lastCursorLine = -1;
   private cursorOnTop = false;
   private typingTimer = 0;
-  // ---- the cursor's blink ----
-  // Two style changes a second, from a timer. As an endless CSS animation it had the
-  // compositor wake for every frame — the whole view drawn again 60+ times a second — for
-  // as long as the keyboard was up, on a screen where nothing moves.
-  private blinkTimer = 0;
-  private blinking = false;
-  private setBlink(on: boolean) {
-    if (on === this.blinking) return;
-    this.blinking = on;
-    clearInterval(this.blinkTimer);
-    this.blinkTimer = 0;
-    const marks = (dim: boolean) => {
-      for (const c of [this.cursorEl, this.dockCursor]) {
-        c?.classList.toggle('blink', on);
-        c?.classList.toggle('dim', dim);
-      }
-    };
-    marks(false);
-    if (!on) return;
-    let dim = false;
-    this.blinkTimer = window.setInterval(() => marks((dim = !dim)), 550);
-  }
-  /** Blinks while it rests in a focused terminal that's being drawn. */
-  private updateBlink() {
-    this.setBlink(this.focused && !this.typingTimer && !this.offscreen && !this.disposed &&
-      this.cursorEl.style.display !== 'none');
-  }
   private animBaseY = 0;
   // ---- right-aligned labels (the prompt's clock): drawn by us at the right edge of a
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
@@ -656,7 +629,6 @@ export class BanglaRenderer {
     this.typingTimer = 0;
     clearTimeout(this.panTimer);
     clearTimeout(this.boxTimer);
-    this.setBlink(false);
     this.overscrollAnim?.cancel();
     this.overscrollAnim = null;
     this.dropGhost();
@@ -1228,7 +1200,6 @@ export class BanglaRenderer {
     if (off === this.offscreen) return;
     this.offscreen = off;
     if (off) {
-      this.setBlink(false);
       // (a fade cut short by hiding would replay from nothing when shown again)
       for (const r of this.rows.values()) {
         r.el.classList.remove('row-in');
@@ -1607,15 +1578,12 @@ export class BanglaRenderer {
         this.lastCursorT = t;
         this.lastCursorLine = cursorLine;
         // keep it solid while it moves (typing); blink again when it rests
+        this.cursorEl.classList.add('moving');
         clearTimeout(this.typingTimer);
-        this.typingTimer = window.setTimeout(() => {
-          this.typingTimer = 0;
-          this.updateBlink();
-        }, 600);
+        this.typingTimer = window.setTimeout(() => this.cursorEl.classList.remove('moving'), 600);
       }
       this.cursorEl.classList.toggle('focused', this.focused);
     }
-    this.updateBlink();
     this.drawSelection(rowY, first, last);
     this.drawDock(boxTop, buf.baseY + lastY, cursorLine, screenH);
     const scrolled = this.scrollPx >= lh;

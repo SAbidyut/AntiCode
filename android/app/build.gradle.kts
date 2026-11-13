@@ -32,8 +32,8 @@ android {
         // is installed directly (not from Play Store), so this is allowed.
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 84
-        versionName = "0.20.0"
+        versionCode = 85
+        versionName = "0.20.1"
         // the app's own texts are in the page, in English: the libraries' translations of
         // theirs (some 80 languages) aren't packed
         resourceConfigurations += "en"

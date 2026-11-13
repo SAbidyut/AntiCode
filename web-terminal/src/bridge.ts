@@ -53,11 +53,6 @@ export interface BridgeEvents {
   onHiddenInput?(id: string, on: boolean): void;
   /** A re-attached session's saved output has all been delivered. */
   onReplayed(id: string): void;
-  /**
-   * While the app was out of sight a session printed more than the page was sent: its
-   * screen is to be dropped and the output the app kept taken afresh (attach).
-   */
-  onResync(id: string): void;
   onState(state: HostState): void;
   /** Raw text from the native "terminal keyboard" (Android InputConnection). */
   onImeText(text: string): void;
@@ -450,7 +445,6 @@ export function createBridge(events: BridgeEvents): Bridge {
     onExit: (id: string, code: number) => events.onExit(id, code),
     onHiddenInput: (id: string, on: boolean) => events.onHiddenInput?.(id, on),
     onReplayed: (id: string) => events.onReplayed(id),
-    onResync: (id: string) => events.onResync(id),
     onState: (json: string) => events.onState(JSON.parse(json)),
     onImeText: (text: string) => events.onImeText(text),
     onImeComposing: (text: string) => events.onImeComposing(text),

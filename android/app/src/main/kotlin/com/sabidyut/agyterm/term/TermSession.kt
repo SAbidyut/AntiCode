@@ -64,14 +64,9 @@ class TermSession(
     @Volatile var label: String = ""
     /** When the user last pressed Enter; 0 once that run was reported (or more was typed). */
     @Volatile var enterAt = 0L
-    /** Output bytes since that Enter, and when the last ones arrived (at first: when it started). */
+    /** Output bytes since that Enter, and when the last ones arrived. */
     @Volatile var outSinceEnter = 0L
-    @Volatile var lastOutputAt = System.currentTimeMillis()
-    /**
-     * Something is going on in it again — Enter pressed, or output after a quiet while. (The
-     * service stops watching sessions where nothing happens; called on any thread.)
-     */
-    @Volatile var onActive: (() -> Unit)? = null
+    @Volatile var lastOutputAt = 0L
     /** A notification the program asked for (OSC 9 / OSC 777), or "bell". */
     @Volatile var alert: String? = null
     /** The shell printed its prompt again (OSC 7770;done from the guest bashrc). */
@@ -88,14 +83,6 @@ class TermSession(
     // output used to pile up by the megabyte in the page until it dropped some or froze.
     private val ackLock = Object()
     private var unacked = 0L
-    /**
-     * The page fell too far behind while the app was out of sight (the system slows it down
-     * there, and the program isn't held back for it): nothing more is sent to it — megabytes
-     * piled up in it otherwise. The ring keeps the latest output; the page takes that afresh
-     * when the app is back (the activity asks it to: attach).
-     */
-    @Volatile var behind = false
-        private set
 
     private val fdLock = Object()
     private var fdOpen = true
@@ -125,15 +112,10 @@ class TermSession(
                     if (n <= 0) break
                     val shown = synchronized(lock) {
                         append(buf, n)
-                        val l = listener
-                        if (l != null && !behind) {
-                            l.onOutput(this, buf, n)
-                            true
-                        } else false
+                        listener?.onOutput(this, buf, n)
+                        listener != null
                     }
-                    val now = System.currentTimeMillis()
-                    if (now - lastOutputAt > ACTIVE_GAP_MS) onActive?.invoke()
-                    lastOutputAt = now
+                    lastOutputAt = System.currentTimeMillis()
                     outSinceEnter += n
                     scanForAlerts(buf, n)
                     val hide = synchronized(fdLock) { fdOpen && Pty.hiddenInput(fd) }
@@ -215,10 +197,7 @@ class TermSession(
             unacked = 0
             ackLock.notifyAll()
         }
-        if (withSnapshot != null) {
-            behind = false // (it gets everything that's kept: up to date again)
-            withSnapshot(snapshot())
-        }
+        if (withSnapshot != null) withSnapshot(snapshot())
     }
 
     /**
@@ -266,12 +245,8 @@ class TermSession(
     private fun waitForRoom(n: Int) = synchronized(ackLock) {
         unacked += n
         // (the app out of sight: its page may be slowed down by the system — an agent working
-        // in the background isn't held back by it; a page that isn't keeping up at all is left
-        // alone until the app is back: see [behind])
-        if (!paceOutput) {
-            if (unacked > BEHIND_LIMIT) behind = true
-            return@synchronized
-        }
+        // in the background isn't held back by it)
+        if (!paceOutput) return@synchronized
         val until = android.os.SystemClock.uptimeMillis() + ACK_GIVE_UP_MS
         while (unacked > HIGH_WATER && alive && paceOutput) {
             val left = until - android.os.SystemClock.uptimeMillis()
@@ -296,7 +271,6 @@ class TermSession(
             enterAt = System.currentTimeMillis()
             outSinceEnter = 0
             promptAt = 0
-            onActive?.invoke()
         } else if (!agent && data.isNotEmpty() && data[0] != 0x1b.toByte()) {
             enterAt = 0
         }
@@ -359,10 +333,6 @@ class TermSession(
         /** Output the page may be behind by before the program has to wait. */
         private const val HIGH_WATER = 1024 * 1024L
         private const val ACK_GIVE_UP_MS = 4000L
-        /** …and, with the app out of sight, before the page is sent no more (see [behind]). */
-        private const val BEHIND_LIMIT = 4 * 1024 * 1024L
-        /** Output after this long a silence says "active again" (see [onActive]). */
-        private const val ACTIVE_GAP_MS = 20_000L
         /** The app is on screen: output keeps pace with its page (set by the activity). */
         @Volatile var paceOutput = true
         private val OSC9_SUBCOMMAND = Regex("^9;\\d+(;|$)")

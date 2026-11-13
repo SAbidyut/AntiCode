@@ -175,7 +175,7 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        browser = InAppBrowser(this)
+        browser = InAppBrowser(this).apply { warmup() }
 
         web = TermWebView(this)
         web.setBackgroundColor(Color.parseColor(BG))
@@ -314,6 +314,7 @@ class MainActivity : ComponentActivity() {
         // (nothing posted earlier runs against the destroyed WebViews, or holds this activity)
         main.removeCallbacksAndMessages(null)
         synchronized(pendingLock) { pending.clear() }
+        browser.release()
         panel.destroy()
         web.destroy()
         super.onDestroy()
@@ -484,13 +485,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         TermSession.paceOutput = true
-        val svc = service ?: return
-        svc.uiVisible = true
-        // sessions that printed more than the page could take while the app was away (see
-        // TermSession.behind): the page drops their screens and takes the latest output
-        for (s in svc.sessions.values) {
-            if (s.behind) js("__native.onResync && __native.onResync('${s.id}')")
-        }
+        service?.uiVisible = true
     }
 
     // ---------------------------------------------------------------- "task finished" taps
