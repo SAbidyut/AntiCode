@@ -1003,6 +1003,8 @@ class MainActivity : ComponentActivity() {
             main.post {
                 flush() // the history first, then what depends on it (modes, exit banner)
                 js("__native.onReplayed('$id')")
+                // (a password asked for while the page was gone: the new page hides it too)
+                if (s.hiddenInput) js("__native.onHiddenInput && __native.onHiddenInput('$id', true)")
                 if (!s.alive) js("__native.onExit('$id', ${s.exitCode})")
             }
         }
