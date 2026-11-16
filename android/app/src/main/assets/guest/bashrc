@@ -1,4 +1,4 @@
-# Agy Terminal shell look — sourced from ~/.bashrc (rewritten when the app updates).
+# AntiCode shell look — sourced from ~/.bashrc (rewritten when the app updates).
 # Prompt styles (Settings → Prompt style, or:  agy-prompt <style>):
 #   powerline  pastel segments with rounded ends (default)
 #   pure       one quiet line: folder, branch, ❯ — how long a command took at the right

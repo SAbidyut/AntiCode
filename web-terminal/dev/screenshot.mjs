@@ -33,7 +33,7 @@ for (const l of lines) {
 }
 await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/02-terminal.png` });
-const text = await page.evaluate(() => document.querySelector('.session:not([hidden]) .term-rows')?.textContent ?? '');
+const text = await page.evaluate(() => window.__selftest.screen());
 console.log('HAS_BANGLA', text.includes('ক্ষমা স্ত্রী সন্ত্রাস'));
 
 await page.click('#more-btn');

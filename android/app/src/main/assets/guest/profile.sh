@@ -1,4 +1,4 @@
-# Agy Terminal: runs for every login shell
+# AntiCode: runs for every login shell
 export PATH="$HOME/.local/bin:$PATH"
 # The folder picked in the app: the shell (and Antigravity / Claude Code) starts there.
 if [ -n "$ANTICODE_CWD" ]; then

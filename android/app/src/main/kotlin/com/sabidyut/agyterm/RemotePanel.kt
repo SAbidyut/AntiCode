@@ -51,7 +51,12 @@ class RemotePanel(
     private val titleView = TextView(context)
     private val subtitleView = TextView(context)
     private val progress = View(context)
-    private val web = WebView(context)
+    /**
+     * The page. Made when the first one opens and destroyed a while after the panel closes: a
+     * second WebView kept for good — even one that only ever showed about:blank — costs memory
+     * next to Ubuntu and the agents, for a dashboard that may never be opened.
+     */
+    private var web: WebView? = null
     private val buttons = mutableListOf<ImageButton>()
     private var startUrl = ""
     private var bg = Color.parseColor("#0B0D12")
@@ -71,13 +76,27 @@ class RemotePanel(
      * with file access off, or a web page while the panel still thinks it's showing a file).
      */
     private var freshHistory = false
-    /** Unload the page a while after closing, so it doesn't poll in the background. */
+    /** Drop the page a while after closing: it doesn't poll in the background, its memory goes. */
     private val unload = Runnable {
-        if (!isOpen) {
-            web.loadUrl("about:blank")
-            startUrl = ""
-            leaveLocal()
-        }
+        if (!isOpen) dropWeb()
+    }
+
+    private fun dropWeb() {
+        val w = web ?: return
+        web = null
+        startUrl = ""
+        localFile = null
+        loadSeq++ // (a file still being read isn't shown)
+        removeView(w)
+        w.stopLoading()
+        w.destroy()
+    }
+
+    /** The app is out of sight or the phone short of memory: a closed panel's page goes at once. */
+    fun trimMemory() {
+        if (isOpen || visibility == View.VISIBLE) return // (shown, or still sliding out)
+        removeCallbacks(unload)
+        dropWeb()
     }
 
     init {
@@ -102,19 +121,29 @@ class RemotePanel(
             t.ellipsize = TextUtils.TruncateAt.END
         }
         header.addView(titles, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        header.addView(iconButton(R.drawable.ic_panel_refresh, "Reload") { web.reload() })
+        header.addView(iconButton(R.drawable.ic_panel_refresh, "Reload") { web?.reload() })
         header.addView(iconButton(R.drawable.ic_panel_external, "Open in another app") {
             val f = localFile
-            if (f != null) openFileElsewhere?.invoke(f) else openInBrowser(web.url ?: startUrl)
+            if (f != null) openFileElsewhere?.invoke(f) else openInBrowser(web?.url ?: startUrl)
         })
 
         progress.pivotX = 0f
         progress.scaleX = 0f
 
+        addView(header, LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
+        addView(progress, LayoutParams(MATCH_PARENT, dp(2), Gravity.TOP)) // over the page
+        applyTheme()
+        layoutForInsets()
+    }
+
+    /** The page's WebView, made on first use (see [web]). */
+    private fun page(): WebView {
+        web?.let { return it }
+        val web = WebView(context)
+        this.web = web
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            databaseEnabled = true
             mediaPlaybackRequiresUserGesture = true
             allowFileAccess = false
             allowContentAccess = false
@@ -206,12 +235,13 @@ class RemotePanel(
                 return true
             }
         }
-
-        addView(header, LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
-        addView(web, LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        addView(progress, LayoutParams(MATCH_PARENT, dp(2), Gravity.TOP)) // over the page
-        applyTheme()
-        applyInsets(0, 0)
+        web.setBackgroundColor(bg)
+        // (under the progress line, which stays on top)
+        addView(web, indexOfChild(progress), LayoutParams(MATCH_PARENT, MATCH_PARENT).apply {
+            topMargin = insetTop + dp(56)
+            bottomMargin = insetBottom
+        })
+        return web
     }
 
     private fun iconButton(icon: Int, label: String, onClick: () -> Unit) = ImageButton(context).apply {
@@ -239,7 +269,7 @@ class RemotePanel(
     private fun applyTheme() {
         setBackgroundColor(bg)
         header.setBackgroundColor(bg)
-        web.setBackgroundColor(bg)
+        web?.setBackgroundColor(bg)
         titleView.setTextColor(fg)
         subtitleView.setTextColor(muted)
         for (b in buttons) b.setColorFilter(fg)
@@ -247,17 +277,34 @@ class RemotePanel(
     }
 
     private var insetTop = 0
+    private var insetBottom = 0
+    private var insetLeft = 0
+    private var insetRight = 0
+
     /** Status bar on top; navigation bar or keyboard at the bottom; a side nav bar (pixels). */
     fun applyInsets(top: Int, bottom: Int, left: Int = 0, right: Int = 0) {
+        // (told on every frame of the keyboard's slide: laid out again only when they changed —
+        // every frame used to lay out the whole window, panel closed or not)
+        if (top == insetTop && bottom == insetBottom && left == insetLeft && right == insetRight) return
         insetTop = top
-        setPadding(left, 0, right, 0)
+        insetBottom = bottom
+        insetLeft = left
+        insetRight = right
+        layoutForInsets()
+    }
+
+    private fun layoutForInsets() {
+        val top = insetTop
+        setPadding(insetLeft, 0, insetRight, 0)
         header.setPadding(dp(4), top, dp(4), 0)
         header.layoutParams = (header.layoutParams as LayoutParams).apply { height = top + dp(56) }
         (progress.layoutParams as LayoutParams).topMargin = top + dp(56)
         progress.requestLayout()
-        web.layoutParams = (web.layoutParams as LayoutParams).apply {
-            topMargin = top + dp(56)
-            bottomMargin = bottom
+        web?.let { w ->
+            w.layoutParams = (w.layoutParams as LayoutParams).apply {
+                topMargin = top + dp(56)
+                bottomMargin = insetBottom
+            }
         }
     }
 
@@ -270,6 +317,8 @@ class RemotePanel(
         }
         if (System.currentTimeMillis() - chromeSince < CHROME_FOR_MS) return false
         removeCallbacks(unload)
+        val web = page()
+        loadSeq++ // (a file still being read isn't shown over it)
         if (localFile != null) {
             leaveLocal()
             startUrl = "" // (load it afresh, without file access)
@@ -285,6 +334,9 @@ class RemotePanel(
         return true
     }
 
+    /** Counts what the panel was asked to show: a text file read in the background is shown only if it's still the latest. */
+    private var loadSeq = 0
+
     /**
      * A file from inside the app — a page or picture an agent made, a text file — shown here.
      * Pages may load the files next to them (their CSS, images); file access is switched off
@@ -292,39 +344,49 @@ class RemotePanel(
      */
     fun openLocal(file: java.io.File, title: String, subtitle: String) {
         removeCallbacks(unload)
+        val web = page()
+        val seq = ++loadSeq
         localFile = file
         web.settings.allowFileAccess = true
         titleView.text = title
         subtitleView.text = subtitle
         val ext = file.name.substringAfterLast('.', "").lowercase()
         startUrl = Uri.fromFile(file).toString()
+        val base = startUrl
         freshHistory = true
         if (ext in TEXT_FILES) {
             // plain text in the app's colours, wrapped, at a readable size
-            val text = try {
-                file.inputStream().use { inp ->
+            val hex = { c: Int -> String.format(java.util.Locale.ROOT, "#%06X", c and 0xFFFFFF) }
+            val head = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>" +
+                "<body style='margin:0;background:${hex(bg)};color:${hex(fg)}'>" +
+                "<pre style='margin:0;padding:14px 16px 40px;white-space:pre-wrap;overflow-wrap:anywhere;" +
+                "font:13px/1.55 monospace'>"
+            // (read and made into a page off the main thread: a 2 MB log from the phone's storage
+            // froze the app for a moment)
+            Thread({
+                val html = StringBuilder(head)
+                try {
                     val buf = ByteArray(minOf(file.length(), MAX_TEXT.toLong()).toInt())
                     var n = 0
-                    while (n < buf.size) {
-                        val r = inp.read(buf, n, buf.size - n)
-                        if (r < 0) break
-                        n += r
+                    file.inputStream().use { inp ->
+                        while (n < buf.size) {
+                            val r = inp.read(buf, n, buf.size - n)
+                            if (r < 0) break
+                            n += r
+                        }
                     }
-                    String(buf, 0, n, Charsets.UTF_8)
+                    escapeInto(html, String(buf, 0, n, Charsets.UTF_8))
+                } catch (e: Exception) {
+                    escapeInto(html, e.message ?: "Couldn't read it")
+                } catch (_: OutOfMemoryError) {
+                    escapeInto(html, "This file is too big to show here")
                 }
-            } catch (e: Exception) {
-                e.message ?: "Couldn't read it"
-            }
-            val esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            val hex = { c: Int -> String.format(java.util.Locale.ROOT, "#%06X", c and 0xFFFFFF) }
-            web.loadDataWithBaseURL(
-                startUrl,
-                "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>" +
-                    "<body style='margin:0;background:${hex(bg)};color:${hex(fg)}'>" +
-                    "<pre style='margin:0;padding:14px 16px 40px;white-space:pre-wrap;overflow-wrap:anywhere;" +
-                    "font:13px/1.55 monospace'>$esc</pre>",
-                "text/html", "utf-8", null,
-            )
+                html.append("</pre>")
+                val page = html.toString()
+                post {
+                    if (seq == loadSeq && this.web === web) web.loadDataWithBaseURL(base, page, "text/html", "utf-8", null)
+                }
+            }, "panel-text").start()
         } else if (ext in IMAGE_FILES) {
             // a picture on its own page, fitted to the screen: pinch to zoom in (up to 10×),
             // and it starts fitted again on the next file
@@ -349,9 +411,22 @@ class RemotePanel(
         show()
     }
 
+    /** [text] as HTML text, in one pass. */
+    private fun escapeInto(out: StringBuilder, text: String) {
+        out.ensureCapacity(out.length + text.length + 64)
+        for (c in text) {
+            when (c) {
+                '&' -> out.append("&amp;")
+                '<' -> out.append("&lt;")
+                '>' -> out.append("&gt;")
+                else -> out.append(c)
+            }
+        }
+    }
+
     private fun leaveLocal() {
         localFile = null
-        web.settings.allowFileAccess = false
+        web?.settings?.allowFileAccess = false
     }
 
     private fun show() {
@@ -367,7 +442,7 @@ class RemotePanel(
                 .setInterpolator(DecelerateInterpolator(2f)).start()
             onOpened()
         }
-        web.onResume()
+        web?.onResume()
     }
 
     fun close() {
@@ -379,7 +454,7 @@ class RemotePanel(
             .setInterpolator(DecelerateInterpolator()).withEndAction {
                 if (isOpen) return@withEndAction // reopened meanwhile
                 visibility = View.GONE
-                web.onPause()
+                web?.onPause()
                 postDelayed(unload, UNLOAD_AFTER_MS)
             }.start()
     }
@@ -387,6 +462,11 @@ class RemotePanel(
     /** Back: inside the page first, then close the panel. */
     fun back(): Boolean {
         if (!isOpen) return false
+        val web = web
+        if (web == null) {
+            close()
+            return true
+        }
         val list = web.copyBackForwardList()
         val prev = if (list.currentIndex > 0) list.getItemAtIndex(list.currentIndex - 1)?.url else null
         if (web.canGoBack() && prev != null && prev != "about:blank") web.goBack() else close()
@@ -394,13 +474,15 @@ class RemotePanel(
     }
 
     fun destroy() {
-        web.destroy()
+        removeCallbacks(unload)
+        animate().cancel()
+        dropWeb()
     }
 
     companion object {
-        /** Shown as plain text (not as a page). */
         /** Pictures: shown on their own page, fitted, to pinch-zoom. */
         val IMAGE_FILES = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif")
+        /** Shown as plain text (not as a page). */
         val TEXT_FILES = setOf("txt", "md", "markdown", "csv", "json", "log", "xml", "yaml", "yml", "py", "js", "ts", "sh", "c", "cpp", "java", "kt", "go", "rs", "css")
         private const val MAX_TEXT = 2 * 1024 * 1024
         private const val GOOGLE_SIGN_IN = "accounts.google.com"

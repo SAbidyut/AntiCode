@@ -102,10 +102,11 @@ Java_com_sabidyut_agyterm_term_Pty_createSubprocess(JNIEnv *env, jclass clazz, j
 
     // UTF-8 input processing, no XON/XOFF (Ctrl+S / Ctrl+Q must reach programs).
     struct termios tios;
-    tcgetattr(ptm, &tios);
-    tios.c_iflag |= IUTF8;
-    tios.c_iflag &= ~(IXON | IXOFF);
-    tcsetattr(ptm, TCSANOW, &tios);
+    if (tcgetattr(ptm, &tios) == 0) { // (never set from settings that weren't read)
+        tios.c_iflag |= IUTF8;
+        tios.c_iflag &= ~(IXON | IXOFF);
+        tcsetattr(ptm, TCSANOW, &tios);
+    }
     struct winsize sz = {.ws_row = (unsigned short)rows, .ws_col = (unsigned short)cols};
     ioctl(ptm, TIOCSWINSZ, &sz);
 
@@ -192,13 +193,6 @@ Java_com_sabidyut_agyterm_term_Pty_waitFor(JNIEnv *env, jclass clazz, jint pid) 
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return -WTERMSIG(status);
     return 0;
-}
-
-JNIEXPORT void JNICALL
-Java_com_sabidyut_agyterm_term_Pty_close(JNIEnv *env, jclass clazz, jint fd) {
-    (void)env;
-    (void)clazz;
-    close(fd);
 }
 
 JNIEXPORT void JNICALL

@@ -47,7 +47,6 @@ export class TerminalSession {
   private raw: Uint8Array[] = [];
   private rawSize = 0;
   onTitle?: () => void;
-  onActivity?: () => void;
   /** A restored session's saved output is being replayed (see beginReplay). */
   private replaying = false;
   /** Mouse reports in SGR form (CSI ? 1006 h); otherwise the classic CSI M bytes. */
@@ -139,7 +138,6 @@ export class TerminalSession {
       this.renderer.scheduleEager();
       this.edit.check();
       if (this.readerOpen) this.scheduleReader();
-      this.onActivity?.();
     });
     this.term.onTitleChange((t) => {
       if (t.trim()) {
@@ -355,6 +353,11 @@ export class TerminalSession {
   task = '';
   /** A name the user gave it (long-press → Rename). */
   customName = '';
+  /**
+   * Wide view (the key bar's ↔): about twice the columns the screen shows — a table an agent
+   * draws keeps its width — read by sliding sideways. Kept with the tab.
+   */
+  wide = false;
   onMeta?: () => void;
   private lineBuf = '';
 
@@ -386,11 +389,12 @@ export class TerminalSession {
       const m = JSON.parse(localStorage.getItem(`meta:${this.id}`) ?? '{}');
       this.task = typeof m.task === 'string' ? m.task : '';
       this.customName = typeof m.name === 'string' ? m.name : '';
+      this.wide = m.wide === true;
     } catch { /* storage unavailable */ }
   }
   private saveMeta() {
     try {
-      localStorage.setItem(`meta:${this.id}`, JSON.stringify({ task: this.task, name: this.customName }));
+      localStorage.setItem(`meta:${this.id}`, JSON.stringify({ task: this.task, name: this.customName, wide: this.wide || undefined }));
     } catch { /* storage unavailable */ }
   }
   /** Follow what's typed (roughly — history recall and cursor moves aren't seen). */
@@ -524,6 +528,15 @@ export class TerminalSession {
     if (cols !== this.term.cols || rows !== this.term.rows) this.term.resize(cols, rows);
   }
 
+  /** Wide view on or off: the terminal takes its new width at once (its program redraws). */
+  setWide(on: boolean) {
+    if (on === this.wide) return;
+    this.wide = on;
+    this.saveMeta();
+    this.renderer.scrollX = 0; // (from the left edge: where lines start)
+    this.fit(true);
+  }
+
   /** Fit the terminal into the element's current size and tell the PTY if it changed. */
   /** ([now]: tell the program at once — a live pinch step — not after the usual 60 ms) */
   fit(now = false) {
@@ -534,7 +547,10 @@ export class TerminalSession {
     // it lays out its whole screen itself — kept at the full height, most of it slid up out of
     // sight above the keyboard; sized to the room left, it draws everything in it.
     const kb = this.term.buffer.active.type === 'alternate' ? 0 : TerminalSession.keyboardInset;
-    const { cols, rows } = this.renderer.fit(box.width, box.height + kb);
+    const fitted = this.renderer.fit(box.width, box.height + kb);
+    const rows = fitted.rows;
+    // (wide view: about twice as many — 45 on a phone held upright → 90, like a laptop's terminal)
+    const cols = this.wide ? Math.min(Math.max(160, fitted.cols), Math.max(fitted.cols + 20, Math.round(fitted.cols * 2))) : fitted.cols;
     if (cols !== this.term.cols || rows !== this.term.rows) {
       // (a full-screen program redraws the whole screen for its new size — slowly under
       // proot: the last picture stays until it has, not the old screen cut to the new size)
@@ -603,14 +619,62 @@ export class TerminalSession {
     return `\x1b[M${ch(b)}${ch(x + 1)}${ch(y + 1)}`;
   }
 
+  /**
+   * The link a program put on the text under the point (OSC 8: Claude Code's file names and
+   * links, `ls --hyperlink` …), or null. The text shown can be anything — a link's title, a
+   * path cut short — and stays one link however the program broke it into rows.
+   */
+  linkAt(clientX: number, clientY: number): string | null {
+    const { x, line } = this.renderer.cellAt(clientX, clientY);
+    try {
+      const cell = this.term.buffer.active.getLine(line)?.getCell(x) as unknown as { extended?: { urlId?: number } } | undefined;
+      const id = cell?.extended?.urlId;
+      if (!id) return null;
+      // (xterm keeps them, but has no public way to read them back)
+      const core = (this.term as unknown as { _core?: { _oscLinkService?: { getLinkData(id: number): { uri?: string } | undefined } } })._core;
+      const uri = core?._oscLinkService?.getLinkData(id)?.uri ?? '';
+      return uri && uri.length <= 8192 ? uri : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** If a URL is under the point, return it. */
   urlAt(clientX: number, clientY: number): string | null {
-    return this.matchAt(clientX, clientY, URL_RE);
+    // (a sign-in link is several hundred characters long: looked at whole)
+    return this.matchAt(clientX, clientY, URL_RE, true, 4096);
   }
 
   /** If a file name (report.pdf, ~/site/index.html …) is under the point, return it. */
   fileAt(clientX: number, clientY: number): string | null {
-    return this.matchAt(clientX, clientY, FILE_RE);
+    return this.matchAt(clientX, clientY, FILE_RE, true);
+  }
+
+  /**
+   * How row [i] goes on in the next one: 0 not at all; 1 the terminal wrapped it; 2 the program
+   * broke the line itself at the screen's edge ([hard] only). Claude Code and Codex do: a link or
+   * a path longer than the screen comes as pieces, one per row, each a line of its own — a tap
+   * took the piece under the finger, a link cut short or nothing at all.
+   */
+  private joinsNext(i: number, hard: boolean): 0 | 1 | 2 {
+    const buf = this.term.buffer.active;
+    const next = buf.getLine(i + 1);
+    if (!next) return 0;
+    if (next.isWrapped) return 1;
+    if (!hard || this.edit.rowEnd(i) < this.term.cols - 2) return 0; // (it ends before the edge)
+    const a = buf.getLine(i)?.translateToString(true).trim() ?? '';
+    const b = next.translateToString(true).trim();
+    if (!a || !b) return 0;
+    const aTok = a.slice(a.search(/\S+$/));
+    const bTok = b.split(/\s/)[0];
+    const linky = /^[^\s'"<>\x60|]+$/u; // what a link or a path can be made of
+    if (!linky.test(aTok) || !linky.test(bTok)) return 0;
+    // the row is one piece of a word longer than the screen (prose has spaces in a full row) …
+    if (!/\s/.test(a)) return 2;
+    // … or a link or a path starts at its end, and the next row is all one piece, or looks
+    // like more of it
+    if (/:\/\/|\//.test(aTok) && (!/\s/.test(b) || /[/?&=%#.]/.test(bTok))) return 2;
+    return 0;
   }
 
   /**
@@ -629,31 +693,43 @@ export class TerminalSession {
    * around the point is searched (at most 1k characters each way): these patterns can start
    * anywhere, and on a long line (minified code, base64) a tap took seconds.
    */
-  private matchAt(clientX: number, clientY: number, re: RegExp): string | null {
+  private matchAt(clientX: number, clientY: number, re: RegExp, hard = false, around = 256): string | null {
     const { x, line: at } = this.renderer.cellAt(clientX, clientY);
     const buf = this.term.buffer.active;
+    const reach = hard ? 40 : 16; // (rows)
     let start = at;
-    while (start > 0 && at - start < 16 && buf.getLine(start)?.isWrapped) start--;
+    while (start > 0 && at - start < reach && this.joinsNext(start - 1, hard)) start--;
     let text = '';
     let offset = -1;
-    for (let i = start; i < buf.length && i - at <= 16; i++) {
+    for (let i = start; i < buf.length && i - at <= reach; i++) {
       const line = buf.getLine(i);
-      if (!line || (i > start && !line.isWrapped)) break;
+      if (!line) break;
+      const how = i > start ? this.joinsNext(i - 1, hard) : 1;
+      if (!how) break;
+      let row = line.translateToString(false);
+      // a row the program began itself: its indent isn't part of the word, nor the space
+      // left at the end of the row before
+      let cut = 0;
+      if (how === 2) {
+        cut = row.length - row.trimStart().length;
+        row = row.slice(cut);
+        text = text.trimEnd();
+      }
       // x is a cell; the text has one char per letter cluster or wide character
-      if (i === at) offset = text.length + line.translateToString(false, 0, x).length;
-      text += line.translateToString(false);
+      if (i === at) offset = text.length + Math.max(0, line.translateToString(false, 0, x).length - cut);
+      text += row;
     }
     if (offset < 0) return null;
     const space = (c: string) => c === ' ' || c === '\t' || c === '\u00a0';
     let a = offset;
     let b = offset;
-    while (a > 0 && offset - a < 1024 && !space(text[a - 1])) a--;
-    while (b < text.length && b - offset < 1024 && !space(text[b])) b++;
+    while (a > 0 && offset - a < Math.max(1024, around) && !space(text[a - 1])) a--;
+    while (b < text.length && b - offset < Math.max(1024, around) && !space(text[b])) b++;
     if (a === b) return null;
     // (a window around the point: these patterns can start anywhere, and on a 2k-long token
     // every start was tried — a tap took a good part of a second)
-    a = Math.max(a, offset - 256);
-    b = Math.min(b, offset + 256);
+    a = Math.max(a, offset - around);
+    b = Math.min(b, offset + around);
     const token = text.slice(a, b);
     const at0 = offset - a;
     for (const m of token.matchAll(re)) {
@@ -757,6 +833,14 @@ export class TerminalSession {
     }
     div.append(l.slice(last));
     return div;
+  }
+
+  /** The screen's text as it stands (no history). */
+  screenText(): string {
+    const buf = this.term.buffer.active;
+    const rows: string[] = [];
+    for (let y = 0; y < this.term.rows; y++) rows.push(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
+    return rows.join('\n');
   }
 
   /** How many rows of the screen have something on them. */

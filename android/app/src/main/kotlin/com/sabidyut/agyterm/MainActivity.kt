@@ -26,7 +26,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.content.ComponentCallbacks2
 import android.util.Base64
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
@@ -62,11 +61,22 @@ class MainActivity : ComponentActivity() {
         fileCallback = null
     }
 
+    /** The phone's list of its Google accounts (a sign-in: "which Gmail?"); no permission needed. */
+    private val pickAccount = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val name = r.data?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME) ?: ""
+        js("__native.onAccountPicked && __native.onAccountPicked(${JSONObject.quote(name)})")
+    }
+
     // ---------------------------------------------------------------- output pump
     // PTY output arrives on reader threads; batch it and hand it to the web UI ~60×/s.
     private val pendingLock = Any()
-    private val pending = LinkedHashMap<String, ByteArrayOutputStream>()
+    private var pending = LinkedHashMap<String, OutBuffer>()
     private var flushScheduled = false
+
+    /** A session's output waiting for the page, encoded straight from where it was gathered. */
+    private class OutBuffer : ByteArrayOutputStream(8192) {
+        fun base64(off: Int, len: Int): String = Base64.encodeToString(buf, off, len, Base64.NO_WRAP)
+    }
 
     private val outputListener = object : TermSession.OutputListener {
         override fun onOutput(session: TermSession, data: ByteArray, len: Int) = queue(session.id, data, len)
@@ -81,154 +91,59 @@ class MainActivity : ComponentActivity() {
 
     private fun queue(id: String, data: ByteArray, len: Int) {
         synchronized(pendingLock) {
-            // the page was let go: what's printed now is in the session's saved output, which
-            // the page gets when it's loaded again
-            if (dropOutput) return
-            val buf = pending.getOrPut(id) { ByteArrayOutputStream() }
-            buf.write(data, 0, len)
-            if (outOfSight) {
-                if (buf.size() > HOLD_MAX) {
-                    // a lot printed while away: no point handing all of it over — the page
-                    // starts afresh with the saved output instead
-                    dropOutput = true
-                    pending.clear()
-                    main.post { releasePage() }
-                    return
-                }
-                // a question for the terminal (where is the cursor, what are you): the program
-                // may wait for the answer — that goes to the page now
-                if (!flushScheduled && asksTerminal(data, len)) {
-                    flushScheduled = true
-                    main.post(::flush)
-                }
-                return
-            }
+            pending.getOrPut(id) { OutBuffer() }.write(data, 0, len)
             if (!flushScheduled) {
                 flushScheduled = true
                 // the echo of a key (nothing sent for a frame): right away; a stream of output
-                // still goes in batches
+                // still goes in batches, about one a frame (the page draws no more often)
                 val idle = SystemClock.uptimeMillis() - lastFlush > 16
-                if (idle) main.post(::flush) else main.postDelayed(::flush, 8)
+                if (idle) main.post(flushTask) else main.postDelayed(flushTask, BATCH_MS)
             }
         }
     }
 
     @Volatile private var lastFlush = 0L
 
-    // ---------------------------------------------------------------- out of sight
-    // In the background the page draws nothing and the system slows its timers down to about
-    // once a second, so output handed to it then piled up in the page (megabytes while an
-    // agent worked away) faster than it could take it in — memory the rest of the phone was
-    // short of. Now the output waits here and the page gets it in one go when the app is
-    // back. Away for long, a lot printed meanwhile, or the phone short of memory: the page is
-    // let go altogether (its memory goes back to the phone) and loads again when the app is
-    // back, replaying each session's saved output, as after Android rebuilt the app's screen.
-    /** The app is in the background (between onStop and onStart). */
-    @Volatile private var outOfSight = false
-    /** The page was let go (or is being): output isn't kept for it. (under pendingLock) */
-    private var dropOutput = false
-    /** The page is about:blank now: load it again when the app is back. */
-    private var pageReleased = false
-    private val releaseWhenAway = Runnable { if (outOfSight) releasePage() }
+    private val flushTask = Runnable { flush() }
 
-    /**
-     * A query the terminal answers (CSI … n / c / t, CSI > q, CSI ? u, CSI … $ p, OSC …;?,
-     * DCS): device status, cursor position, attributes, colours, modes.
-     */
-    private fun asksTerminal(b: ByteArray, n: Int): Boolean {
-        var i = 0
-        while (i < n - 1) {
-            if (b[i] != 0x1b.toByte()) { i++; continue }
-            when (b[i + 1].toInt().toChar()) {
-                'P' -> return true
-                ']' -> {
-                    var j = i + 2
-                    while (j < n - 1 && j < i + 40 && b[j] != 0x07.toByte() && b[j] != 0x1b.toByte()) {
-                        if (b[j] == ';'.code.toByte() && b[j + 1] == '?'.code.toByte()) return true
-                        j++
-                    }
-                }
-                '[' -> {
-                    var j = i + 2
-                    val first = if (j < n) b[j].toInt().toChar() else ' '
-                    while (j < n && j < i + 24 && b[j] in 0x20..0x3f) j++
-                    if (j < n) {
-                        val prev = b[j - 1].toInt().toChar()
-                        when (b[j].toInt().toChar()) {
-                            'n', 'c', 't' -> return true
-                            'q' -> if (first == '>') return true
-                            'u' -> if (first == '?') return true
-                            'p' -> if (prev == '$') return true
-                        }
-                    }
-                }
-            }
-            i++
-        }
-        return false
-    }
-
-    /** Lets the page go (the app out of sight): its memory goes back to the phone. */
-    private fun releasePage() {
-        if (pageReleased || rebuilding || web.url == null) {
-            synchronized(pendingLock) { if (!pageReleased) dropOutput = false }
-            return
-        }
-        Log.i("AgyWeb", "releasing the page while out of sight")
-        // (the sessions keep their output; the new page asks for it)
-        service?.let { svc -> for (s in svc.sessions.values) s.attach(null) }
-        synchronized(pendingLock) {
-            dropOutput = true
-            pending.clear()
-        }
-        pageReleased = true
-        if (outOfSight) web.loadUrl("about:blank") else reloadPage()
-    }
-
-    /** Back in sight after the page was let go: the UI starts again (sessions re-attach). */
-    private fun reloadPage() {
-        pageReleased = false
-        synchronized(pendingLock) {
-            dropOutput = false
-            pending.clear()
-        }
-        lastInsets = ""
-        web.loadUrl(START_URL)
-    }
-
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        // the phone is short of memory while we're in the background: give the page's back
-        @Suppress("DEPRECATION")
-        val low = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
-            level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
-        if (outOfSight && low) main.post { if (outOfSight) releasePage() }
-    }
-
+    /** (main thread) */
     private fun flush() {
         lastFlush = SystemClock.uptimeMillis()
-        val batch: List<Pair<String, ByteArray>>
+        // (the gathered buffers are taken as they are — not copied out, then encoded, then
+        // pasted into the script, then into another: this runs for every frame of output)
+        val batch: Map<String, OutBuffer>
         synchronized(pendingLock) {
-            batch = pending.map { (id, buf) -> id to buf.toByteArray() }
-            pending.clear()
+            if (pending.isEmpty()) {
+                flushScheduled = false
+                return
+            }
+            batch = pending
+            pending = LinkedHashMap()
             flushScheduled = false
         }
-        for ((id, bytes) in batch) {
+        if (destroyed) return
+        for ((id, buf) in batch) {
+            val size = buf.size()
             var off = 0
-            while (off < bytes.size) {
-                val n = minOf(CHUNK, bytes.size - off)
-                val b64 = Base64.encodeToString(bytes, off, n, Base64.NO_WRAP)
-                js("__native.onOutput('$id','$b64')")
+            while (off < size) {
+                val n = minOf(CHUNK, size - off)
+                val b64 = buf.base64(off, n)
+                val script = StringBuilder(b64.length + 64)
+                    .append("window.__native&&__native.onOutput('").append(id).append("','").append(b64).append("')")
+                web.evaluateJavascript(script.toString(), null)
                 off += n
             }
         }
     }
 
+    /** The activity is gone (its WebViews destroyed): nothing more is sent to the page. */
+    private var destroyed = false
+
     private fun js(code: String) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            web.evaluateJavascript("window.__native && ($code)", null)
+            if (!destroyed) web.evaluateJavascript("window.__native && ($code)", null)
         } else {
-            main.post { web.evaluateJavascript("window.__native && ($code)", null) }
+            main.post { if (!destroyed) web.evaluateJavascript("window.__native && ($code)", null) }
         }
     }
 
@@ -266,9 +181,7 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        // (no Custom Tabs warm-up: it started the whole browser in the background on every
-        // launch — a hundred MB or more — for a page that's rarely opened; it opens without)
-        browser = InAppBrowser(this)
+        browser = InAppBrowser(this).apply { warmup() }
 
         web = TermWebView(this)
         web.setBackgroundColor(Color.parseColor(BG))
@@ -291,7 +204,14 @@ class MainActivity : ComponentActivity() {
             chooseFiles = { cb ->
                 fileCallback?.onReceiveValue(null)
                 fileCallback = cb
-                pickFiles.launch("*/*")
+                try {
+                    pickFiles.launch("*/*")
+                } catch (_: android.content.ActivityNotFoundException) {
+                    // (a phone without a file picker: the page is told "none chosen")
+                    fileCallback = null
+                    cb.onReceiveValue(null)
+                    Toast.makeText(this, "No app on this phone picks files", Toast.LENGTH_SHORT).show()
+                }
             },
             // while the panel covers the terminal, no session is "being watched"
             onOpened = { service?.activeSessionId = null },
@@ -326,6 +246,7 @@ class MainActivity : ComponentActivity() {
                 // the page missed the insets sent while it was loading
                 lastInsets = ""
                 ViewCompat.requestApplyInsets(view)
+                pageReady = true
                 deliverOpenSession()
             }
 
@@ -388,6 +309,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         service?.let { svc ->
             for (s in svc.sessions.values) s.attach(null)
             svc.onSessionExit = null
@@ -395,10 +317,20 @@ class MainActivity : ComponentActivity() {
             svc.updateForeground()
         }
         unbindService(connection)
+        // (nothing posted earlier runs against the destroyed WebViews, or holds this activity)
+        main.removeCallbacksAndMessages(null)
+        synchronized(pendingLock) { pending.clear() }
         browser.release()
         panel.destroy()
         web.destroy()
         super.onDestroy()
+    }
+
+    /** The app went out of sight, or the phone is short of memory: a closed dashboard's page goes now. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        @Suppress("DEPRECATION") // (still what Android before 14 sends while the app is in front)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && ::panel.isInitialized) panel.trimMemory()
     }
 
     // ---------------------------------------------------------------- insets / keyboard animation
@@ -541,7 +473,11 @@ class MainActivity : ComponentActivity() {
                 )
                 Toast.makeText(this, "Turn on \"Allow access to manage all files\", then come back", Toast.LENGTH_LONG).show()
             } catch (_: Exception) {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                try {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                } catch (_: Exception) {
+                    Toast.makeText(this, "Open Settings → Apps → AntiCode → Permissions → Files", Toast.LENGTH_LONG).show()
+                }
             }
         }
         pushState()
@@ -556,20 +492,12 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         TermSession.paceOutput = true
         service?.uiVisible = true
-        main.removeCallbacks(releaseWhenAway)
-        synchronized(pendingLock) {
-            outOfSight = false
-            // what was printed while away, in one go
-            if (!dropOutput && pending.isNotEmpty() && !flushScheduled) {
-                flushScheduled = true
-                main.post(::flush)
-            }
-        }
-        if (pageReleased) reloadPage()
     }
 
     // ---------------------------------------------------------------- "task finished" taps
     private var openSessionId: String? = null
+    /** The page has loaded (its `__native` is there to be told things). */
+    private var pageReady = false
     /** The session the page shows (set from JS). */
     @Volatile private var shownSessionId: String? = null
 
@@ -590,7 +518,8 @@ class MainActivity : ComponentActivity() {
     /** Show the session whose notification was tapped (the page keeps it if still starting). */
     private fun deliverOpenSession() {
         val id = openSessionId ?: return
-        if (web.url == null || pageReleased) return // delivered from onPageFinished
+        // (delivered from onPageFinished: told while the page was still loading, the tap was lost)
+        if (!pageReady) return
         openSessionId = null
         service?.clearFinished(id)
         js("__native.onOpenSession(${JSONObject.quote(id)})")
@@ -600,10 +529,6 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         TermSession.paceOutput = false
         service?.uiVisible = false
-        outOfSight = true
-        main.removeCallbacks(releaseWhenAway)
-        // (not in the self test, which looks at the page while the screen may be off)
-        if (!selftestEnabled()) main.postDelayed(releaseWhenAway, RELEASE_AFTER_MS)
         // Opening the app again must not pop the keyboard up by itself: let go of the
         // terminal's keyboard focus (a tap on the terminal brings it back).
         if (keys.hasFocus()) {
@@ -1114,6 +1039,23 @@ class MainActivity : ComponentActivity() {
             main.post { browser.open(url) }
         }
 
+        /** The phone's own picker of its Google accounts; the answer comes as onAccountPicked. */
+        @JavascriptInterface
+        fun pickAccount() {
+            main.post {
+                try {
+                    pickAccount.launch(
+                        android.accounts.AccountManager.newChooseAccountIntent(
+                            null, null, arrayOf("com.google"), null, null, null, null,
+                        ),
+                    )
+                } catch (_: Exception) { // (a phone without Google's accounts)
+                    Toast.makeText(this@MainActivity, "No Google accounts on this phone", Toast.LENGTH_SHORT).show()
+                    js("__native.onAccountPicked && __native.onAccountPicked('')")
+                }
+            }
+        }
+
         /** A sign-in page with the account chosen for it (see InAppBrowser.openSignIn). */
         @JavascriptInterface
         fun openSignIn(url: String, hint: String, choose: Boolean, private: Boolean) {
@@ -1393,10 +1335,8 @@ class MainActivity : ComponentActivity() {
         private const val ASSET_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://$ASSET_HOST/assets/web/index.html"
         private const val CHUNK = 192 * 1024
-        /** Output kept for the page per session while away (more: the page starts afresh). */
-        private const val HOLD_MAX = 1024 * 1024
-        /** Away this long: the page is let go (loaded again when the app is back). */
-        private const val RELEASE_AFTER_MS = 3 * 60_000L
+        /** A stream of output is gathered this long before it's handed to the page. */
+        private const val BATCH_MS = 12L
         /** The most the clipboard is given at once (the system refuses ~1 MB and more). */
         private const val MAX_CLIP = 300_000
         private const val BG = "#0b0d12"

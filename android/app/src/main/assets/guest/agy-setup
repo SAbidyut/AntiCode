@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agy Terminal — install the Antigravity CLI (run again any time with: agy-setup)
+# AntiCode — install the Antigravity CLI (run again any time with: agy-setup)
 #   agy-setup --auto   skip the apt step when the basic tools are already there
 set -o pipefail
 G='\033[1;32m'; R='\033[1;31m'; N='\033[0m'

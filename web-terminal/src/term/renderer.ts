@@ -186,8 +186,6 @@ interface Row {
 const OVERSCAN = 10;
 /** The keyboard pan goes where the cursor was for most (60 %) of this long (ms). */
 const PAN_WINDOW_MS = 500;
-/** The cursor stops blinking this long after it last moved (see armBlinkRest). */
-const BLINK_FOR_MS = 12_000;
 /** How long a moment's miss of an agent's input box is bridged (no layout flip-flop). */
 const BOX_MEMORY_MS = 400;
 
@@ -202,20 +200,55 @@ export class BanglaRenderer {
   readonly el: HTMLDivElement;
   /** Moves as a whole when scrolling; rows sit at `line × lineHeight` inside it. */
   private viewport: HTMLDivElement;
-  /** Scaled while pinch-zooming. */
+  /** Slides up as a whole to keep the cursor above the keyboard (see pan). */
   private zoomLayer: HTMLDivElement;
+  /**
+   * Wide view: the terminal has more columns than the screen shows, and this layer — the
+   * picture and the pinned input box — slides sideways (scrollX) to read them.
+   */
+  private hLayer: HTMLDivElement;
+  /** Wide view: how far the picture is slid left (px; 0 = its left edge in sight). */
+  scrollX = 0;
+  /** The width the columns are shown in (px, the screen less its padding; from the last frame). */
+  private viewW = 0;
+  private hbar: HTMLDivElement | null = null;
+  private hbarTimer = 0;
+  private colsVar = 0;
   private cursorEl: HTMLDivElement;
   private rows = new Map<number, Row>();
   private spare: HTMLDivElement[] = [];
   private palette: string[];
-  private measureCtx = document.createElement('canvas').getContext('2d')!;
+  /** One 1×1 canvas measures text for every terminal (each used to keep a canvas of its own). */
+  private static measureCtx: CanvasRenderingContext2D | null = null;
+  private static measurer(): CanvasRenderingContext2D {
+    if (!BanglaRenderer.measureCtx) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      BanglaRenderer.measureCtx = canvas.getContext('2d')!;
+    }
+    return BanglaRenderer.measureCtx;
+  }
+  /** A cell's width and a row's height at a text size. */
+  static metrics(fontSize: number): { cellWidth: number; lineHeight: number } {
+    const ctx = BanglaRenderer.measurer();
+    ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
+    return { cellWidth: ctx.measureText('MMMMMMMMMM').width / 10, lineHeight: Math.round(fontSize * 1.45) };
+  }
+  /** How many columns/rows of [fontSize] text fit into a pixel box. */
+  static gridFor(fontSize: number, width: number, height: number): { cols: number; rows: number } {
+    const { cellWidth, lineHeight } = BanglaRenderer.metrics(fontSize);
+    return {
+      // minus the screen's padding (8px left/right, 6px top/bottom)
+      cols: Math.max(10, Math.floor((width - 16) / cellWidth)),
+      rows: Math.max(4, Math.floor((height - 12) / lineHeight)),
+    };
+  }
   private widthCache = new Map<string, number>();
   private cell!: IBufferCell;
   private probe: IBufferCell | undefined;
   private frame = 0;
   private bufferKey = '';
   private lastBaseY = 0;
-  private zoom = 1;
   // ---- motion ----
   /** Highest buffer line that has been shown with content (new lines past it fade in). */
   private revealedUpTo = -1;
@@ -225,21 +258,6 @@ export class BanglaRenderer {
   private lastCursorLine = -1;
   private cursorOnTop = false;
   private typingTimer = 0;
-  /**
-   * The cursor blinks for a while after it last moved, then stays solid (as GTK terminals
-   * do): an endless blink kept the page drawing 60 frames a second while nothing happened —
-   * CPU, GPU and battery the rest of the phone could use.
-   */
-  private restTimer = 0;
-  private armBlinkRest() {
-    this.cursorEl.classList.remove('rest');
-    this.dockCursor?.classList.remove('rest');
-    clearTimeout(this.restTimer);
-    this.restTimer = window.setTimeout(() => {
-      this.cursorEl.classList.add('rest');
-      this.dockCursor?.classList.add('rest');
-    }, BLINK_FOR_MS);
-  }
   private animBaseY = 0;
   // ---- right-aligned labels (the prompt's clock): drawn by us at the right edge of a
   // line, not text in the terminal, so they stay at the edge through zoom and resize ----
@@ -454,7 +472,7 @@ export class BanglaRenderer {
   /** Fractional cell column under a client x (a tap between two letters picks the nearer gap). */
   colAt(clientX: number): number {
     const rect = this.viewport.getBoundingClientRect();
-    return Math.max(0, Math.min(this.term.cols, (clientX - rect.left) / (this.cellWidth * this.zoom)));
+    return Math.max(0, Math.min(this.term.cols, (clientX - rect.left) / this.cellWidth));
   }
 
   private drawSelection(rowY: (i: number) => number, first: number, last: number) {
@@ -538,7 +556,10 @@ export class BanglaRenderer {
       t.style.animationDelay = '';
     });
     this.zoomLayer.append(this.viewport);
-    this.el.append(this.zoomLayer);
+    this.hLayer = document.createElement('div');
+    this.hLayer.className = 'term-h';
+    this.hLayer.append(this.zoomLayer);
+    this.el.append(this.hLayer);
     this.palette = build256(opts.theme);
     this.applyMetrics();
     this.el.classList.toggle('anim', !!opts.animate);
@@ -620,14 +641,25 @@ export class BanglaRenderer {
     clearTimeout(this.frame);
     this.frame = 0;
     clearTimeout(this.typingTimer);
-    clearTimeout(this.restTimer);
+    this.typingTimer = 0;
     clearTimeout(this.panTimer);
+    clearTimeout(this.boxTimer);
+    clearTimeout(this.hbarTimer);
+    this.overscrollAnim?.cancel();
+    this.overscrollAnim = null;
+    this.dropGhost();
     this.trimMarker?.dispose();
     this.trimMarker = null;
     this.viewMarker?.dispose();
     this.viewMarker = null;
     for (const l of this.rightLabels) l.marker.dispose();
     this.rightLabels = [];
+    for (const b of this.barLines) b.marker.dispose();
+    this.barLines = [];
+    // (the rows and their cached HTML go with the session, not when the page does)
+    this.rows.clear();
+    this.spare.length = 0;
+    this.widthCache.clear();
   }
 
   setOptions(opts: Partial<RendererOptions>) {
@@ -668,7 +700,7 @@ export class BanglaRenderer {
     for (const v of ['--cw', '--lh', '--fs', '--bn-fs', '--bw']) g.style.setProperty(v, this.el.style.getPropertyValue(v));
     g.style.fontSize = `${this.opts.fontSize}px`;
     g.style.lineHeight = `${this.lineHeight}px`;
-    this.el.append(g);
+    this.hLayer.append(g); // (slid sideways as the picture it copies)
     this.still = g;
     this.zoomLayer.style.opacity = '0';
   }
@@ -705,13 +737,12 @@ export class BanglaRenderer {
    */
   private panHist: { t: number; v: number }[] = [];
   private panTimer = 0;
-  private panZoom = 1;
   /** (the last picture was scrolled back: no pan was worked out for it) */
   private panScrolled = false;
   /** Time of the user's last keystroke (set by the session). */
   lastInput = 0;
   private applyLayerTransform() {
-    const t = `translateY(${(-this.pan).toFixed(1)}px)` + (this.zoom !== 1 ? ` scale(${this.zoom})` : '');
+    const t = `translateY(${(-this.pan).toFixed(1)}px)`;
     if (this.zoomLayer.style.transform !== t) this.zoomLayer.style.transform = t;
   }
 
@@ -736,23 +767,24 @@ export class BanglaRenderer {
     this.holdQuiet = quiet;
   }
   /** The pan to show now, given the one wanted (see panHist). */
-  private settlePan(want: number, backDown: boolean): number {
+  private settlePan(want: number, backDown: boolean, screenH: number): number {
     const now = performance.now();
-    const zoomed = this.zoom !== this.panZoom;
-    this.panZoom = this.zoom;
     // the screen itself changed (keyboard settled without sliding, rotation, text size, a
     // full-screen program started or ended): the new pan at once, not after a moment's jump
     const buf = this.term.buffer.active;
-    const key = `${this.el.clientHeight}|${this.term.rows}|${this.lineHeight}|${buf.type}`;
+    const key = `${screenH}|${this.term.rows}|${this.lineHeight}|${buf.type}`;
     const relaid = key !== this.panKey;
     this.panKey = key;
     const same = (x: number, y: number) => Math.abs(x - y) < 0.5;
-    // at once: the keyboard sliding, a zoom, back from reading history, the first picture,
-    // and in a shell the user's own keys (Enter takes the prompt to a new line)
-    const prompt = this.insetsMoving || zoomed || relaid || backDown || !this.rows.size ||
+    // at once: the keyboard sliding, back from reading history, the first picture, and in a
+    // shell the user's own keys (Enter takes the prompt to a new line)
+    const prompt = this.insetsMoving || relaid || backDown || !this.rows.size ||
       // (a shell's output growing down past the keyboard is followed at once — it ran on
       // hidden under the keyboard, then the screen jumped)
-      (!this.anchorBottom && (now - this.lastInput < 400 || want > this.pan + 0.5));
+      (!this.anchorBottom && (now - this.lastInput < 400 || want > this.pan + 0.5)) ||
+      // (an agent answering a key — Enter, a choice in its menu — with lines that go down
+      // under the keyboard: at once too, not after a moment with the input box out of sight)
+      (now - this.lastInput < 600 && want > this.pan + 0.5);
     const h = this.panHist;
     if (prompt) {
       h.length = 0;
@@ -806,11 +838,63 @@ export class BanglaRenderer {
     return redraws && this.lastOutput < this.holdFrom;
   }
 
+  // ---- wide view: sliding sideways ----
+  /** How far the picture can slide left: the columns wider than the screen (px). */
+  maxScrollX(): number {
+    const view = this.viewW || this.el.clientWidth - 16;
+    return Math.max(0, Math.round(this.term.cols * this.cellWidth - view));
+  }
+
+  /** Slide sideways by [px] (positive = further right in the text). False at an edge. */
+  scrollXBy(px: number): boolean {
+    if (!Number.isFinite(px)) return false;
+    const next = Math.max(0, Math.min(this.maxScrollX(), this.scrollX + px));
+    if (Math.abs(next - this.scrollX) < 0.01) return false;
+    this.scrollX = next;
+    this.applyH(false);
+    this.showHbar();
+    return true;
+  }
+
+  /** The sideways slide on screen ([ease]: a short glide, else at once — a finger dragging). */
+  private applyH(ease: boolean) {
+    const sx = this.scrollX;
+    const t = sx ? `translateX(${(-sx).toFixed(1)}px)` : '';
+    const dur = ease && this.opts.animate ? '200ms' : '0s';
+    if (this.hLayer.style.transitionDuration !== dur) this.hLayer.style.transitionDuration = dur;
+    if (this.hLayer.style.transform !== t) this.hLayer.style.transform = t;
+  }
+
+  /**
+   * A thin line at the bottom saying where in the wide text the screen is: shown while it
+   * slides (and a moment after), then it fades — nothing stays over the text.
+   */
+  showHbar(ms = 900) {
+    const max = this.maxScrollX();
+    if (max <= 0) {
+      this.hbar?.classList.remove('show');
+      return;
+    }
+    if (!this.hbar) {
+      this.hbar = document.createElement('div');
+      this.hbar.className = 'term-hbar';
+      this.hbar.append(document.createElement('i'));
+      this.el.append(this.hbar);
+    }
+    const view = this.viewW || this.el.clientWidth - 16;
+    const content = view + max;
+    const w = Math.max(28, (view * view) / content);
+    const knob = this.hbar.firstElementChild as HTMLElement;
+    knob.style.width = `${w.toFixed(1)}px`;
+    knob.style.transform = `translateX(${(((view - w) * this.scrollX) / max).toFixed(1)}px)`;
+    this.hbar.classList.add('show');
+    clearTimeout(this.hbarTimer);
+    this.hbarTimer = window.setTimeout(() => this.hbar?.classList.remove('show'), ms);
+  }
+
   private applyMetrics() {
     const { fontSize, theme } = this.opts;
-    this.measureCtx.font = `${fontSize}px "JetBrains Mono", monospace`;
-    this.cellWidth = this.measureCtx.measureText('MMMMMMMMMM').width / 10;
-    this.lineHeight = Math.round(fontSize * 1.45);
+    ({ cellWidth: this.cellWidth, lineHeight: this.lineHeight } = BanglaRenderer.metrics(fontSize));
     const s = this.el.style;
     s.setProperty('--cw', `${this.cellWidth}px`);
     s.setProperty('--lh', `${this.lineHeight}px`);
@@ -827,11 +911,7 @@ export class BanglaRenderer {
 
   /** How many columns/rows fit into the given pixel box. */
   fit(width: number, height: number): { cols: number; rows: number } {
-    return {
-      // minus the screen's padding (8px left/right, 6px top/bottom)
-      cols: Math.max(10, Math.floor((width - 16) / this.cellWidth)),
-      rows: Math.max(4, Math.floor((height - 12) / this.lineHeight)),
-    };
+    return BanglaRenderer.gridFor(this.opts.fontSize, width, height);
   }
 
   private lastRenderAt = 0;
@@ -857,8 +937,9 @@ export class BanglaRenderer {
     const key = (bold ? 'b' : 'r') + text;
     let w = this.widthCache.get(key);
     if (w === undefined) {
-      this.measureCtx.font = `${bold ? 'bold ' : ''}${this.opts.fontSize * this.opts.bnScale}px Kalpurush`;
-      w = this.measureCtx.measureText(text).width;
+      const ctx = BanglaRenderer.measurer();
+      ctx.font = `${bold ? 'bold ' : ''}${this.opts.fontSize * this.opts.bnScale}px Kalpurush`;
+      w = ctx.measureText(text).width;
       if (this.widthCache.size > 4000) this.widthCache.clear();
       this.widthCache.set(key, w);
     }
@@ -1204,6 +1285,8 @@ export class BanglaRenderer {
     // cursor is placed, not glided from where it was
     this.panScrolled = true;
     this.lastCursorLine = -1;
+    // (what was printed meanwhile is simply there: no screenful fading in at once)
+    this.suppressReveal = true;
     this.schedule();
   }
 
@@ -1240,6 +1323,16 @@ export class BanglaRenderer {
     const rows = term.rows;
     const cols = term.cols;
     const lh = this.lineHeight;
+    // The screen's size, read once, before anything is written: asked again after the rows
+    // changed, the browser laid the whole screen out on the spot — twice a frame.
+    const screenH = this.el.clientHeight;
+    const screenW = this.el.clientWidth;
+    this.viewW = Math.max(0, screenW - 16);
+    // (rows as wide as the terminal's columns: wider than the screen in wide view)
+    if (cols !== this.colsVar) {
+      this.colsVar = cols;
+      this.el.style.setProperty('--cols', String(cols));
+    }
 
     // Lines dropped off the top of a full scrollback (or cleared with it) shift every
     // line number down: move the rendered rows along instead of rebuilding them.
@@ -1280,7 +1373,7 @@ export class BanglaRenderer {
     }
     // The last line drawn: the cursor's (plus one), or anything below it (a completion
     // menu, a TUI's footer).
-    const visible = this.el.clientHeight - 12;
+    const visible = screenH - 12;
     let lastY = buf.cursorY + 1;
     for (let y = rows - 1; y > lastY; y--) {
       if (buf.getLine(buf.baseY + y)?.translateToString(true)) {
@@ -1346,7 +1439,7 @@ export class BanglaRenderer {
     // Every line the screen can show: more than the terminal's rows when the picture is taller
     // than they are — a pinch-zoom preview (scaled down), the keyboard pan, a screen that grew
     // before the terminal was resized. Drawing only `rows` lines left those parts black.
-    const shown = Math.ceil((this.el.clientHeight / Math.max(0.25, this.zoom) + this.pan) / lh) + 1;
+    const shown = Math.ceil((screenH + this.pan) / lh) + 1;
     const first = Math.max(0, Math.floor(topPx / lh) - OVERSCAN);
     const last = Math.min(buf.length - 1, Math.floor(topPx / lh) + Math.max(rows, shown) + OVERSCAN);
 
@@ -1462,27 +1555,46 @@ export class BanglaRenderer {
         // the cursor needs is shown.)
         pan = !this.insetsMoving && overflow > 0 ? Math.max(0, Math.min(overflow, below, buf.cursorY * lh)) : 0;
       } else if (BanglaRenderer.floatingKeyboard && this.floatPan && buf.type === 'normal' &&
-        !this.anchorBottom && this.el.clientHeight > this.el.clientWidth) {
+        !this.anchorBottom && screenH > screenW) {
         // the input line (and what's drawn under it) in the upper half of the screen (not in
         // full-screen programs — vim, less: their top half couldn't be scrolled back to)
         pan = Math.max(0, Math.min((lastY + 1) * lh - visible * 0.5, buf.cursorY * lh));
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
-        pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
-        // an agent at work hides its cursor and leaves it wherever it last wrote: nothing
-        // to follow then — stay put (only less, when what's drawn got shorter)
-        if (this.anchorBottom && !this.cursorVisible) pan = Math.max(0, Math.min(this.pan, overflow, below));
+        // An agent: the bottom of what it drew — its input box, or the last lines of a menu or
+        // a dialog (/model, /usage, a permission question). It hides its cursor while one is
+        // open, and the screen used to stay where it was then: the keyboard coming up covered
+        // the dialog's end and, once it closed, the input box itself.
+        const cursorTop = this.anchorBottom && !this.cursorVisible ? Infinity : buf.cursorY * lh;
+        pan = Math.max(0, Math.min(overflow, below, cursorTop));
       }
-      pan = this.settlePan(pan, backDown);
+      pan = this.settlePan(pan, backDown, screenH);
       // ease small moves that come from new content; follow the keyboard exactly
       const d = Math.abs(pan - this.pan);
-      const ease = motion && !this.insetsMoving && this.zoom === 1 && d > 0 && d <= 4 * lh;
+      const ease = motion && !this.insetsMoving && d > 0 && d <= 4 * lh;
       const dur = ease ? '160ms' : '0s';
       if (this.zoomLayer.style.transitionDuration !== dur) this.zoomLayer.style.transitionDuration = dur;
       panEased = ease && pan !== this.pan;
       this.pan = pan;
     }
     this.applyLayerTransform();
+
+    // Wide view: the slide stays within the text (a narrower terminal again: back to its
+    // left edge), and while typing it follows the cursor, so what's typed is in sight.
+    const maxX = Math.max(0, Math.round(cols * this.cellWidth - this.viewW));
+    let sx = Math.min(this.scrollX, maxX);
+    if (maxX > 0 && this.cursorVisible && this.scrollPx === 0 && performance.now() - this.lastInput < 600) {
+      const cw = this.cellWidth;
+      const cx = Math.min(buf.cursorX, cols - 1) * cw;
+      if (cx < sx + cw) sx = Math.max(0, cx - this.viewW * 0.3);
+      else if (cx + cw > sx + this.viewW - cw) sx = Math.min(maxX, cx - this.viewW * 0.6);
+    }
+    if (Math.abs(sx - this.scrollX) > 0.5 || (sx === 0 && this.scrollX !== 0)) {
+      this.scrollX = sx;
+      this.applyH(true);
+      if (maxX > 0) this.showHbar();
+    }
+    this.hLayer.classList.toggle('wide', maxX > 0);
 
     const showCursor = this.cursorVisible && this.scrollPx < lh;
     const wasShown = this.cursorEl.style.display !== 'none';
@@ -1567,13 +1679,11 @@ export class BanglaRenderer {
         this.cursorEl.classList.add('moving');
         clearTimeout(this.typingTimer);
         this.typingTimer = window.setTimeout(() => this.cursorEl.classList.remove('moving'), 600);
-        this.armBlinkRest();
       }
-      if (this.focused && !this.cursorEl.classList.contains('focused')) this.armBlinkRest();
       this.cursorEl.classList.toggle('focused', this.focused);
     }
     this.drawSelection(rowY, first, last);
-    this.drawDock(boxTop, buf.baseY + lastY, cursorLine);
+    this.drawDock(boxTop, buf.baseY + lastY, cursorLine, screenH);
     const scrolled = this.scrollPx >= lh;
     if (scrolled !== this.wasScrolled) {
       this.wasScrolled = scrolled;
@@ -1590,7 +1700,7 @@ export class BanglaRenderer {
   private dockRows: HTMLDivElement[] = [];
   private dockHtml: string[] = [];
   private dockCursor: HTMLDivElement | null = null;
-  private drawDock(boxTop: number, end: number, cursorLine: number) {
+  private drawDock(boxTop: number, end: number, cursorLine: number, screenH: number) {
     const buf = this.term.buffer.active;
     const on = this.anchorBottom && buf.type === 'normal' && boxTop >= 0 && end >= boxTop && this.scrollPx > 0.5;
     const host = this.el.parentElement;
@@ -1607,7 +1717,7 @@ export class BanglaRenderer {
       this.dockCursor = document.createElement('div');
       this.dockCursor.className = 'term-cursor';
       this.dockEl.append(this.dockCursor);
-      this.el.append(this.dockEl);
+      this.hLayer.append(this.dockEl); // (slid sideways with the rest in wide view)
     }
     const lh = this.lineHeight;
     const cols = this.term.cols;
@@ -1640,12 +1750,11 @@ export class BanglaRenderer {
     if (inBox) {
       c.style.transform = `translate(${(Math.min(buf.cursorX, cols - 1) * this.cellWidth).toFixed(2)}px, ${(cursorLine - boxTop) * lh}px)`;
       c.classList.toggle('focused', this.focused);
-      c.classList.toggle('rest', this.cursorEl.classList.contains('rest'));
     }
     this.dockEl.hidden = false;
     // (the "back to the bottom" button sits above it)
     const top = 6 + (boxTop - buf.baseY) * lh - this.pan + this.lift;
-    host?.style.setProperty('--dock-h', `${Math.max(0, this.el.clientHeight - top).toFixed(0)}px`);
+    host?.style.setProperty('--dock-h', `${Math.max(0, screenH - top).toFixed(0)}px`);
   }
   /** The pinned input box on screen, if shown (a tap on it goes back to the bottom). */
   dockRect(): DOMRect | null {
@@ -1656,15 +1765,14 @@ export class BanglaRenderer {
   cellAt(clientX: number, clientY: number): { x: number; y: number; line: number; onScreen: boolean } {
     const rect = this.viewport.getBoundingClientRect(); // includes the scroll transform
     const buf = this.term.buffer.active;
-    const z = this.zoom;
     const lh = this.lineHeight;
-    let py = (clientY - rect.top) / z;
+    let py = clientY - rect.top;
     if (this.splitLine >= 0 && py >= this.splitLine * lh) {
       // below the chat layout's gap: undo the shift (inside the gap: the line above it)
       py = py >= this.splitLine * lh + this.splitGap ? py - this.splitGap : this.splitLine * lh - 1;
     }
     const line = Math.max(0, Math.min(buf.length - 1, Math.floor(py / lh)));
-    const x = Math.max(0, Math.min(this.term.cols - 1, Math.floor((clientX - rect.left) / (this.cellWidth * z))));
+    const x = Math.max(0, Math.min(this.term.cols - 1, Math.floor((clientX - rect.left) / this.cellWidth)));
     // (line is already where the finger is, scrolled back or not: the program's row is
     // counted from the top of its screen; history above it is no row of the program's)
     const y = Math.max(0, Math.min(this.term.rows - 1, line - buf.baseY));

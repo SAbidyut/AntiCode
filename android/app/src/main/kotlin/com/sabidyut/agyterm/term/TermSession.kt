@@ -77,14 +77,33 @@ class TermSession(
     private val out: FileOutputStream
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "pty-writer-$id") }
 
+    // ---- flow control ----
+    // The page says how much output it has taken in (ack). A program printing faster than the
+    // screen can follow (yes, cat of a huge log) then waits for it, as on any terminal — the
+    // output used to pile up by the megabyte in the page until it dropped some or froze.
+    private val ackLock = Object()
+    private var unacked = 0L
+
+    private val fdLock = Object()
+    private var fdOpen = true
+
+    private val doneMark = "7770;done;${com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken}"
+
     init {
         val pidOut = IntArray(1)
         fd = Pty.createSubprocess(command, cwd, args, env, pidOut, rows, cols)
         pid = pidOut[0]
         pfd = ParcelFileDescriptor.adoptFd(fd)
-        val input = FileInputStream(pfd.fileDescriptor)
         out = FileOutputStream(pfd.fileDescriptor)
+    }
 
+    /**
+     * The reader and the waiter, started by the last initialiser of the class (see the end):
+     * started any earlier, they ran while the fields declared after that point were still
+     * unset — a program that printed or ended at once crashed the app with every session.
+     */
+    private fun startThreads() {
+        val input = FileInputStream(pfd.fileDescriptor)
         val reader = Thread({
             val buf = ByteArray(16 * 1024)
             try {
@@ -129,20 +148,43 @@ class TermSession(
     private fun append(b: ByteArray, n: Int) {
         var off = 0
         var len = n
-        if (len >= RING_SIZE) {
+        if (len > RING_SIZE) {
             off = len - RING_SIZE
             len = RING_SIZE
         }
-        // (in at most two block copies, not byte by byte: this runs for every read)
-        val end = (ringStart + ringLen) % RING_SIZE
-        val first = minOf(len, RING_SIZE - end)
-        System.arraycopy(b, off, ring, end, first)
-        if (len > first) System.arraycopy(b, off + first, ring, 0, len - first)
-        val total = ringLen + len
-        if (total > RING_SIZE) {
-            ringStart = (ringStart + total - RING_SIZE) % RING_SIZE
+        // (in one or two pieces, not byte by byte: this runs for every read)
+        val pos = (ringStart + ringLen) % RING_SIZE
+        val first = minOf(len, RING_SIZE - pos)
+        System.arraycopy(b, off, ring, pos, first)
+        if (first < len) System.arraycopy(b, off + first, ring, 0, len - first)
+        val over = ringLen + len - RING_SIZE
+        if (over > 0) {
+            ringStart = (ringStart + over) % RING_SIZE
             ringLen = RING_SIZE
-        } else ringLen = total
+        } else ringLen += len
+    }
+
+    /** Everything kept (call with [lock] held). */
+    private fun snapshot(): ByteArray {
+        var start = ringStart
+        var len = ringLen
+        if (len == RING_SIZE) {
+            // The ring is full: its first bytes are the middle of something — the second half
+            // of a letter, the tail of an escape sequence (shown as stray text at the top).
+            // Start after the first line break, if one comes soon.
+            for (i in 0 until minOf(len, 8192)) {
+                if (ring[(start + i) % RING_SIZE] == '\n'.code.toByte()) {
+                    start = (start + i + 1) % RING_SIZE
+                    len -= i + 1
+                    break
+                }
+            }
+        }
+        val snap = ByteArray(len)
+        val first = minOf(len, RING_SIZE - start)
+        System.arraycopy(ring, start, snap, 0, first)
+        if (first < len) System.arraycopy(ring, 0, snap, first, len - first)
+        return snap
     }
 
     /**
@@ -155,13 +197,7 @@ class TermSession(
             unacked = 0
             ackLock.notifyAll()
         }
-        if (withSnapshot != null) {
-            val snap = ByteArray(ringLen)
-            val first = minOf(ringLen, RING_SIZE - ringStart)
-            System.arraycopy(ring, ringStart, snap, 0, first)
-            if (ringLen > first) System.arraycopy(ring, 0, snap, first, ringLen - first)
-            withSnapshot(snap)
-        }
+        if (withSnapshot != null) withSnapshot(snapshot())
     }
 
     /**
@@ -188,8 +224,6 @@ class TermSession(
         }
     }
 
-    private val DONE = "7770;done;${com.sabidyut.agyterm.ubuntu.UbuntuManager.linkToken}"
-
     private fun finishOsc() {
         val s = osc.toString("UTF-8")
         when {
@@ -199,16 +233,9 @@ class TermSession(
             s.startsWith("777;notify;") -> alert = s.substring(11).split(';').filter { it.isNotBlank() }.joinToString(" — ")
             // (signed by the guest bashrc with the app's token, like every 7770 message: the
             // same text printed by a program doesn't count as the prompt coming back)
-            s == DONE -> promptAt = System.currentTimeMillis()
+            s == doneMark -> promptAt = System.currentTimeMillis()
         }
     }
-
-    // ---- flow control ----
-    // The page says how much output it has taken in (ack). A program printing faster than the
-    // screen can follow (yes, cat of a huge log) then waits for it, as on any terminal — the
-    // output used to pile up by the megabyte in the page until it dropped some or froze.
-    private val ackLock = Object()
-    private var unacked = 0L
 
     fun ack(n: Int) = synchronized(ackLock) {
         unacked = maxOf(0L, unacked - n)
@@ -240,6 +267,7 @@ class TermSession(
         val agent = kind in com.sabidyut.agyterm.ubuntu.UbuntuManager.AGENTS
         val choice = agent && data.size == 1 && data[0] in '1'.code.toByte()..'9'.code.toByte()
         if (data.contains('\r'.code.toByte()) || choice) {
+            alert = null // (a bell rung before this run isn't its "done")
             enterAt = System.currentTimeMillis()
             outSinceEnter = 0
             promptAt = 0
@@ -258,9 +286,6 @@ class TermSession(
             // closed meanwhile (a key typed as the tab closed)
         }
     }
-
-    private val fdLock = Object()
-    private var fdOpen = true
 
     /** Closes the PTY master once (the fd number may be reused right after). */
     private fun closePty() = synchronized(fdLock) {
@@ -297,6 +322,10 @@ class TermSession(
             closePty()
         }.start()
         writer.shutdown()
+    }
+
+    init {
+        startThreads() // (last: every field above is set — see startThreads)
     }
 
     companion object {

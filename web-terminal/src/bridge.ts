@@ -68,6 +68,8 @@ export interface BridgeEvents {
   onKeyboardReleased(): void;
   /** Show this session (e.g. its "task finished" notification was tapped). */
   onOpenSession(id: string): void;
+  /** The phone's account picker closed: the account (email) chosen, '' for none. */
+  onAccountPicked?(email: string): void;
 }
 
 export interface Bridge {
@@ -132,6 +134,8 @@ export interface Bridge {
   setAntigravityAccount(email: string, profile?: string): void;
   /** A sign-in page with the account chosen for it: an email, Google's list, or a private tab. */
   openSignIn(url: string, hint: string, choose: boolean, privateTab: boolean): void;
+  /** The phone's own list of its Google accounts: the one picked ('' none, or no such list). */
+  pickPhoneAccount(): Promise<string>;
   getAccounts(): Promise<{ agy: string; claude: string }>;
   /** Dashboards that went to Chrome for a Google sign-in open in the app again. */
   resetDashboardChoices(): void;
@@ -202,6 +206,7 @@ interface AndroidBridgeApi {
   setThemeColors?(bg: string, text: string, muted: string, accent: string): void;
   setAntigravityAccount?(email: string, profile: string): void;
   openSignIn?(url: string, hint: string, choose: boolean, privateTab: boolean): void;
+  pickAccount?(): void;
   getAccounts?(): string;
   resetDashboardChoices?(): void;
   setTerminalKeyboard(on: boolean): void;
@@ -224,9 +229,20 @@ declare global {
   }
 }
 
+/** Waiting for the phone's account picker (see pickPhoneAccount). */
+let accountPicked: ((email: string) => void) | null = null;
+
 class AndroidHostBridge implements Bridge {
   readonly host = 'android' as const;
   constructor(private api: AndroidBridgeApi) {}
+  pickPhoneAccount() {
+    if (!this.api.pickAccount) return Promise.resolve('');
+    accountPicked?.('');
+    return new Promise<string>((resolve) => {
+      accountPicked = resolve;
+      this.api.pickAccount!();
+    });
+  }
   async createSession(kind: SessionKind, cols: number, rows: number, cwd = '', profile = '') {
     return this.api.createSession(kind, cols, rows, cwd, profile);
   }
@@ -419,6 +435,7 @@ class DevBridge implements Bridge {
   setThemeColors() {}
   setAntigravityAccount() {}
   openSignIn(url: string) { window.open(url, '_blank', 'noopener'); }
+  async pickPhoneAccount() { return ''; } // (no phone accounts in the browser)
   async getAccounts() { return { agy: '', claude: '' }; }
   resetDashboardChoices() {}
   setTerminalKeyboard() {}
@@ -453,6 +470,12 @@ export function createBridge(events: BridgeEvents): Bridge {
     onInsets: (t: number, b: number, k: boolean, s: boolean, l?: number, r?: number, f?: boolean) => events.onInsets(t, b, k, s, l, r, f),
     onKeyboardReleased: () => events.onKeyboardReleased(),
     onOpenSession: (id: string) => events.onOpenSession(id),
+    onAccountPicked: (email: string) => {
+      const done = accountPicked;
+      accountPicked = null;
+      done?.(email);
+      events.onAccountPicked?.(email);
+    },
   };
   if (window.AndroidBridge) return new AndroidHostBridge(window.AndroidBridge);
   const port = new URLSearchParams(location.search).get('bridge') ?? '7681';

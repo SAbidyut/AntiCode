@@ -311,8 +311,18 @@ class SessionService : Service() {
         }
         // The notification stays as long as any session is open (finished ones too, until
         // their tabs are closed); the phone is kept awake only while something runs.
-        startService(Intent(this, SessionService::class.java))
-        startForeground(NOTIFICATION_ID, buildNotification(running, sessions.size, installing))
+        try {
+            startService(Intent(this, SessionService::class.java))
+        } catch (_: IllegalStateException) {
+            // (asked while the app is out of sight and not in the foreground yet: Android
+            // refuses — the service is bound and running all the same)
+        } catch (_: SecurityException) {
+        }
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification(running, sessions.size, installing))
+        } catch (e: RuntimeException) {
+            Log.w("SessionService", "could not go to the foreground", e)
+        }
         if (running > 0 || installing) acquireWakeLock() else releaseWakeLock()
     }
 
@@ -383,6 +393,7 @@ class SessionService : Service() {
 
     override fun onDestroy() {
         ubuntu.onBusyChanged = null
+        mainHandler.removeCallbacksAndMessages(null)
         for (s in sessions.values) s.kill()
         sessions.clear()
         releaseWakeLock()
