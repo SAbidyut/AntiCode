@@ -12,18 +12,23 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
  *   apart — every conjunct pushed the column lines one cell further.
  *
  * - OpenCode counts the joined way too.
- * - Codex counts every code point on its own: a vowel sign that sits beside its letter
- *   (ি ী ে ৈ ো ৌ, ং ঃ) takes a cell of its own — "কি" = 2 cells — and the virama none; so
- *   do া and ৗ, which Unicode counts as extending the letter (Other_Grapheme_Extend): "যা" = 1.
+ * - Codex (ratatui, unicode-width) gives a letter cluster the width of its code points added
+ *   up: a vowel sign that sits beside its letter (ি ী ে ৈ ো ৌ, ং ঃ) a cell of its own — "কি" =
+ *   2 — the virama none, and া and ৗ, which Unicode counts as extending the letter
+ *   (Other_Grapheme_Extend), none either: "যা" = 1. But it keeps the cluster in ONE cell —
+ *   ক্ষ, কি, স্ত্রী — and when it draws something narrower there, it writes only that cell,
+ *   counting on the terminal to clear the rest as for any wide character. Cell by cell
+ *   ('codepoints'), the rest stayed: a vowel sign or a conjunct's second letter left behind on
+ *   every redraw — scrolling a Bangla table left a trail of ে ি র ষ. So: 'clusters'.
  *
  * So the terminal counts by letters, and another way while one of those runs (the shell
  * says which program starts; the prompt coming back ends it).
  */
-export type WidthMode = 'letters' | 'joined' | 'codepoints';
+export type WidthMode = 'letters' | 'joined' | 'codepoints' | 'clusters';
 
 /** How the program [name] counts. */
 export function widthsOf(name: string): WidthMode {
-  return name === 'agy' || name === 'opencode' ? 'joined' : name === 'codex' ? 'codepoints' : 'letters';
+  return name === 'agy' || name === 'opencode' ? 'joined' : name === 'codex' ? 'clusters' : 'letters';
 }
 
 type Provider = {
@@ -104,6 +109,33 @@ class CodepointsProvider implements Provider {
   }
 }
 
+/**
+ * Codex's way (see the top): the clusters the joined way finds (a conjunct, its vowel signs),
+ * each in one cell as wide as its code points added up. A cell holds at most 3: a longer
+ * cluster (স্ত্রী = 4) goes on in a cell of its own — the width stays right.
+ */
+class ClustersProvider implements Provider {
+  readonly version = 'clusters';
+  constructor(private joined: Provider, private codepoints: Provider) {}
+
+  wcwidth(codepoint: number) {
+    return this.codepoints.wcwidth(codepoint) as 0 | 1 | 2;
+  }
+
+  charProperties(codepoint: number, preceding: number): number {
+    const v = this.joined.charProperties(codepoint, preceding);
+    if ((v & 1) === 0 || !isIndic(codepoint)) return v; // (a new cluster, or not a letter's part)
+    const before = (preceding >> 1) & 3;
+    const width = before + this.codepoints.wcwidth(codepoint);
+    if (width <= 3) return (v & ~6) | (width << 1);
+    // (too wide for one cell: from here on in a cell of its own)
+    return (v & ~7) | (this.codepoints.wcwidth(codepoint) << 1);
+  }
+}
+
+/** Bangla, Devanagari and the other Indic scripts' block range. */
+const isIndic = (cp: number) => cp >= 0x0900 && cp <= 0x0dff;
+
 /** Loads grapheme handling into [term]; the returned function switches the way of counting. */
 export function installWidths(term: Terminal): (mode: WidthMode) => void {
   const addon = new UnicodeGraphemesAddon();
@@ -119,8 +151,13 @@ export function installWidths(term: Terminal): (mode: WidthMode) => void {
     ._core?.unicodeService?._providers?.['6'];
   const codepoints = v6 ? new CodepointsProvider(v6) : null;
   if (codepoints) term.unicode.register(codepoints as never);
+  const clusters = codepoints ? new ClustersProvider(conjuncts, codepoints) : null;
+  if (clusters) term.unicode.register(clusters as never);
   return (mode) => {
-    const v = mode === 'joined' ? conjuncts.version : mode === 'codepoints' ? codepoints?.version ?? '6' : '15-graphemes';
+    const v = mode === 'joined' ? conjuncts.version
+      : mode === 'codepoints' ? codepoints?.version ?? '6'
+      : mode === 'clusters' ? clusters?.version ?? codepoints?.version ?? '6'
+      : '15-graphemes';
     if (term.unicode.activeVersion !== v) term.unicode.activeVersion = v;
   };
 }

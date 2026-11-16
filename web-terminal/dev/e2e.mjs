@@ -262,13 +262,123 @@ await page.evaluate(() => new Promise((done) => {
   }, 16);
 }));
 const slid = await page.evaluate(() => window.__selftest.session().renderer.scrollX);
+// …and a swipe up or down that starts a little slanted (as a thumb does) isn't taken for one
+const slanted = await page.evaluate(() => new Promise((done) => {
+  const s = window.__selftest.session();
+  s.renderer.scrollX = 0;
+  const x0 = s.renderer.scrollX;
+  const el = document.querySelector('.session:not([hidden]) .term-screen');
+  const r = el.getBoundingClientRect();
+  const ev = (type, x, y) => el.dispatchEvent(new PointerEvent(type, { pointerId: 10, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+  let i = 0;
+  ev('pointerdown', r.left + 150, r.top + 100);
+  const t = setInterval(() => {
+    i++;
+    ev('pointermove', r.left + 150 + i * 10, r.top + 100 + i * 8 + (i > 1 ? i * 20 : 0));
+    if (i === 8) { clearInterval(t); ev('pointerup', r.left + 230, r.top + 324); setTimeout(() => done(s.renderer.scrollX === x0), 300); }
+  }, 16);
+}));
+check('a slanted swipe up or down doesn\'t slide sideways', slanted);
 await page.click('.k-wide');
 await page.waitForTimeout(1500);
 const wideOff = await page.evaluate(() => { const s = window.__selftest.session(); return { cols: s.term.cols, sx: s.renderer.scrollX, lit: document.querySelector('.k-wide').classList.contains('on') }; });
 check(`wide view: ${wideOn.cols} columns, slides sideways (${Math.round(slid)}px), back to ${wideOff.cols}`,
   wideOn.lit && wideOn.max > 0 && slid > 100 && !wideOff.lit && wideOff.sx === 0 && wideOff.cols * 1.5 < wideOn.cols);
 
-// 13. the home screen isn't painted under the terminal
+// 13. Codex (ratatui 0.30): a Bangla table scrolled line by line, drawn the way ratatui draws
+//     it — each letter cluster one cell as wide as its code points, only the changed cells
+//     written, the rest of a wide cluster left to the terminal to clear — must leave nothing
+//     behind (it left a trail of ে ি র ষ while scrolling)
+const ratatuiTrail = await page.evaluate((mode) => {
+  const s = window.__selftest.session();
+  const cols = 44, rows = 8;
+  const seg = new Intl.Segmenter('bn', { granularity: 'grapheme' });
+  const cpw = (ch) => (/\p{Grapheme_Extend}|\p{Default_Ignorable_Code_Point}/u.test(ch) ? 0 : 1);
+  const gw = (g) => [...g].reduce((n, c) => n + cpw(c), 0);
+  const lines = [
+    'বিষয়        DeepSeek V4.1 Flash',
+    'মূল কাজ     দ্রুত ও কম খরচে অনেক অনুরোধ',
+    'শক্তি        দ্রুত উত্তর, কম খরচ, ছবি বোঝার সুবিধা',
+    'প্রসঙ্গ ধারণক্ষমতা   ১ মিলিয়ন টোকেন',
+    'API খরচ     প্রতি ১০ লাখ ইনপুট টোকেন',
+    'কখন বেছে নেবেন  অনেক কাজ কম খরচে',
+    'সহজ করে: মন্ত্রী স্ত্রী ক্ষমা জ্ঞানভিত্তিক',
+    'দীর্ঘ সময়ের জটিল কোডিং ও জ্ঞানভিত্তিক কাজ',
+    'বড় কোডবেসে পরিবর্তন, ডিবাগিং, বহু ধাপের কাজ',
+    'অপেক্ষাকৃত সস্তা; কম্পিউটার ব্যবহারে জোর',
+    'শেষ লাইন: ধন্যবাদ',
+  ];
+  const blank = () => Array.from({ length: rows * cols }, () => ({ sym: ' ', w: 1 }));
+  const frame = (off) => {
+    const b = blank();
+    for (let y = 0; y < rows; y++) {
+      const text = lines[(off + y) % lines.length];
+      let x = 0;
+      for (const { segment: g } of seg.segment(text)) {
+        const w = gw(g);
+        if (w === 0) continue;
+        if (x + w > cols) break;
+        b[y * cols + x] = { sym: g, w };
+        for (let k = 1; k < w; k++) b[y * cols + x + k] = { sym: ' ', w: 1 }; // (reset)
+        x += w;
+      }
+    }
+    return b;
+  };
+  const expected = (b) => Array.from({ length: rows }, (_, y) => {
+    let t = '';
+    for (let x = 0; x < cols;) { const c = b[y * cols + x]; t += c.sym; x += Math.max(1, c.w); }
+    return t.trimEnd();
+  });
+  let out = '';
+  let cx = -1, cy = -1;
+  const diff = (prev, next) => {
+    for (let i = 0; i < next.length; i++) {
+      const cur = next[i], old = prev[i];
+      if (cur.sym === old.sym && cur.w === old.w) { i += cur.w - 1; continue; }
+      const x = i % cols, y = Math.floor(i / cols);
+      if (x !== cx || y !== cy) out += `\x1b[${y + 1};${x + 1}H`;
+      out += cur.sym;
+      cx = x + cur.w; cy = y;
+      if (cur.w > 1) i += cur.w - 1;
+    }
+  };
+  return new Promise((done) => {
+    s.term.resize(cols, rows);
+    // (the program's way of counting, as the shell names it for a program starting)
+    s.term.write(`\x1b]7770;widths;t0k3n;${mode}\x07\x1b[?1049h\x1b[H\x1b[2J`, () => {
+      let prev = blank();
+      let bad = 0;
+      let first = '';
+      const step = (f) => {
+        if (f > 14) {
+          s.term.write('\x1b[?1049l\x1b]7770;widths;t0k3n;letters\x07', () => done({ bad, first }));
+          return;
+        }
+        const next = frame(f);
+        out = '';
+        diff(prev, next);
+        prev = next;
+        s.term.write(out, () => {
+          const want = expected(next);
+          const buf = s.term.buffer.active;
+          for (let y = 0; y < rows; y++) {
+            const got = (buf.getLine(y)?.translateToString(true) ?? '').trimEnd();
+            if (got !== want[y]) { bad++; if (!first) first = `frame ${f} row ${y}: got "${got}" want "${want[y]}"`; }
+          }
+          step(f + 1);
+        });
+      };
+      step(1);
+    });
+  });
+}, process.env.CODEX_MODE ?? 'clusters');
+if (ratatuiTrail.bad) console.log('  ', ratatuiTrail.first);
+check(`Codex's redraw of a scrolled Bangla table leaves nothing behind (${ratatuiTrail.bad} wrong rows)`, ratatuiTrail.bad === 0);
+await page.evaluate(() => window.__selftest.session().fit(true));
+await page.waitForTimeout(300);
+
+// 14. the home screen isn't painted under the terminal
 check('home screen hidden under the terminal', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).visibility === 'hidden'));
 
 check('no JavaScript errors', pageErrors.length === 0);

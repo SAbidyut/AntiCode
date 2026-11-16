@@ -1592,10 +1592,11 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!moved && (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8)) {
       moved = true;
       clearTimeout(longTimer);
-      // wide view: a drag more sideways than up or down slides the text sideways
+      // wide view: only a drag that's clearly sideways slides the text sideways — a swipe up
+      // or down that starts a little slanted (as a thumb does) scrolls as ever
       const dx0 = e.clientX - startX;
       const dy0 = e.clientY - startY;
-      axis = Math.abs(dx0) > Math.abs(dy0) && s.renderer.maxScrollX() > 0 ? 'x' : 'y';
+      axis = Math.abs(dx0) > Math.abs(dy0) * 1.6 && s.renderer.maxScrollX() > 0 ? 'x' : 'y';
       // (scrolling starts from here, as on Android: the content doesn't jump by the 8 px it
       // took to tell a scroll from a tap)
       if (axis === 'y' && Math.abs(dy0) > 8) lastY = startY + Math.sign(dy0) * 8;

@@ -222,7 +222,7 @@ export class TerminalSession {
           this.onMeta?.(); // (the home screen's card shows the agent's signed-in account)
         }
       }
-      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined' ? 'joined' : args[0] === 'codepoints' ? 'codepoints' : 'letters');
+      else if (cmd === 'widths') this.setProgramWidths(args[0] === 'joined' || args[0] === 'codepoints' || args[0] === 'clusters' ? args[0] : 'letters');
       else if (cmd === 'storage' && !this.replaying) this.bridge.requestStorage(); // `setup-storage`
       return true;
     });
