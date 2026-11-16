@@ -714,6 +714,10 @@ class UbuntuManager private constructor(private val context: Context) {
             // glibc gives every busy thread its own malloc arena (up to 8 per core), each
             // holding on to freed memory: two are plenty on a phone, and use far less of it
             "MALLOC_ARENA_MAX=2",
+            // Links on text (OSC 8): Claude Code puts them on file names and links only for the
+            // terminals it knows by name. The app opens them on a tap — a link or a path stays
+            // one however the program breaks it into rows.
+            "FORCE_HYPERLINK=1",
         )
         // Claude Code's full-screen view keeps its own scrollback: every swipe is a wheel event
         // it answers by redrawing the whole screen — slow under proot on a phone. Its classic

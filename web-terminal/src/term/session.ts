@@ -601,14 +601,62 @@ export class TerminalSession {
     return `\x1b[M${ch(b)}${ch(x + 1)}${ch(y + 1)}`;
   }
 
+  /**
+   * The link a program put on the text under the point (OSC 8: Claude Code's file names and
+   * links, `ls --hyperlink` …), or null. The text shown can be anything — a link's title, a
+   * path cut short — and stays one link however the program broke it into rows.
+   */
+  linkAt(clientX: number, clientY: number): string | null {
+    const { x, line } = this.renderer.cellAt(clientX, clientY);
+    try {
+      const cell = this.term.buffer.active.getLine(line)?.getCell(x) as unknown as { extended?: { urlId?: number } } | undefined;
+      const id = cell?.extended?.urlId;
+      if (!id) return null;
+      // (xterm keeps them, but has no public way to read them back)
+      const core = (this.term as unknown as { _core?: { _oscLinkService?: { getLinkData(id: number): { uri?: string } | undefined } } })._core;
+      const uri = core?._oscLinkService?.getLinkData(id)?.uri ?? '';
+      return uri && uri.length <= 8192 ? uri : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** If a URL is under the point, return it. */
   urlAt(clientX: number, clientY: number): string | null {
-    return this.matchAt(clientX, clientY, URL_RE);
+    // (a sign-in link is several hundred characters long: looked at whole)
+    return this.matchAt(clientX, clientY, URL_RE, true, 4096);
   }
 
   /** If a file name (report.pdf, ~/site/index.html …) is under the point, return it. */
   fileAt(clientX: number, clientY: number): string | null {
-    return this.matchAt(clientX, clientY, FILE_RE);
+    return this.matchAt(clientX, clientY, FILE_RE, true);
+  }
+
+  /**
+   * How row [i] goes on in the next one: 0 not at all; 1 the terminal wrapped it; 2 the program
+   * broke the line itself at the screen's edge ([hard] only). Claude Code and Codex do: a link or
+   * a path longer than the screen comes as pieces, one per row, each a line of its own — a tap
+   * took the piece under the finger, a link cut short or nothing at all.
+   */
+  private joinsNext(i: number, hard: boolean): 0 | 1 | 2 {
+    const buf = this.term.buffer.active;
+    const next = buf.getLine(i + 1);
+    if (!next) return 0;
+    if (next.isWrapped) return 1;
+    if (!hard || this.edit.rowEnd(i) < this.term.cols - 2) return 0; // (it ends before the edge)
+    const a = buf.getLine(i)?.translateToString(true).trim() ?? '';
+    const b = next.translateToString(true).trim();
+    if (!a || !b) return 0;
+    const aTok = a.slice(a.search(/\S+$/));
+    const bTok = b.split(/\s/)[0];
+    const linky = /^[^\s'"<>\x60|]+$/u; // what a link or a path can be made of
+    if (!linky.test(aTok) || !linky.test(bTok)) return 0;
+    // the row is one piece of a word longer than the screen (prose has spaces in a full row) …
+    if (!/\s/.test(a)) return 2;
+    // … or a link or a path starts at its end, and the next row is all one piece, or looks
+    // like more of it
+    if (/:\/\/|\//.test(aTok) && (!/\s/.test(b) || /[/?&=%#.]/.test(bTok))) return 2;
+    return 0;
   }
 
   /**
@@ -627,31 +675,43 @@ export class TerminalSession {
    * around the point is searched (at most 1k characters each way): these patterns can start
    * anywhere, and on a long line (minified code, base64) a tap took seconds.
    */
-  private matchAt(clientX: number, clientY: number, re: RegExp): string | null {
+  private matchAt(clientX: number, clientY: number, re: RegExp, hard = false, around = 256): string | null {
     const { x, line: at } = this.renderer.cellAt(clientX, clientY);
     const buf = this.term.buffer.active;
+    const reach = hard ? 40 : 16; // (rows)
     let start = at;
-    while (start > 0 && at - start < 16 && buf.getLine(start)?.isWrapped) start--;
+    while (start > 0 && at - start < reach && this.joinsNext(start - 1, hard)) start--;
     let text = '';
     let offset = -1;
-    for (let i = start; i < buf.length && i - at <= 16; i++) {
+    for (let i = start; i < buf.length && i - at <= reach; i++) {
       const line = buf.getLine(i);
-      if (!line || (i > start && !line.isWrapped)) break;
+      if (!line) break;
+      const how = i > start ? this.joinsNext(i - 1, hard) : 1;
+      if (!how) break;
+      let row = line.translateToString(false);
+      // a row the program began itself: its indent isn't part of the word, nor the space
+      // left at the end of the row before
+      let cut = 0;
+      if (how === 2) {
+        cut = row.length - row.trimStart().length;
+        row = row.slice(cut);
+        text = text.trimEnd();
+      }
       // x is a cell; the text has one char per letter cluster or wide character
-      if (i === at) offset = text.length + line.translateToString(false, 0, x).length;
-      text += line.translateToString(false);
+      if (i === at) offset = text.length + Math.max(0, line.translateToString(false, 0, x).length - cut);
+      text += row;
     }
     if (offset < 0) return null;
     const space = (c: string) => c === ' ' || c === '\t' || c === '\u00a0';
     let a = offset;
     let b = offset;
-    while (a > 0 && offset - a < 1024 && !space(text[a - 1])) a--;
-    while (b < text.length && b - offset < 1024 && !space(text[b])) b++;
+    while (a > 0 && offset - a < Math.max(1024, around) && !space(text[a - 1])) a--;
+    while (b < text.length && b - offset < Math.max(1024, around) && !space(text[b])) b++;
     if (a === b) return null;
     // (a window around the point: these patterns can start anywhere, and on a 2k-long token
     // every start was tried — a tap took a good part of a second)
-    a = Math.max(a, offset - 256);
-    b = Math.min(b, offset + 256);
+    a = Math.max(a, offset - around);
+    b = Math.min(b, offset + around);
     const token = text.slice(a, b);
     const at0 = offset - a;
     for (const m of token.matchAll(re)) {
@@ -755,6 +815,14 @@ export class TerminalSession {
     }
     div.append(l.slice(last));
     return div;
+  }
+
+  /** The screen's text as it stands (no history). */
+  screenText(): string {
+    const buf = this.term.buffer.active;
+    const rows: string[] = [];
+    for (let y = 0; y < this.term.rows; y++) rows.push(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
+    return rows.join('\n');
   }
 
   /** How many rows of the screen have something on them. */

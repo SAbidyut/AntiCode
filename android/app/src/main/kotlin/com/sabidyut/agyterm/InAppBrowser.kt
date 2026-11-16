@@ -71,6 +71,11 @@ class InAppBrowser(private val activity: Activity) {
     fun openSignIn(url: String, hint: String, choose: Boolean, private: Boolean) {
         var uri = Uri.parse(url)
         val host = uri.host ?: ""
+        // Claude's and ChatGPT's sign-in pages take the email to fill in the same way
+        // (`claude auth login --email` does it so)
+        val emailFirst = host == "claude.ai" || host == "claude.com" || host.endsWith(".claude.com") ||
+            host.endsWith(".claude.ai") || host == "console.anthropic.com" || host == "auth.openai.com"
+        if (emailFirst && !uri.isOpaque && hint.isNotEmpty()) uri = withParam(uri, "login_hint", hint)
         if (host == "accounts.google.com" && !uri.isOpaque) {
             if (hint.isNotEmpty()) uri = withParam(uri, "login_hint", hint)
             if (choose || private) {

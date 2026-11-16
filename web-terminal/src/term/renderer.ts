@@ -765,7 +765,10 @@ export class BanglaRenderer {
     const prompt = this.insetsMoving || relaid || backDown || !this.rows.size ||
       // (a shell's output growing down past the keyboard is followed at once — it ran on
       // hidden under the keyboard, then the screen jumped)
-      (!this.anchorBottom && (now - this.lastInput < 400 || want > this.pan + 0.5));
+      (!this.anchorBottom && (now - this.lastInput < 400 || want > this.pan + 0.5)) ||
+      // (an agent answering a key — Enter, a choice in its menu — with lines that go down
+      // under the keyboard: at once too, not after a moment with the input box out of sight)
+      (now - this.lastInput < 600 && want > this.pan + 0.5);
     const h = this.panHist;
     if (prompt) {
       h.length = 0;
@@ -1482,10 +1485,12 @@ export class BanglaRenderer {
         pan = Math.max(0, Math.min((lastY + 1) * lh - visible * 0.5, buf.cursorY * lh));
       } else if (overflow > 0) {
         // keep the cursor visible, and what's drawn under it while the cursor still fits
-        pan = Math.max(0, Math.min(overflow, below, buf.cursorY * lh));
-        // an agent at work hides its cursor and leaves it wherever it last wrote: nothing
-        // to follow then — stay put (only less, when what's drawn got shorter)
-        if (this.anchorBottom && !this.cursorVisible) pan = Math.max(0, Math.min(this.pan, overflow, below));
+        // An agent: the bottom of what it drew — its input box, or the last lines of a menu or
+        // a dialog (/model, /usage, a permission question). It hides its cursor while one is
+        // open, and the screen used to stay where it was then: the keyboard coming up covered
+        // the dialog's end and, once it closed, the input box itself.
+        const cursorTop = this.anchorBottom && !this.cursorVisible ? Infinity : buf.cursorY * lh;
+        pan = Math.max(0, Math.min(overflow, below, cursorTop));
       }
       pan = this.settlePan(pan, backDown, screenH);
       // ease small moves that come from new content; follow the keyboard exactly

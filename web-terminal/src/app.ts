@@ -188,10 +188,16 @@ const bridge: Bridge = createBridge({
     const s = sessions.get(id);
     if (s) s.write(data);
     else {
-      // output can arrive before createSession() has returned to us — keep it
-      const q = early.get(id) ?? [];
-      q.push(data);
-      early.set(id, q);
+      // output can arrive before createSession() has returned to us — keep it (a little, a
+      // short while: a closed tab's last words, still coming as it ends, were kept for good)
+      let q = early.get(id);
+      if (!q) {
+        early.set(id, (q = []));
+        window.setTimeout(() => {
+          if (!sessions.has(id)) early.delete(id);
+        }, 15_000);
+      }
+      if (q.reduce((n, d) => n + d.length, 0) < 1024 * 1024) q.push(data);
     }
   },
   onHiddenInput(id, on) {
@@ -427,7 +433,8 @@ function signInSite(url: string): 'google' | 'claude' | 'openai' | null {
     return null;
   }
   if (u.hostname === 'accounts.google.com') return 'google';
-  if (/^(claude\.ai|console\.anthropic\.com|platform\.claude\.com)$/.test(u.hostname) && /oauth|login|authorize/i.test(u.pathname)) return 'claude';
+  // (Claude Code signs in at claude.com/cai/oauth/authorize now — it opened without asking)
+  if (/^(claude\.ai|claude\.com|console\.anthropic\.com|platform\.claude\.com)$/.test(u.hostname) && /oauth|login|authorize/i.test(u.pathname)) return 'claude';
   if (u.hostname === 'auth.openai.com' && /oauth|authorize/i.test(u.pathname)) return 'openai'; // Codex's ChatGPT sign-in
   return null;
 }
@@ -438,29 +445,124 @@ function signInSite(url: string): 'google' | 'claude' | 'openai' | null {
  */
 async function askSignInAccount(url: string, site: 'google' | 'claude' | 'openai', from?: TerminalSession) {
   const kind = site === 'google' ? 'agy' : site === 'claude' ? 'claude' : 'codex';
-  const brand = site === 'claude' ? 'Claude' : 'ChatGPT';
-  // the accounts the app knows for this agent (the main one and the extra ones) — the tab's
-  // own first
-  const known: string[] = [];
+  const brand = site === 'google' ? 'Google' : site === 'claude' ? 'Claude' : 'ChatGPT';
+  // Every email the app knows, each with where it's from: this tab's account first, this
+  // agent's others, then the other agents' and the ones picked here before. A tap opens the
+  // sign-in page with it filled in (Google: that account chosen); the page hands the code
+  // back to the agent by itself.
+  const known = new Map<string, string>();
+  const add = (e: string, why: string) => {
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && !known.has(e)) known.set(e, why);
+  };
   const tabEmail = from && (from.kind === kind || from.agent === kind) ? bridge.accountEmail(kind, from.kind === kind ? from.profile : '') : '';
-  if (tabEmail) known.push(tabEmail);
-  for (const e of [bridge.accountEmail(kind, ''), ...(await bridge.listProfiles(kind)).map((p) => p.email)]) {
-    if (e && !known.includes(e)) known.push(e);
-  }
+  add(tabEmail, 'This tab’s account');
+  add(bridge.accountEmail(kind, ''), `${KIND_NAME[kind]}’s main account`);
+  for (const p of await bridge.listProfiles(kind)) add(p.email, `${KIND_NAME[kind]} · ${p.name}`);
+  for (const k of ['agy', 'claude', 'codex', 'opencode']) if (k !== kind) add(bridge.accountEmail(k, ''), `Signed in to ${KIND_NAME[k]}`);
+  for (const e of signInEmails()) add(e, 'Used before');
   const forTab = from?.kind === kind && from.profile ? ` (“${from.profile}”)` : '';
   const rows: HTMLElement[] = [];
-  if (site === 'google') {
-    for (const e of known) rows.push(action('check', e, e === tabEmail ? 'This tab’s account' : 'Signed in before', () => bridge.openSignIn(url, e, false, false)));
-    rows.push(action('globe', 'Choose an account on this phone', 'Google lists them — or “Use another account”', () => bridge.openSignIn(url, '', true, false)));
-  } else {
-    rows.push(action('external', `The account signed in to ${brand} in the browser`, known.length ? `Known here: ${known.join(', ')}` : '', () => bridge.openSignIn(url, '', false, false)));
+  for (const [e, why] of known) rows.push(action('check', e, why, () => signInWith(url, e)));
+  if (bridge.host === 'android') {
+    rows.push(action('globe', 'A Gmail account on this phone', 'Pick one from the phone’s list', async () => {
+      const e = await bridge.pickPhoneAccount();
+      if (e) signInWith(url, e);
+    }));
   }
-  rows.push(action('shield', 'Another account', 'A private tab: nothing signed in, nothing kept', () => bridge.openSignIn(url, '', site === 'google', true)));
+  rows.push(action('plus', 'Another email…', 'Type the address to sign in with', () => askSignInEmail(url, site, from)));
+  if (site === 'google') rows.push(action('globe', 'Google’s own list', 'Every account on this phone — or “Use another account”', () => bridge.openSignIn(url, '', true, false)));
+  else rows.push(action('external', `As signed in to ${brand} in the browser`, 'Whatever account the browser has', () => bridge.openSignIn(url, '', false, false)));
+  rows.push(action('shield', 'Private tab', 'Nothing signed in, nothing kept', () => bridge.openSignIn(url, '', site === 'google', true)));
   rows.push(action('x', 'Cancel', '', () => {}));
   openSheet(`Sign in to ${KIND_NAME[kind]}${forTab} with…`,
     fromOther(from),
     h('div', { class: 'action-list' }, ...rows));
 }
+
+/** The sign-in page, with [email] filled in; the email is offered first next time. */
+function signInWith(url: string, email: string) {
+  rememberSignInEmail(email);
+  toast(`Signing in as ${email}`);
+  bridge.openSignIn(url, email, false, false);
+}
+
+/** "Another email…": typed in, then the sign-in page with it. */
+function askSignInEmail(url: string, site: 'google' | 'claude' | 'openai', from?: TerminalSession) {
+  const input = h('input', { class: 'text-input', type: 'email', placeholder: 'you@gmail.com', spellcheck: 'false', autocapitalize: 'off', 'data-autofocus': '1' }) as HTMLInputElement;
+  const err = h('p', { class: 'note warn' }, 'That doesn’t look like an email address');
+  err.hidden = true;
+  const go = () => {
+    const e = input.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
+      err.hidden = false;
+      return;
+    }
+    closeSheet();
+    signInWith(url, e);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') go();
+  });
+  const btn = h('button', { class: 'btn btn-primary' }, 'Continue');
+  btn.onclick = go;
+  const back = h('button', { class: 'btn' }, 'Back');
+  back.onclick = () => void askSignInAccount(url, site, from);
+  openSheet('Sign in with which email?', input, err, h('div', { class: 'sheet-actions' }, back, btn));
+  setTimeout(() => {
+    if (sheetOpen() && input.isConnected) input.focus();
+  }, 250);
+}
+
+/** Emails picked for a sign-in before (newest first). */
+function signInEmails(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem('signInEmails') ?? '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+function rememberSignInEmail(email: string) {
+  try {
+    localStorage.setItem('signInEmails', JSON.stringify([email, ...signInEmails().filter((x) => x !== email)].slice(0, 8)));
+  } catch { /* storage unavailable */ }
+}
+
+// ---- back from the browser with a sign-in code ----
+// When the page shows a code to copy (the sign-in link opened by hand, not by the agent), the
+// agent asks for it to be pasted: coming back with one on the clipboard, it's offered — one tap.
+let codeOffered = '';
+async function offerSignInCode() {
+  const s = typingTarget();
+  if (!s || !s.alive) return;
+  // (Claude Code: "Paste code here if prompted")
+  const asks = /paste (the )?code here|paste (the |your )?(authori[sz]ation |auth |sign-?in |login |verification )code|enter (the |your )?(authori[sz]ation |verification )code/i.test(s.screenText());
+  if (!asks) return;
+  const clip = (await bridge.readClipboard().catch(() => '')).trim();
+  // (a code: one long word — not a sentence, not something offered already)
+  if (clip.length < 16 || clip.length > 1024 || /\s/.test(clip) || clip === codeOffered || !/^[\w#.~%=+/-]+$/.test(clip)) return;
+  if (typingTarget() !== s) return;
+  codeOffered = clip;
+  openSheet('Paste the sign-in code?',
+    h('p', { class: 'note' }, `From the clipboard: ${clip.length > 24 ? `${clip.slice(0, 24)}…` : clip}`),
+    h('div', { class: 'action-list' },
+      action('paste', 'Paste it and continue', `Into ${s.customName || s.kindLabel}`, () => {
+        s.paste(clip);
+        window.setTimeout(() => s.input('\r'), 150);
+      }),
+      action('x', 'Not now', '', () => {}),
+    ));
+}
+let codeCheckTimer = 0;
+function checkSignInCodeSoon() {
+  clearTimeout(codeCheckTimer);
+  // (a moment after coming back: the clipboard is readable once the app has the focus again)
+  codeCheckTimer = window.setTimeout(() => void offerSignInCode(), 600);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkSignInCodeSoon();
+});
+window.addEventListener('focus', checkSignInCodeSoon);
 
 /** A tab that isn't the one in front asked: which one (else nothing). */
 function fromOther(from?: TerminalSession): HTMLElement | null {
@@ -1488,9 +1590,15 @@ function bindTerminalGestures(s: TerminalSession) {
         focusTerminalKeyboard();
         return;
       }
+      // a link the program put on the text (OSC 8): a web page, or a file it made
+      const link = s.linkAt(e.clientX, e.clientY);
+      if (link) {
+        openProgramLink(s, link);
+        return;
+      }
       const url = s.urlAt(e.clientX, e.clientY);
       if (url) {
-        bridge.openUrl(url); // the user tapped it
+        openLink(url, true, s); // the user tapped it (a sign-in page: which account?)
         return;
       }
       // (names in the Android shell are the phone's, not Ubuntu's: not looked up there)
@@ -1908,6 +2016,32 @@ async function openTappedFile(s: TerminalSession, token: string) {
   const res = await bridge.openFile(tapCandidates(s, p));
   if (res === 'notfound') toast(`${p.split('/').pop()} wasn’t found here`);
   else if (res) toast(res);
+}
+
+/** A link a program put on its text (OSC 8), tapped. */
+function openProgramLink(s: TerminalSession, uri: string) {
+  if (/^file:/i.test(uri)) {
+    void openTappedPath(s, uri);
+    return;
+  }
+  // web pages (and mail) as a tapped URL; anything else (another app's link) asks first
+  openLink(uri, /^(https?|mailto):/i.test(uri), s);
+}
+
+/** A path from a link (file://…): a file opens, a folder shows its files. */
+async function openTappedPath(s: TerminalSession, uri: string) {
+  haptic();
+  let p = uri.replace(/^file:\/\/[^/]*/i, '');
+  try {
+    p = decodeURIComponent(p);
+  } catch { /* as it is */ }
+  p = p.replace(/[#?].*$/, '').replace(/(.)\/+$/, '$1');
+  const where = tapCandidates(s, p);
+  const res = await bridge.openFile(where);
+  if (!res) return;
+  const dir = await bridge.findDir(where).catch(() => '');
+  if (dir) void showFolder(s, dir);
+  else toast(res === 'notfound' ? `${p.split('/').pop()} wasn’t found here` : res);
 }
 
 /** Where a name tapped in the terminal may be: as given, or where the shell is, started, home. */

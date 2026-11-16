@@ -11,7 +11,9 @@ const check = (name, ok) => {
 };
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 412, height: 860 } });
+const context = await browser.newContext({ viewport: { width: 412, height: 860 } });
+await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(url).origin });
+const page = await context.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => {
   pageErrors.push(e.message);
@@ -159,7 +161,89 @@ const rowCheck = await page.evaluate(() => {
 check(`history rows stay right while lines are deleted (${rowCheck.bad} wrong)`, rowCheck.scrolled && rowCheck.bad === 0);
 await page.evaluate(() => window.__selftest.session().scrollToBottom());
 
-// 10. the home screen isn't painted under the terminal
+// 10. taps on links and file names the way agents print them (the text is put straight into
+//     the terminal, as a program would print it — what's tested is the tap, not the shell)
+const show = (text) => page.evaluate((t) => {
+  const s = window.__selftest.session();
+  return new Promise((done) => s.term.write(`\x1b[H\x1b[2J${t}`, () => { s.renderer.schedule(); setTimeout(done, 150); }));
+}, text);
+const termCols = await page.evaluate(() => window.__selftest.session().term.cols);
+// (cut as Claude Code's wrapper cuts a word longer than the line: in equal pieces, an indent each)
+const cutRows = (word, indent = '  ') => {
+  const w = termCols - indent.length;
+  const rows = [];
+  for (let i = 0; i < word.length; i += w) rows.push(indent + word.slice(i, i + w));
+  return rows;
+};
+const tapRow = async (piece, frac = 0.5) => page.evaluate(([t, f]) => {
+  const row = [...document.querySelectorAll('.session:not([hidden]) .term-row')].find((r) => r.textContent.includes(t));
+  if (!row) return null;
+  const r = row.getBoundingClientRect();
+  const s = window.__selftest.session();
+  const i = row.textContent.indexOf(t);
+  const x = r.left + (i + t.length * f) * s.renderer.cellWidth;
+  const y = r.top + r.height / 2;
+  return { url: s.urlAt(x, y), file: s.fileAt(x, y), link: s.linkAt(x, y) };
+}, [piece, frac]);
+//     (a) a link longer than the screen, broken into rows by the program itself (Claude Code's
+//     sign-in link): a tap on any piece opens all of it
+const longUrl = 'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A45831%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=Qx3vKk2dV6&state=AbCdEf0123';
+const urlRows = cutRows(longUrl);
+await show(['Browser did not open? Use the url below to sign in:', ...urlRows, '  Paste code here if prompted >'].join('\r\n'));
+const pieces = urlRows.map((r) => r.trim());
+const mid = await tapRow(pieces[Math.floor(pieces.length / 2)]);
+const first = await tapRow(pieces[0], 0.9);
+const last = await tapRow(pieces[pieces.length - 1], 0.2);
+check(`a link broken into rows opens whole (${pieces.length} rows)`, pieces.length > 3 && mid?.url === longUrl && first?.url === longUrl && last?.url === longUrl);
+//     (b) a link a program put on its text (OSC 8): the label opens it
+await show('see \x1b]8;;https://example.com/docs/page\x1b\\the docs\x1b]8;;\x1b\\ now\r\n');
+check('a hyperlink label (OSC 8) opens its link', (await tapRow('the docs'))?.link === 'https://example.com/docs/page');
+//     (c) a path broken into rows (an agent's "Wrote … to …"); prose that fills a row isn't joined
+const longPath = '/sdcard/Documents/Math16N7_30/Class9_ICT_question_answers_chapter_three_with_solutions_and_notes_bangla_version.md';
+const pathRows = cutRows(longPath);
+await show(['  Wrote 42 lines to', ...pathRows].join('\r\n'));
+check(`a path broken into rows is found whole (${pathRows.length} rows)`, (await tapRow(pathRows[pathRows.length - 1].trim(), 0.3))?.file === longPath);
+const prose = 'See https://example.com/a for it ';
+const filler = prose + 'x'.repeat(termCols - prose.length);
+await show(`${filler}\r\nnext line here\r\n`);
+check('a link ending a full row of prose isn\'t joined to the next row', (await tapRow('example.com/a'))?.url === 'https://example.com/a');
+//     (d) Claude Code's sign-in page (now on claude.com) asks which account first
+await show('\x1b]7770;open;t0k3n;https://claude.com/cai/oauth/authorize?code=true&client_id=x\x07');
+const claudeAsked = await waitFor(async () => /Sign in to Claude Code with/.test(await page.textContent('#sheet:not([hidden]) h3').catch(() => '')));
+check('Claude sign-in asks which account', claudeAsked && await page.isVisible('#sheet:not([hidden]) .action:has-text("Another email")'));
+await page.click('#sheet-backdrop', { position: { x: 10, y: 10 } });
+await page.waitForTimeout(400);
+//     (e) back with a code on the clipboard while the agent asks for one: offered
+await show('  Paste code here if prompted >');
+await page.evaluate(() => navigator.clipboard.writeText('AbCdEf0123456789xyzXYZ_-#state987654'));
+await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+check('a copied sign-in code is offered', await waitFor(async () => /Paste the sign-in code/.test(await page.textContent('#sheet:not([hidden]) h3').catch(() => '')), 3000));
+await page.click('#sheet-backdrop', { position: { x: 10, y: 10 } });
+await page.waitForTimeout(400);
+await page.evaluate(() => window.__selftest.keys('\x0c')); // (the shell draws its prompt again)
+
+// 11. an agent's menu or dialog (its cursor hidden, as Claude Code's /model, /usage) taller than
+//     the room above the keyboard: its last lines stay in sight when the keyboard comes up
+await page.evaluate(() => { window.__selftest.session().renderer.anchorBottom = true; });
+const dialog = ['Select model', ...Array.from({ length: 34 }, (_, i) => `  ${i + 1}. option ${i + 1}`), '  Enter to confirm · Esc to cancel'];
+await show(`\x1b[?25l${dialog.join('\r\n')}`);
+for (let b = 0; b <= 340; b += 85) {
+  await page.evaluate((x) => window.__native.onInsets(0, x, x > 0, false, 0, 0, false), b);
+  await page.waitForTimeout(16);
+}
+await page.evaluate(() => window.__native.onInsets(0, 340, true, true, 0, 0, false));
+await page.waitForTimeout(800);
+const dialogEnd = await page.evaluate(() => {
+  const row = [...document.querySelectorAll('.session:not([hidden]) .term-row')].find((r) => r.textContent.includes('Esc to cancel'));
+  const bar = document.querySelector('#extra-keys').getBoundingClientRect();
+  return row ? row.getBoundingClientRect().bottom <= bar.top + 1 : false;
+});
+check('a dialog\'s last line stays above the keyboard', dialogEnd);
+await page.evaluate(() => window.__native.onInsets(0, 0, false, true, 0, 0, false));
+await page.evaluate(() => { const s = window.__selftest.session(); s.renderer.anchorBottom = false; s.term.write('\x1b[?25h'); });
+await page.waitForTimeout(300);
+
+// 12. the home screen isn't painted under the terminal
 check('home screen hidden under the terminal', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).visibility === 'hidden'));
 
 check('no JavaScript errors', pageErrors.length === 0);

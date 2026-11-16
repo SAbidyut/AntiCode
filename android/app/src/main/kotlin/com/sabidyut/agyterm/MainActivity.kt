@@ -61,6 +61,12 @@ class MainActivity : ComponentActivity() {
         fileCallback = null
     }
 
+    /** The phone's list of its Google accounts (a sign-in: "which Gmail?"); no permission needed. */
+    private val pickAccount = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val name = r.data?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME) ?: ""
+        js("__native.onAccountPicked && __native.onAccountPicked(${JSONObject.quote(name)})")
+    }
+
     // ---------------------------------------------------------------- output pump
     // PTY output arrives on reader threads; batch it and hand it to the web UI ~60×/s.
     private val pendingLock = Any()
@@ -1031,6 +1037,23 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun openUrl(url: String) {
             main.post { browser.open(url) }
+        }
+
+        /** The phone's own picker of its Google accounts; the answer comes as onAccountPicked. */
+        @JavascriptInterface
+        fun pickAccount() {
+            main.post {
+                try {
+                    pickAccount.launch(
+                        android.accounts.AccountManager.newChooseAccountIntent(
+                            null, null, arrayOf("com.google"), null, null, null, null,
+                        ),
+                    )
+                } catch (_: Exception) { // (a phone without Google's accounts)
+                    Toast.makeText(this@MainActivity, "No Google accounts on this phone", Toast.LENGTH_SHORT).show()
+                    js("__native.onAccountPicked && __native.onAccountPicked('')")
+                }
+            }
         }
 
         /** A sign-in page with the account chosen for it (see InAppBrowser.openSignIn). */
