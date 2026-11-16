@@ -18,6 +18,8 @@ const PATHS: Record<string, string> = {
   folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
   file: '<path d="M6 3h8l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/>',
+  // wide view: a line with room on both sides
+  wide: '<path d="M8 12h8"/><path d="m6 9-3 3 3 3M18 9l3 3-3 3"/><path d="M3 5h18M3 19h18" opacity=".45"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h0M9.5 10h0M13 10h0M16.5 10h0M7 14h10"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   send: '<path d="M4 12 20 4l-4 16-4-6.5z"/><path d="m12 13.5 8-9.5"/>',

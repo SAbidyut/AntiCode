@@ -202,6 +202,18 @@ export class BanglaRenderer {
   private viewport: HTMLDivElement;
   /** Slides up as a whole to keep the cursor above the keyboard (see pan). */
   private zoomLayer: HTMLDivElement;
+  /**
+   * Wide view: the terminal has more columns than the screen shows, and this layer — the
+   * picture and the pinned input box — slides sideways (scrollX) to read them.
+   */
+  private hLayer: HTMLDivElement;
+  /** Wide view: how far the picture is slid left (px; 0 = its left edge in sight). */
+  scrollX = 0;
+  /** The width the columns are shown in (px, the screen less its padding; from the last frame). */
+  private viewW = 0;
+  private hbar: HTMLDivElement | null = null;
+  private hbarTimer = 0;
+  private colsVar = 0;
   private cursorEl: HTMLDivElement;
   private rows = new Map<number, Row>();
   private spare: HTMLDivElement[] = [];
@@ -544,7 +556,10 @@ export class BanglaRenderer {
       t.style.animationDelay = '';
     });
     this.zoomLayer.append(this.viewport);
-    this.el.append(this.zoomLayer);
+    this.hLayer = document.createElement('div');
+    this.hLayer.className = 'term-h';
+    this.hLayer.append(this.zoomLayer);
+    this.el.append(this.hLayer);
     this.palette = build256(opts.theme);
     this.applyMetrics();
     this.el.classList.toggle('anim', !!opts.animate);
@@ -629,6 +644,7 @@ export class BanglaRenderer {
     this.typingTimer = 0;
     clearTimeout(this.panTimer);
     clearTimeout(this.boxTimer);
+    clearTimeout(this.hbarTimer);
     this.overscrollAnim?.cancel();
     this.overscrollAnim = null;
     this.dropGhost();
@@ -684,7 +700,7 @@ export class BanglaRenderer {
     for (const v of ['--cw', '--lh', '--fs', '--bn-fs', '--bw']) g.style.setProperty(v, this.el.style.getPropertyValue(v));
     g.style.fontSize = `${this.opts.fontSize}px`;
     g.style.lineHeight = `${this.lineHeight}px`;
-    this.el.append(g);
+    this.hLayer.append(g); // (slid sideways as the picture it copies)
     this.still = g;
     this.zoomLayer.style.opacity = '0';
   }
@@ -820,6 +836,60 @@ export class BanglaRenderer {
     // (the program hears of the new size a moment after the resize)
     const redraws = this.term.buffer.active.type === 'alternate' || this.anchorBottom;
     return redraws && this.lastOutput < this.holdFrom;
+  }
+
+  // ---- wide view: sliding sideways ----
+  /** How far the picture can slide left: the columns wider than the screen (px). */
+  maxScrollX(): number {
+    const view = this.viewW || this.el.clientWidth - 16;
+    return Math.max(0, Math.round(this.term.cols * this.cellWidth - view));
+  }
+
+  /** Slide sideways by [px] (positive = further right in the text). False at an edge. */
+  scrollXBy(px: number): boolean {
+    if (!Number.isFinite(px)) return false;
+    const next = Math.max(0, Math.min(this.maxScrollX(), this.scrollX + px));
+    if (Math.abs(next - this.scrollX) < 0.01) return false;
+    this.scrollX = next;
+    this.applyH(false);
+    this.showHbar();
+    return true;
+  }
+
+  /** The sideways slide on screen ([ease]: a short glide, else at once — a finger dragging). */
+  private applyH(ease: boolean) {
+    const sx = this.scrollX;
+    const t = sx ? `translateX(${(-sx).toFixed(1)}px)` : '';
+    const dur = ease && this.opts.animate ? '200ms' : '0s';
+    if (this.hLayer.style.transitionDuration !== dur) this.hLayer.style.transitionDuration = dur;
+    if (this.hLayer.style.transform !== t) this.hLayer.style.transform = t;
+  }
+
+  /**
+   * A thin line at the bottom saying where in the wide text the screen is: shown while it
+   * slides (and a moment after), then it fades — nothing stays over the text.
+   */
+  showHbar(ms = 900) {
+    const max = this.maxScrollX();
+    if (max <= 0) {
+      this.hbar?.classList.remove('show');
+      return;
+    }
+    if (!this.hbar) {
+      this.hbar = document.createElement('div');
+      this.hbar.className = 'term-hbar';
+      this.hbar.append(document.createElement('i'));
+      this.el.append(this.hbar);
+    }
+    const view = this.viewW || this.el.clientWidth - 16;
+    const content = view + max;
+    const w = Math.max(28, (view * view) / content);
+    const knob = this.hbar.firstElementChild as HTMLElement;
+    knob.style.width = `${w.toFixed(1)}px`;
+    knob.style.transform = `translateX(${(((view - w) * this.scrollX) / max).toFixed(1)}px)`;
+    this.hbar.classList.add('show');
+    clearTimeout(this.hbarTimer);
+    this.hbarTimer = window.setTimeout(() => this.hbar?.classList.remove('show'), ms);
   }
 
   private applyMetrics() {
@@ -1256,7 +1326,13 @@ export class BanglaRenderer {
     // The screen's size, read once, before anything is written: asked again after the rows
     // changed, the browser laid the whole screen out on the spot — twice a frame.
     const screenH = this.el.clientHeight;
-    const screenW = BanglaRenderer.floatingKeyboard ? this.el.clientWidth : 0;
+    const screenW = this.el.clientWidth;
+    this.viewW = Math.max(0, screenW - 16);
+    // (rows as wide as the terminal's columns: wider than the screen in wide view)
+    if (cols !== this.colsVar) {
+      this.colsVar = cols;
+      this.el.style.setProperty('--cols', String(cols));
+    }
 
     // Lines dropped off the top of a full scrollback (or cleared with it) shift every
     // line number down: move the rendered rows along instead of rebuilding them.
@@ -1503,6 +1579,23 @@ export class BanglaRenderer {
     }
     this.applyLayerTransform();
 
+    // Wide view: the slide stays within the text (a narrower terminal again: back to its
+    // left edge), and while typing it follows the cursor, so what's typed is in sight.
+    const maxX = Math.max(0, Math.round(cols * this.cellWidth - this.viewW));
+    let sx = Math.min(this.scrollX, maxX);
+    if (maxX > 0 && this.cursorVisible && this.scrollPx === 0 && performance.now() - this.lastInput < 600) {
+      const cw = this.cellWidth;
+      const cx = Math.min(buf.cursorX, cols - 1) * cw;
+      if (cx < sx + cw) sx = Math.max(0, cx - this.viewW * 0.3);
+      else if (cx + cw > sx + this.viewW - cw) sx = Math.min(maxX, cx - this.viewW * 0.6);
+    }
+    if (Math.abs(sx - this.scrollX) > 0.5 || (sx === 0 && this.scrollX !== 0)) {
+      this.scrollX = sx;
+      this.applyH(true);
+      if (maxX > 0) this.showHbar();
+    }
+    this.hLayer.classList.toggle('wide', maxX > 0);
+
     const showCursor = this.cursorVisible && this.scrollPx < lh;
     const wasShown = this.cursorEl.style.display !== 'none';
     // the keyboard's text that the program hasn't echoed yet: shown until the cursor moves
@@ -1624,7 +1717,7 @@ export class BanglaRenderer {
       this.dockCursor = document.createElement('div');
       this.dockCursor.className = 'term-cursor';
       this.dockEl.append(this.dockCursor);
-      this.el.append(this.dockEl);
+      this.hLayer.append(this.dockEl); // (slid sideways with the rest in wide view)
     }
     const lh = this.lineHeight;
     const cols = this.term.cols;

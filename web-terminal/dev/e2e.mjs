@@ -55,9 +55,11 @@ check('key bar is one row', await page.evaluate(() => {
   return keys.length > 5 && new Set(keys.map((k) => Math.round(k.getBoundingClientRect().top))).size === 1;
 }));
 
+// (the shell's first prompt first: a line typed before bash has started can be lost)
+await waitFor(async () => /[$#] *$/m.test(await screenText()), 10000);
 // 2. Bangla command
 await send("echo 'ক্ষমা-'$((40+2))");
-check('runs a Bangla command', await waitFor(async () => (await screenText()).includes('ক্ষমা-42')));
+check('runs a Bangla command', await waitFor(async () => (await screenText()).includes('ক্ষমা-42'), 8000));
 
 // 2b. the queries the Antigravity CLI sends at startup must not break the terminal
 //     (regression: a minifier bug made DECRQM throw and froze the screen) and get answers.
@@ -86,7 +88,7 @@ check(`per-letter coloured Bangla stays shaped (${brokenPieces.length} broken pi
 await page.focus('#kbd');
 await page.keyboard.type('echo typed-$((6*7))');
 await page.keyboard.press('Enter');
-check('direct typing + Enter', await waitFor(async () => (await screenText()).includes('typed-42')));
+check('direct typing + Enter', await waitFor(async () => (await screenText()).includes('typed-42'), 8000));
 
 // 4. key bar: Ctrl latch + c interrupts
 await page.focus('#kbd');
@@ -243,7 +245,30 @@ await page.evaluate(() => window.__native.onInsets(0, 0, false, true, 0, 0, fals
 await page.evaluate(() => { const s = window.__selftest.session(); s.renderer.anchorBottom = false; s.term.write('\x1b[?25h'); });
 await page.waitForTimeout(300);
 
-// 12. the home screen isn't painted under the terminal
+// 12. wide view (the key bar's ↔): twice the columns, slid sideways by a finger; off again
+await page.click('.k-wide');
+await page.waitForTimeout(1500);
+const wideOn = await page.evaluate(() => { const s = window.__selftest.session(); return { cols: s.term.cols, max: s.renderer.maxScrollX(), lit: document.querySelector('.k-wide').classList.contains('on') }; });
+await page.evaluate(() => new Promise((done) => {
+  const el = document.querySelector('.session:not([hidden]) .term-screen');
+  const r = el.getBoundingClientRect();
+  const ev = (type, x) => el.dispatchEvent(new PointerEvent(type, { pointerId: 9, isPrimary: true, pointerType: 'touch', clientX: x, clientY: r.top + 100, bubbles: true }));
+  let i = 0;
+  ev('pointerdown', r.right - 40);
+  const t = setInterval(() => {
+    i++;
+    ev('pointermove', r.right - 40 - i * 25);
+    if (i === 10) { clearInterval(t); ev('pointerup', r.right - 290); setTimeout(done, 400); }
+  }, 16);
+}));
+const slid = await page.evaluate(() => window.__selftest.session().renderer.scrollX);
+await page.click('.k-wide');
+await page.waitForTimeout(1500);
+const wideOff = await page.evaluate(() => { const s = window.__selftest.session(); return { cols: s.term.cols, sx: s.renderer.scrollX, lit: document.querySelector('.k-wide').classList.contains('on') }; });
+check(`wide view: ${wideOn.cols} columns, slides sideways (${Math.round(slid)}px), back to ${wideOff.cols}`,
+  wideOn.lit && wideOn.max > 0 && slid > 100 && !wideOff.lit && wideOff.sx === 0 && wideOff.cols * 1.5 < wideOn.cols);
+
+// 13. the home screen isn't painted under the terminal
 check('home screen hidden under the terminal', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).visibility === 'hidden'));
 
 check('no JavaScript errors', pageErrors.length === 0);

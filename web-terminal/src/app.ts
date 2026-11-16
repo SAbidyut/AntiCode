@@ -29,6 +29,8 @@ interface Prefs {
   animations: boolean;
   /** Asked once (on the first session) to run without battery restrictions. */
   askedBackground: boolean;
+  /** Wide view was explained once (the first time it's turned on). */
+  wideHinted?: boolean;
   /** Which layout the prefs were saved with (2: fixed text size, no pinch zoom). */
   layout?: number;
   /** The account each agent was last opened with ('' the usual one). */
@@ -673,6 +675,43 @@ function activate(s: TerminalSession | null) {
   saveUiState();
   if (s) showSessionPill(s);
   updateFront();
+  updateWideKey();
+}
+
+// ---- wide view (the key bar's ↔) ----
+/** The ↔ key is lit while the tab in front is in wide view. */
+function updateWideKey() {
+  document.querySelector('#extra-keys .k-wide')?.classList.toggle('on', !!active?.wide);
+}
+
+/**
+ * Wide view on or off for the tab in front: the picture as it is stays while the terminal
+ * takes its new width and the program redraws, then fades into the new one (as a text-size
+ * change does) — no half-drawn frames, no jump.
+ */
+function toggleWide() {
+  const s = active;
+  if (!s) return;
+  settleComposing();
+  const on = !s.wide;
+  const smooth = prefs.animations && screen === 'term' && !document.hidden;
+  if (smooth) s.renderer.freezePicture();
+  s.setWide(on);
+  updateWideKey();
+  const done = () => {
+    if (on) s.renderer.showHbar(1600); // (where the screen is in the wide text)
+  };
+  if (smooth) {
+    whenRedrawn(s, false, () => {
+      s.renderer.revealPicture(260);
+      done();
+    });
+  } else done();
+  if (on && !prefs.wideHinted) {
+    prefs.wideHinted = true;
+    savePrefs();
+    toast('Wide view — slide sideways to read');
+  }
 }
 
 let pillTimer = 0;
@@ -1323,18 +1362,20 @@ function bindTerminalGestures(s: TerminalSession) {
     const spot = s.editSpot(x, ay, true);
     if (spot) s.edit.setSelection(end === 'a' ? spot : sel.a, end === 'a' ? sel.b : spot);
   };
-  let startX = 0, startY = 0, lastY = 0, acc = 0, moved = false, t0 = 0;
+  let startX = 0, startY = 0, lastY = 0, lastX = 0, acc = 0, moved = false, t0 = 0;
+  /** Which way this drag goes, decided as it starts: sideways only in wide view. */
+  let axis: 'x' | 'y' = 'y';
   /** The long-press fired: until the finger lifts, nothing scrolls or taps. */
   let pressed = false;
-  /** The finger's recent positions: a fling's speed is measured over them, not two events. */
-  let track: [number, number][] = [];
+  /** The finger's recent positions [time, y, x]: a fling's speed is measured over them, not two events. */
+  let track: [number, number, number][] = [];
   /**
    * The finger's speed as it lifts (px/ms), measured the way Android does: a straight line
    * fitted to its last ~100 ms — one touch event out of step (two in a frame, 1 ms apart)
    * can't throw it — and none if it had stopped before lifting. Capped at Android's limit.
    */
-  const flingSpeed = (now: number) => {
-    const recent = track.filter(([t]) => now - t <= 100);
+  const flingSpeed = (now: number, along: 1 | 2 = 1) => {
+    const recent = track.filter(([t]) => now - t <= 100).map((p): [number, number] => [p[0], p[along]]);
     if (recent.length < 3) return 0;
     const t1 = recent[0][0];
     const t2 = recent[recent.length - 1][0];
@@ -1442,6 +1483,22 @@ function bindTerminalGestures(s: TerminalSession) {
     }
     return true;
   };
+  /** A sideways fling in wide view: the same curve; it stops at either edge. */
+  const startInertiaX = (v: number) => {
+    const { duration, distance } = flingPlan(v);
+    if (!(duration > 0 && distance > 0 && Number.isFinite(distance))) return;
+    const dir = Math.sign(v);
+    const t0 = performance.now();
+    let done = 0;
+    const step = (now: number) => {
+      const k = Math.max(0, Math.min(1, (now - t0) / duration));
+      const at = splineAt(k) * distance;
+      const moving = s.renderer.scrollXBy(-(at - done) * dir);
+      done = at;
+      inertia = moving && k < 1 ? requestAnimationFrame(step) : 0;
+    };
+    inertia = requestAnimationFrame(step);
+  };
   /** A fling: as far, as long and along the same slowing curve as any list on the phone. */
   const startInertia = (v: number, x: number, y: number) => {
     const { duration, distance } = flingPlan(v);
@@ -1495,8 +1552,10 @@ function bindTerminalGestures(s: TerminalSession) {
     downAt = performance.now();
     startX = e.clientX;
     startY = lastY = e.clientY;
+    lastX = e.clientX;
+    axis = 'y';
     acc = 0;
-    track = [[downAt, e.clientY]];
+    track = [[downAt, e.clientY, e.clientX]];
     moved = false;
     pressed = false;
     t0 = Date.now();
@@ -1533,15 +1592,25 @@ function bindTerminalGestures(s: TerminalSession) {
     if (!moved && (Math.abs(e.clientY - startY) > 8 || Math.abs(e.clientX - startX) > 8)) {
       moved = true;
       clearTimeout(longTimer);
+      // wide view: a drag more sideways than up or down slides the text sideways
+      const dx0 = e.clientX - startX;
+      const dy0 = e.clientY - startY;
+      axis = Math.abs(dx0) > Math.abs(dy0) && s.renderer.maxScrollX() > 0 ? 'x' : 'y';
       // (scrolling starts from here, as on Android: the content doesn't jump by the 8 px it
       // took to tell a scroll from a tap)
-      if (Math.abs(e.clientY - startY) > 8) lastY = startY + Math.sign(e.clientY - startY) * 8;
+      if (axis === 'y' && Math.abs(dy0) > 8) lastY = startY + Math.sign(dy0) * 8;
+      if (axis === 'x') lastX = startX + Math.sign(dx0) * 8;
     }
     if (!moved) return;
     const now = performance.now();
-    const dy = e.clientY - lastY;
-    track.push([now, e.clientY]);
+    track.push([now, e.clientY, e.clientX]);
     if (track.length > 24) track.shift();
+    if (axis === 'x') {
+      s.renderer.scrollXBy(lastX - e.clientX);
+      lastX = e.clientX;
+      return;
+    }
+    const dy = e.clientY - lastY;
     lastY = e.clientY;
     dragScroll(dy, e.clientX, e.clientY);
   });
@@ -1561,6 +1630,11 @@ function bindTerminalGestures(s: TerminalSession) {
       return; // (the long-press did its work: no tap, no fling)
     }
     if (moved) {
+      if (axis === 'x') {
+        const vx = flingSpeed(performance.now(), 2);
+        if (Math.abs(vx) > 0.1) startInertiaX(vx);
+        return;
+      }
       if (letGo()) return; // springs back instead of flinging on
       const v = flingSpeed(performance.now());
       if (Math.abs(v) > 0.1) startInertia(v, e.clientX, e.clientY);
@@ -1626,6 +1700,12 @@ function bindTerminalGestures(s: TerminalSession) {
   });
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
+    // (a trackpad's sideways swipe, or Shift + wheel: wide view slides)
+    const dx = e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;
+    if (Math.abs(dx) > Math.abs(e.deltaY) * (e.shiftKey ? 0 : 1) && s.renderer.maxScrollX() > 0) {
+      s.renderer.scrollXBy(dx);
+      return;
+    }
     scrollBy(-e.deltaY, e.clientX, e.clientY);
   }, { passive: false });
 }
@@ -1755,8 +1835,11 @@ interface KeyDef {
   key?: NamedKey;
   text?: string;
   latch?: 'ctrl' | 'alt';
-  act?: 'keyboard';
+  act?: 'keyboard' | 'wide';
   repeat?: boolean;
+  /** (a name for the layout: landscape places these two) */
+  cls?: string;
+  aria?: string;
 }
 // One row of the keys a phone keyboard lacks (everything else is on the keyboard).
 const KEYS: KeyDef[] = [
@@ -1768,22 +1851,27 @@ const KEYS: KeyDef[] = [
   { label: '↑', key: 'ArrowUp', repeat: true },
   { label: '↓', key: 'ArrowDown', repeat: true },
   { label: '→', key: 'ArrowRight', repeat: true },
-  { icon: 'keyboard', act: 'keyboard' },
+  { icon: 'wide', act: 'wide', cls: 'k-wide', aria: 'Wide view' },
+  { icon: 'keyboard', act: 'keyboard', cls: 'k-kbd', aria: 'Keyboard' },
 ];
 
 function buildKeyBar() {
   const bar = $('#extra-keys');
   {
     for (const k of KEYS) {
-      const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') });
+      const b = h('button', { class: 'key' + (k.latch ? ' latch' : '') + (k.cls ? ` ${k.cls}` : '') });
       if (k.icon) b.append(svg(k.icon));
       else b.textContent = k.label!;
-      if (k.act === 'keyboard') b.setAttribute('aria-label', 'Keyboard');
+      if (k.aria) b.setAttribute('aria-label', k.aria);
       let repeat = 0;
       const fire = () => {
         if (k.act === 'keyboard') {
           if (keyboardShown) hideKeyboard();
           else focusTerminalKeyboard();
+          return;
+        }
+        if (k.act === 'wide') {
+          toggleWide();
           return;
         }
         if (!active) return;

@@ -469,6 +469,19 @@ body[data-screen='home']::before {
   font-kerning: none;
   contain: strict;
 }
+/* wide view: slides sideways as a whole (the picture and the pinned input box) */
+.term-h { position: absolute; top: 0; right: 0; bottom: 0; left: 0; transition: transform 0s cubic-bezier(0.25, 0.8, 0.3, 1); }
+.term-h.wide { will-change: transform; }
+/* …and where in the wide text the screen is, while it slides */
+.term-hbar {
+  position: absolute; left: 8px; right: 8px; bottom: 3px; height: 3px; z-index: 6;
+  pointer-events: none; opacity: 0; transition: opacity 0.35s var(--ease);
+}
+.term-hbar.show { opacity: 1; transition-duration: 0.12s; }
+.term-hbar i {
+  position: absolute; left: 0; top: 0; height: 100%; border-radius: 3px;
+  background: currentColor; opacity: 0.38;
+}
 /* pinch-zoom preview: scale the drawn screen, resize the terminal once at the end */
 .term-zoom { position: absolute; left: 8px; right: 8px; top: 6px; transform-origin: 0 0; overflow: visible; will-change: transform; }
 .term-viewport { position: absolute; left: 0; top: 0; right: 0; height: 0; will-change: transform; }
@@ -476,6 +489,8 @@ body[data-screen='home']::before {
 .term-zoom.term-ghost { pointer-events: none; z-index: 1; }
 .term-row {
   position: absolute; left: 0; top: 0; right: 0;
+  /* (wide view: as wide as the terminal's columns, beyond the screen's edge) */
+  width: max(100%, calc(var(--cols, 0) * var(--cw)));
   height: var(--lh); white-space: pre; overflow: visible;
   contain: layout style;
 }
@@ -624,7 +639,7 @@ body[data-screen='home']::before {
 
 /* ------------------------------------------------------------------ extra keys */
 #extra-keys {
-  display: grid; grid-template-columns: repeat(9, 1fr); gap: 5px;
+  display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px;
   padding: 7px 7px 5px; flex: none;
   background: var(--term-bg, var(--bg));
   border-top: 1px solid var(--line);
@@ -848,7 +863,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   #extra-keys .key:nth-child(6) { grid-area: 3 / 3 / 4 / 5; }
   #extra-keys .key:nth-child(7) { grid-area: 4 / 3 / 5 / 5; }
   #extra-keys .key:nth-child(8) { grid-area: 4 / 5 / 5 / 7; }
-  #extra-keys .key:nth-child(9) { grid-area: 5 / 1 / 6 / 7; }
+  #extra-keys .key.k-wide { grid-area: 5 / 1 / 6 / 3; }
+  #extra-keys .key.k-kbd { grid-area: 5 / 3 / 6 / 7; }
 
   /* a docked keyboard takes the bottom half: the keys fold into a 2 × 4 block in the same
      rail, the left rail keeps only home, the sessions and ⋮ — both rails keep their width,
@@ -862,14 +878,15 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   body[data-kb='docked'] #extra-keys .key:nth-child(8) { grid-area: 3 / 2 / 4 / 3; }
   body[data-kb='docked'] #extra-keys .key:nth-child(6) { grid-area: 4 / 1 / 5 / 2; }
   body[data-kb='docked'] #extra-keys .key:nth-child(7) { grid-area: 4 / 2 / 5 / 3; }
-  body[data-kb='docked'] #extra-keys .key:nth-child(9),
+  body[data-kb='docked'] #extra-keys .key.k-kbd,
+  body[data-kb='docked'] #extra-keys .key.k-wide,
   body[data-kb='docked'] #plus-btn, body[data-kb='docked'] #remote-top-btn { display: none; }
   body[data-kb='docked'] #more-btn { margin-top: auto; }
   body[data-kb='docked'] .topbar { padding: 4px 0 6px; }
   body[data-kb='docked'] .tab { width: 36px; height: 34px; border-radius: 11px; }
   body[data-kb='docked'] .tab.active::before { left: -10px; top: 7px; bottom: 7px; }
   /* the keyboard key shows that it hides the keyboard while one is open */
-  body[data-kb='floating'] #extra-keys .key:nth-child(9) { color: var(--accent); }
+  body[data-kb='floating'] #extra-keys .key.k-kbd { color: var(--accent); }
 
   #session-pill {
     display: flex; align-items: center; gap: 7px; position: absolute; top: 8px; right: 10px; z-index: 4;
@@ -910,7 +927,10 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
 .ps-pic .prule { flex: 1; height: 1px; background: #585862; margin: 0 6px; align-self: center; }
 
 /* an agent's input box, pinned at the bottom while the conversation is scrolled back */
-.term-dock { position: absolute; left: 8px; right: 8px; bottom: 0; z-index: 4; background: var(--tbg, #000); }
+.term-dock {
+  position: absolute; left: 8px; bottom: 0; z-index: 4; background: var(--tbg, #000);
+  width: max(calc(100% - 16px), calc(var(--cols, 0) * var(--cw))); /* (wide view: all of it) */
+}
 .term-dock[hidden] { display: none; }
 .term-dock::before {
   content: ''; position: absolute; left: -8px; right: -8px; top: -22px; height: 22px; pointer-events: none;

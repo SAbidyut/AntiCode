@@ -353,6 +353,11 @@ export class TerminalSession {
   task = '';
   /** A name the user gave it (long-press → Rename). */
   customName = '';
+  /**
+   * Wide view (the key bar's ↔): about twice the columns the screen shows — a table an agent
+   * draws keeps its width — read by sliding sideways. Kept with the tab.
+   */
+  wide = false;
   onMeta?: () => void;
   private lineBuf = '';
 
@@ -384,11 +389,12 @@ export class TerminalSession {
       const m = JSON.parse(localStorage.getItem(`meta:${this.id}`) ?? '{}');
       this.task = typeof m.task === 'string' ? m.task : '';
       this.customName = typeof m.name === 'string' ? m.name : '';
+      this.wide = m.wide === true;
     } catch { /* storage unavailable */ }
   }
   private saveMeta() {
     try {
-      localStorage.setItem(`meta:${this.id}`, JSON.stringify({ task: this.task, name: this.customName }));
+      localStorage.setItem(`meta:${this.id}`, JSON.stringify({ task: this.task, name: this.customName, wide: this.wide || undefined }));
     } catch { /* storage unavailable */ }
   }
   /** Follow what's typed (roughly — history recall and cursor moves aren't seen). */
@@ -522,6 +528,15 @@ export class TerminalSession {
     if (cols !== this.term.cols || rows !== this.term.rows) this.term.resize(cols, rows);
   }
 
+  /** Wide view on or off: the terminal takes its new width at once (its program redraws). */
+  setWide(on: boolean) {
+    if (on === this.wide) return;
+    this.wide = on;
+    this.saveMeta();
+    this.renderer.scrollX = 0; // (from the left edge: where lines start)
+    this.fit(true);
+  }
+
   /** Fit the terminal into the element's current size and tell the PTY if it changed. */
   /** ([now]: tell the program at once — a live pinch step — not after the usual 60 ms) */
   fit(now = false) {
@@ -532,7 +547,10 @@ export class TerminalSession {
     // it lays out its whole screen itself — kept at the full height, most of it slid up out of
     // sight above the keyboard; sized to the room left, it draws everything in it.
     const kb = this.term.buffer.active.type === 'alternate' ? 0 : TerminalSession.keyboardInset;
-    const { cols, rows } = this.renderer.fit(box.width, box.height + kb);
+    const fitted = this.renderer.fit(box.width, box.height + kb);
+    const rows = fitted.rows;
+    // (wide view: about twice as many — 45 on a phone held upright → 90, like a laptop's terminal)
+    const cols = this.wide ? Math.min(Math.max(160, fitted.cols), Math.max(fitted.cols + 20, Math.round(fitted.cols * 2))) : fitted.cols;
     if (cols !== this.term.cols || rows !== this.term.rows) {
       // (a full-screen program redraws the whole screen for its new size — slowly under
       // proot: the last picture stays until it has, not the old screen cut to the new size)
