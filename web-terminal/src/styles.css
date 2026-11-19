@@ -226,10 +226,14 @@ body[data-screen='boot'] #home, body[data-screen='boot'] #term { opacity: 0; vis
 .agent-claude { --agent: #e8906f; --agent-glow: rgba(217, 119, 87, 0.26); }
 .agent-codex { --agent: #89dceb; --agent-glow: rgba(137, 220, 235, 0.2); }
 .agent-opencode { --agent: #f9e2af; --agent-glow: rgba(249, 226, 175, 0.18); }
+.agent-cursor { --agent: #cba6f7; --agent-glow: rgba(203, 166, 247, 0.22); }
+.agent-copilot { --agent: #a6e3a1; --agent-glow: rgba(166, 227, 161, 0.2); }
 body[data-theme='paper'] .agent-claude { --agent: #c15f3c; }
 body[data-theme='paper'] .agent-agy { --agent: #d0477a; }
 body[data-theme='paper'] .agent-codex { --agent: #1e7f93; }
 body[data-theme='paper'] .agent-opencode { --agent: #a07214; }
+body[data-theme='paper'] .agent-cursor { --agent: #7c4dbd; }
+body[data-theme='paper'] .agent-copilot { --agent: #2d8a4e; }
 .agent-icon {
   width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center;
   color: var(--agent); background: var(--surface-3); margin-bottom: 12px;
@@ -277,6 +281,8 @@ body[data-theme='paper'] .agent-opencode { --agent: #a07214; }
 .list-item .li-icon.kind-claude { color: #e8906f; }
 .list-item .li-icon.kind-codex { color: #89dceb; }
 .list-item .li-icon.kind-opencode { color: #f9e2af; }
+.list-item .li-icon.kind-cursor { color: #cba6f7; }
+.list-item .li-icon.kind-copilot { color: #a6e3a1; }
 .list-item .li-icon.kind-ubuntu, .list-item .li-icon.kind-android { color: var(--text); }
 .about { margin: 20px 0 4px; text-align: center; }
 .about-dev { margin: 0; font-size: 13.5px; color: var(--muted); }
@@ -380,7 +386,7 @@ body[data-theme='paper'] .tint-green { color: #2b8a3e; }
   .hero h2 { margin: 10px 0 12px; font-size: 19px; }
   .hero > h2:first-child { margin-top: 0; }
   .hero .btn { height: 44px; border-radius: 13px; }
-  .agents { gap: 8px; margin-bottom: 8px; }
+  .agents { grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
   /* shorter tiles: icon, name, maker; the › moves to the corner */
   .agent-tile { min-height: 0; padding: 11px 12px 11px; border-radius: 16px; }
   .agent-icon { width: 34px; height: 34px; border-radius: 11px; margin-bottom: 8px; }
@@ -835,6 +841,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); margin: 10px 0 2
   .tab.kind-claude .ic { color: #e8906f; }
   .tab.kind-codex .ic { color: #89dceb; }
   .tab.kind-opencode .ic { color: #f9e2af; }
+  .tab.kind-cursor .ic { color: #cba6f7; }
+  .tab.kind-copilot .ic { color: #a6e3a1; }
   .tab.active { background: var(--surface-3); border-color: var(--line-strong); }
   .tab.active::before {
     content: ''; position: absolute; left: -9px; top: 10px; bottom: 10px; width: 3px;

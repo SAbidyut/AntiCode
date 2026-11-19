@@ -1,7 +1,6 @@
 # AntiCode
 
-ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)** + **Claude Code (`claude`)** + **Codex CLI (`codex`)** + **OpenCode (`opencode`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
-সাথে Mac/PC তে চলা Antigravity আর Claude Code কে ফোন থেকে **রিমোট কন্ট্রোল** করার শর্টকাট।
+ফোনের ভিতরে পুরো **Ubuntu** + **Antigravity CLI (`agy`)** + **Claude Code (`claude`)** + **Codex CLI (`codex`)** + **OpenCode (`opencode`)** + **Cursor CLI (`agent`)** + **GitHub Copilot CLI (`copilot`)**, এমন টার্মিনালে যেখানে **বাংলা (Kalpurush) আর English দুটোই নিখুঁত** দেখায়।
 
 ## ফোনে ইনস্টল
 
@@ -21,6 +20,10 @@
 7. **OpenCode** টাইলে চাপুন। প্রথমবার OpenCode 2 এর অফিসিয়াল npm প্যাকেজের প্রোগ্রাম (`@opencode/cli-linux-arm64`, ~১২০MB) দিয়ে
    `opencode` ইনস্টল হবে। `/models` এ মডেল বাছুন (কয়েকটা ফ্রি), `/connect` দিয়ে কোনো provider এ সাইন ইন।
    শুরু থেকেই ইনপুট বক্স নিচে রাখতে OpenCode এর ছোট ভিউ (`opencode mini`) খোলে।
+8. **Cursor** টাইলে চাপুন। প্রথমবার Cursor এর অফিসিয়াল ইনস্টলার (`curl -fsSL https://cursor.com/install | bash`) দিয়ে
+   `agent` / `cursor-agent` ইনস্টল হবে, তারপর Cursor অ্যাকাউন্টে লগইন বা `CURSOR_API_KEY` চাইবে।
+9. **Copilot** টাইলে চাপুন। প্রথমবার GitHub এর অফিসিয়াল ইনস্টলার (`curl -fsSL https://gh.io/copilot-install | bash`) দিয়ে
+   `copilot` ইনস্টল হবে, তারপর GitHub অ্যাকাউন্টে লগইন (বা `COPILOT_GITHUB_TOKEN`) চাইবে।
 
 ## ব্যবহার
 
@@ -35,12 +38,12 @@
 | কাজ শেষের notification | এজেন্টের উত্তর বা লম্বা কমান্ড শেষ হলে notification আসে (যে সেশন দেখছেন সেটা বাদে); ট্যাপ করলে সেই সেশন খোলে। Settings থেকে বন্ধ করা যায় |
 | সেশনের নাম | হোম আর ট্যাবে প্রতিটা সেশনের কাজ দেখায়; লম্বা চাপ দিয়ে নাম বদলান |
 | ফোনের ফাইল | হোমে **Phone storage → Allow access**, বা Ubuntu তে `setup-storage`; তারপর `/sdcard` আর `~/storage/downloads`, `dcim`, `pictures` … |
-| Mac এর রিমোট ড্যাশবোর্ড | হোমে Remote control → **Open**, বা টপবারের রিমোট আইকন — অ্যাপের ভিতরের নিজস্ব প্যানেলে খোলে |
+| রিমোট ড্যাশবোর্ড | টার্মিনাল টপবারের রিমোট আইকন বা ⋮ মেনু — অ্যাপের ভিতরের নিজস্ব প্যানেলে খোলে |
 | পড়া/কপি, পেস্ট, টেক্সট ছোট-বড়, থিম | টপবারের ⋮ মেনু; Settings (Midnight / Dracula / Solarized / Paper, কার্সর, Animations) |
 | স্ক্রল / ফন্ট | আঙুলে স্ক্রল (মোমেন্টাম সহ), দুই আঙুলে পিঞ্চ; লম্বা চাপ = Reader view |
 | কীবোর্ড ঠিকমতো টাইপ না করলে | Settings → **Keyboard compatibility mode** |
 | prompt এর ডিজাইন | Oh-My-Posh ধাঁচের powerline prompt; `agy-prompt simple` বা `agy-prompt powerline` |
-| আবার সেটআপ | Ubuntu তে `agy-setup` / `claude-setup` / `codex-setup` / `opencode-setup` (শুধু apt টুল: `term-setup`) |
+| আবার সেটআপ | Ubuntu তে `agy-setup` / `claude-setup` / `codex-setup` / `opencode-setup` / `cursor-setup` / `copilot-setup` (শুধু apt টুল: `term-setup`) |
 | কিছু ঠিকমতো না চললে | ⋮ → **Copy debug log** → চ্যাটে পেস্ট করুন |
 
 অ্যাপ বন্ধ করলেও সেশন চলতে থাকে (নোটিফিকেশনে দেখা যায়); নোটিফিকেশনের "Stop all" দিয়ে থামানো যায়।

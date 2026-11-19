@@ -5,7 +5,8 @@ import { installWidths, widthsOf, type WidthMode } from './conjuncts';
 import { isAgentKind, type Bridge, type SessionKind } from '../bridge';
 
 /** A command line that starts a coding agent. */
-const AGENT_CMD = /^(agy|claude|codex|opencode)$/;
+const AGENT_CMD = /^(agy|claude|codex|opencode|cursor|copilot)$/;
+const agentCmdName = (w: string) => (w === 'agent' || w === 'cursor-agent' ? 'cursor' : AGENT_CMD.test(w) ? w : '');
 import { BanglaRenderer, type RendererOptions, type TermTheme } from './renderer';
 import { LineEditor, type Pos } from './lineedit';
 
@@ -68,7 +69,7 @@ export class TerminalSession {
     readonly kind: SessionKind,
     opts: RendererOptions,
   ) {
-    this.title = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
+    this.title = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', ubuntu: 'Ubuntu', android: 'Android shell' }[kind] ?? 'Terminal';
     this.term = new Terminal({ cols: 80, rows: 24, scrollback: 5000, allowProposedApi: true });
     // conjuncts: the shell (and Claude Code) count them by letters, the Antigravity CLI as one
     // character (see conjuncts.ts); its session starts with it running
@@ -216,9 +217,10 @@ export class TerminalSession {
         this.edit.atPrompt = false;
         // the shell names it (ble.sh's hook): an agent gets the chat layout however its
         // name was typed — a grey suggestion taken with →, the history's ↑ …
-        if (AGENT_CMD.test(args[0] ?? '')) {
+        const ag = agentCmdName(args[0] ?? '');
+        if (ag) {
           this.renderer.anchorBottom = true;
-          this.agent = args[0];
+          this.agent = ag;
           this.onMeta?.(); // (the home screen's card shows the agent's signed-in account)
         }
       }
@@ -362,12 +364,12 @@ export class TerminalSession {
   private lineBuf = '';
 
   get kindLabel() {
-    return { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
+    return { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', ubuntu: 'Ubuntu', android: 'Android shell' }[this.kind] ?? 'Terminal';
   }
   /** The program's own window title when it describes the work (Claude Code: "✳ Fix login"). */
   get topic(): string {
     const t = this.title.replace(/^[^\p{L}\p{N}]+/u, '').trim();
-    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|codex|opencode|ubuntu|bash)$/i.test(t)) return '';
+    if (!t || t === this.kindLabel || /^(claude|agy|antigravity|codex|opencode|cursor|cursor-agent|agent|copilot|ubuntu|bash)$/i.test(t)) return '';
     if (/^[~/]/.test(t) || /^[\w.-]+@[\w.-]+:/.test(t)) return ''; // a path or user@host
     return t;
   }
@@ -407,7 +409,7 @@ export class TerminalSession {
     }
     if (rest.length > 1 && rest[0] === '\x1b') return; // arrow keys and other sequences
     for (const ch of rest) {
-      if (ch === '\r' && /^(agy|claude|codex|opencode)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
+      if (ch === '\r' && /^(agy|claude|codex|opencode|cursor-agent|agent|copilot)(\s|$)/.test(this.lineBuf.trim())) this.renderer.anchorBottom = true;
       if (ch === '\r') this.commitLine();
       else if (ch === '\x7f' || ch === '\b') this.lineBuf = Array.from(this.lineBuf).slice(0, -1).join('');
       else if (ch === '\x03' || ch === '\x15' || ch === '\x1b') this.lineBuf = '';

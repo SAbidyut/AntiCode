@@ -427,17 +427,25 @@ __agy_ps_powerline() {
 PS0=$'\e]7770;exec;'"${__agy_tok}"$'\a''${PS0:0:$((__agy_t0=SECONDS,0))}'
 
 # ---------------------------------------------------------------- agents on demand
-# Typing 'agy', 'claude', 'codex' or 'opencode' before they are installed installs them first.
+# Typing 'agy', 'claude', 'codex', 'opencode', 'cursor-agent', 'agent' or 'copilot' before
+# they are installed installs them first.
 command_not_found_handle() {
   case "$1" in
     # (installed for the real home — in an extra account's tab this runs with that account's
     # HOME; and once only: still missing after it, it says so instead of trying again forever)
-    agy|claude|codex|opencode)
+    agy|claude|codex|opencode|copilot)
       env HOME="${ANTICODE_REAL_HOME:-$HOME}" -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
         /usr/local/bin/"$1"-setup --auto || return
       hash -r
       export PATH="${ANTICODE_REAL_HOME:-$HOME}/.local/bin:$PATH"
       type -P "$1" >/dev/null || { printf '%s: still not found after setup — try %s-setup\n' "$1" "$1" >&2; return 127; }
+      command "$@"; return ;;
+    cursor-agent|agent)
+      env HOME="${ANTICODE_REAL_HOME:-$HOME}" -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+        /usr/local/bin/cursor-setup --auto || return
+      hash -r
+      export PATH="${ANTICODE_REAL_HOME:-$HOME}/.local/bin:$PATH"
+      type -P "$1" >/dev/null || { printf '%s: still not found after setup — try cursor-setup\n' "$1" >&2; return 127; }
       command "$@"; return ;;
   esac
   if [ -x /usr/lib/command-not-found ]; then /usr/lib/command-not-found -- "$1"; return $?; fi
@@ -494,6 +502,35 @@ claude() {
   local d=
   [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account claude 2>/dev/null)
   if [ -n "$d" ]; then CLAUDE_CONFIG_DIR=$d command claude "$@"; else command claude "$@"; fi
+}
+__agy_run_cursor() {
+  local bin=$1; shift
+  if ! type -P "$bin" >/dev/null 2>&1; then
+    env HOME="${ANTICODE_REAL_HOME:-$HOME}" -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+      /usr/local/bin/cursor-setup --auto || return
+    hash -r
+    export PATH="${ANTICODE_REAL_HOME:-$HOME}/.local/bin:$PATH"
+    type -P "$bin" >/dev/null 2>&1 || { printf '%s: still not found after setup — try cursor-setup\n' "$bin" >&2; return 127; }
+  fi
+  [ -t 1 ] && printf '\e]7770;exec;%s;cursor\a' "$__agy_tok"
+  local d=
+  [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account cursor 2>/dev/null)
+  if [ -n "$d" ]; then CURSOR_CONFIG_DIR=$d XDG_CONFIG_HOME=$d command "$bin" "$@"; else command "$bin" "$@"; fi
+}
+cursor-agent() { __agy_run_cursor cursor-agent "$@"; }
+agent() { __agy_run_cursor agent "$@"; }
+copilot() {
+  if ! type -P copilot >/dev/null 2>&1; then
+    env HOME="${ANTICODE_REAL_HOME:-$HOME}" -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+      /usr/local/bin/copilot-setup --auto || return
+    hash -r
+    export PATH="${ANTICODE_REAL_HOME:-$HOME}/.local/bin:$PATH"
+    type -P copilot >/dev/null 2>&1 || { printf 'copilot: still not found after setup — try copilot-setup\n' >&2; return 127; }
+  fi
+  [ -t 1 ] && printf '\e]7770;exec;%s;copilot\a' "$__agy_tok"
+  local d=
+  [ -n "${ANTICODE_PROFILE-}" ] && d=$(/usr/local/bin/anticode-account copilot 2>/dev/null)
+  if [ -n "$d" ]; then COPILOT_HOME=$d command copilot "$@"; else command copilot "$@"; fi
 }
 
 # ---------------------------------------------------------------- ble.sh look & attach

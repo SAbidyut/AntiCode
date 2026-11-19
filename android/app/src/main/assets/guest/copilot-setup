@@ -1,0 +1,17 @@
+#!/bin/bash
+# AntiCode — install GitHub Copilot CLI (run again any time with: copilot-setup)
+#   copilot-setup --auto   skip the apt step when the basic tools are already there
+set -o pipefail
+G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; N='\033[0m'
+/usr/local/bin/term-setup "$1" || exit 1
+export PATH="$HOME/.local/bin:$PATH"
+if ! copilot --version >/dev/null 2>&1; then
+  echo -e "\n${G}▸ Installing GitHub Copilot CLI (GitHub's official installer)${N}"
+  echo -e "${Y}  Downloading the standalone Linux binary into ~/.local/bin…${N}"
+  curl -fsSL https://gh.io/copilot-install | PREFIX="$HOME/.local" bash \
+    || { echo -e "${R}Installing GitHub Copilot CLI failed — run 'copilot-setup' to try again.${N}"; exit 1; }
+fi
+copilot --version >/dev/null 2>&1 \
+  || { echo -e "${R}GitHub Copilot CLI was installed but does not start on this phone.${N}"; exit 1; }
+echo -e "\n${G}✓ All set! Type 'copilot' to start GitHub Copilot CLI.${N}"
+echo -e "  Sign in with your GitHub account when it asks (or set COPILOT_GITHUB_TOKEN).\n"

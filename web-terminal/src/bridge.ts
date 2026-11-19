@@ -3,10 +3,10 @@
 //    and calls back into `window.__native.*`.
 //  - In a desktop browser (development / tests): a WebSocket to dev/bridge-server.mjs.
 
-export type SessionKind = 'ubuntu' | 'agy' | 'claude' | 'codex' | 'opencode' | 'android';
+export type SessionKind = 'ubuntu' | 'agy' | 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot' | 'android';
 
 /** The coding agents a tab can be opened for (each with its accounts). */
-export const AGENT_KINDS: readonly SessionKind[] = ['agy', 'claude', 'codex', 'opencode'];
+export const AGENT_KINDS: readonly SessionKind[] = ['agy', 'claude', 'codex', 'opencode', 'cursor', 'copilot'];
 export const isAgentKind = (k: string): boolean => (AGENT_KINDS as readonly string[]).includes(k);
 
 export interface SessionInfo {

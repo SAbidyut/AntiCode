@@ -196,7 +196,7 @@ class SessionService : Service() {
 
     fun createSession(kind: String, cols: Int, rows: Int, cwd: String = "", profile: String = ""): TermSession {
         val launch = when (kind) {
-            "ubuntu", "agy", "claude", "codex", "opencode", "selftest" -> ubuntu.launch(kind, cwd, profile)
+            "ubuntu", "agy", "claude", "codex", "opencode", "cursor", "copilot", "selftest" -> ubuntu.launch(kind, cwd, profile)
             else -> ubuntu.launchAndroidShell()
         }
         val id = UUID.randomUUID().toString().substring(0, 8)
@@ -205,6 +205,8 @@ class SessionService : Service() {
             "claude" -> "Claude Code"
             "codex" -> "Codex"
             "opencode" -> "OpenCode"
+            "cursor" -> "Cursor"
+            "copilot" -> "Copilot"
             "ubuntu" -> "Ubuntu"
             else -> "Android"
         }

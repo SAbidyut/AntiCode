@@ -1,0 +1,23 @@
+#!/bin/bash
+# Started by the app's "Cursor" button: install if needed, run Cursor CLI, then stay in a shell.
+export PATH="$HOME/.local/bin:$PATH"
+# Ctrl-C stops the agent (or its setup), not this script: the tab goes on to its shell
+trap : INT
+bin=$(command -v cursor-agent || command -v agent)
+if [ -z "$bin" ]; then
+  /usr/local/bin/cursor-setup --auto
+  bin=$(command -v cursor-agent || command -v agent)
+fi
+if [ -n "$bin" ]; then
+  printf '\e]7770;exec;%s;cursor\a' "${ANTICODE_LINK_TOKEN:-}"
+  # the tab's account: one of the extra ones keeps its config and sign-in apart (see anticode-account)
+  acct_dir=$(/usr/local/bin/anticode-account cursor)
+  if [ -n "$acct_dir" ]; then
+    CURSOR_CONFIG_DIR=$acct_dir XDG_CONFIG_HOME=$acct_dir "$bin"
+  else
+    "$bin"
+  fi
+else
+  echo "Cursor CLI was not found — run 'cursor-setup' and try again."
+fi
+exec bash -l

@@ -1,5 +1,5 @@
 import './polyfills';
-import { createBridge, isAgentKind, type Bridge, type DirListing, type HostState, type SessionKind } from './bridge';
+import { AGENT_KINDS, createBridge, isAgentKind, type Bridge, type DirListing, type HostState, type SessionKind } from './bridge';
 import { TerminalSession } from './term/session';
 import { BanglaRenderer, THEMES } from './term/renderer';
 import { androidKeySeq, applyMods, domKeySeq, namedKeySeq, type Mods, type NamedKey } from './term/keys';
@@ -20,6 +20,10 @@ interface Prefs {
   codexUrl: string;
   /** OpenCode's site. */
   opencodeUrl: string;
+  /** Cursor's Cloud Agents dashboard. */
+  cursorUrl: string;
+  /** GitHub Copilot's web dashboard. */
+  copilotUrl: string;
   cursor: CursorStyle;
   /** Keyboard compatibility mode (keyboards that misbehave with raw keys). */
   kbCompat: boolean;
@@ -46,6 +50,8 @@ const DEFAULT_PREFS: Prefs = {
   claudeUrl: 'https://claude.ai/code',
   codexUrl: 'https://chatgpt.com/codex',
   opencodeUrl: 'https://opencode.ai',
+  cursorUrl: 'https://cursor.com/agents',
+  copilotUrl: 'https://github.com/copilot/agents',
   cursor: 'block',
   kbCompat: false,
   kbSmart: true,
@@ -393,12 +399,12 @@ function rendererOpts() {
 }
 
 // ================================================================ sessions
-const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', codex: 'codex', opencode: 'opencode', ubuntu: 'terminal', android: 'android' };
+const KIND_ICON: Record<SessionKind, string> = { agy: 'sparkle', claude: 'claude', codex: 'codex', opencode: 'opencode', cursor: 'cursor', copilot: 'copilot', ubuntu: 'terminal', android: 'android' };
 
 /** The remote dashboard that belongs to a session: claude.ai/code for Claude Code, else Antigravity's. */
-type Dashboard = 'agy' | 'claude' | 'codex' | 'opencode';
-const DASHBOARD_URL: Record<Dashboard, 'remoteUrl' | 'claudeUrl' | 'codexUrl' | 'opencodeUrl'> =
-  { agy: 'remoteUrl', claude: 'claudeUrl', codex: 'codexUrl', opencode: 'opencodeUrl' };
+type Dashboard = 'agy' | 'claude' | 'codex' | 'opencode' | 'cursor' | 'copilot';
+const DASHBOARD_URL: Record<Dashboard, 'remoteUrl' | 'claudeUrl' | 'codexUrl' | 'opencodeUrl' | 'cursorUrl' | 'copilotUrl'> =
+  { agy: 'remoteUrl', claude: 'claudeUrl', codex: 'codexUrl', opencode: 'opencodeUrl', cursor: 'cursorUrl', copilot: 'copilotUrl' };
 function openDashboard(which: Dashboard) {
   bridge.openRemote(prefs[DASHBOARD_URL[which]], KIND_NAME[which]);
 }
@@ -460,7 +466,7 @@ async function askSignInAccount(url: string, site: 'google' | 'claude' | 'openai
   add(tabEmail, 'This tab’s account');
   add(bridge.accountEmail(kind, ''), `${KIND_NAME[kind]}’s main account`);
   for (const p of await bridge.listProfiles(kind)) add(p.email, `${KIND_NAME[kind]} · ${p.name}`);
-  for (const k of ['agy', 'claude', 'codex', 'opencode']) if (k !== kind) add(bridge.accountEmail(k, ''), `Signed in to ${KIND_NAME[k]}`);
+  for (const k of AGENT_KINDS) if (k !== kind) add(bridge.accountEmail(k, ''), `Signed in to ${KIND_NAME[k]}`);
   for (const e of signInEmails()) add(e, 'Used before');
   const forTab = from?.kind === kind && from.profile ? ` (“${from.profile}”)` : '';
   const rows: HTMLElement[] = [];
@@ -911,6 +917,8 @@ function renderHome() {
         agentTile('claude', 'claude', 'Claude Code', 'Anthropic'),
         agentTile('codex', 'codex', 'Codex', 'OpenAI'),
         agentTile('opencode', 'opencode', 'OpenCode', 'Open source'),
+        agentTile('cursor', 'cursor', 'Cursor', 'Cursor CLI'),
+        agentTile('copilot', 'copilot', 'Copilot', 'GitHub'),
       ),
       h('div', { class: 'actions' },
         btn('btn-secondary', 'terminal', 'Ubuntu shell', () => askFolder('ubuntu')),
@@ -1997,6 +2005,8 @@ function openNewSessionSheet() {
     action('claude', 'Claude Code', 'Launch Anthropic’s Claude Code', () => askFolder('claude')),
     action('codex', 'Codex', 'Launch OpenAI’s Codex CLI', () => askFolder('codex')),
     action('opencode', 'OpenCode', 'Launch OpenCode — many models, some free', () => askFolder('opencode')),
+    action('cursor', 'Cursor', 'Launch Cursor’s CLI agent', () => askFolder('cursor')),
+    action('copilot', 'Copilot', 'Launch GitHub Copilot CLI', () => askFolder('copilot')),
     action('terminal', 'Ubuntu shell', 'Bash in Ubuntu 24.04', () => askFolder('ubuntu')),
     action('android', 'Android shell', 'The phone’s own /system/bin/sh', () => newSession('android')),
   ));
@@ -2006,7 +2016,7 @@ function openNewSessionSheet() {
 // Antigravity, Claude Code and the shell start in a folder picked here: a recent one with one
 // tap, or one found by browsing (home, the phone's storage).
 const RECENT_DIRS = 'recentDirs';
-const KIND_NAME: Record<string, string> = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', ubuntu: 'Ubuntu shell' };
+const KIND_NAME: Record<string, string> = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', ubuntu: 'Ubuntu shell' };
 
 function recentDirs(): string[] {
   try {
@@ -2419,8 +2429,8 @@ function openMoreSheet() {
     }),
     action('remote', 'Antigravity dashboard', '', () => openDashboard('agy')),
     action('claude', 'Claude Code dashboard', '', () => openDashboard('claude')),
-    // (Codex's / OpenCode's: in a tab running it)
-    ...(['codex', 'opencode'] as const).filter((k) => s && (s.kind === k || s.agent === k))
+    // (Codex's / OpenCode's / Cursor's / Copilot's: in a tab running it)
+    ...(['codex', 'opencode', 'cursor', 'copilot'] as const).filter((k) => s && (s.kind === k || s.agent === k))
       .map((k) => action(k, `${KIND_NAME[k]} dashboard`, '', () => openDashboard(k))),
     s && action('eraser', 'Clear screen', '', () => {
       s.term.clear();
@@ -2553,7 +2563,7 @@ function openSettingsSheet() {
     bridge.resetDashboardChoices();
     toast('Dashboards will open in the app again');
   };
-  const urlField = (key: 'remoteUrl' | 'claudeUrl' | 'codexUrl' | 'opencodeUrl') => {
+  const urlField = (key: 'remoteUrl' | 'claudeUrl' | 'codexUrl' | 'opencodeUrl' | 'cursorUrl' | 'copilotUrl') => {
     const input = h('input', { class: 'text-input', type: 'url', spellcheck: 'false' }) as HTMLInputElement;
     input.value = prefs[key];
     input.onchange = () => {
@@ -2644,6 +2654,12 @@ function openSettingsSheet() {
         h('div', { class: 's-title' }, 'OpenCode dashboard address'),
         urlField('opencodeUrl')),
       h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Cursor dashboard address'),
+        urlField('cursorUrl')),
+      h('div', { class: 'setting' },
+        h('div', { class: 's-title' }, 'Copilot dashboard address'),
+        urlField('copilotUrl')),
+      h('div', { class: 'setting' },
         h('div', { class: 's-title' }, 'claude.ai after a Google sign-in'),
         h('div', { class: 's-sub' }, 'Opens in Chrome for a week (Google sign-in needs it).'),
         resetBtn),
@@ -2696,26 +2712,15 @@ function bindChrome() {
   $('#home-btn').onclick = () => showHome();
   $('#plus-btn').onclick = () => openNewSessionSheet();
   $('#more-btn').onclick = () => openMoreSheet();
-  // (Claude Code started in a shell tab too)
   // (the tab's agent's dashboard — started in a shell tab too)
   $('#remote-top-btn').onclick = () => {
-    const k = (['claude', 'codex', 'opencode'] as const).find((x) => active?.kind === x || active?.agent === x);
+    const k = (['claude', 'codex', 'opencode', 'cursor', 'copilot'] as const).find((x) => active?.kind === x || active?.agent === x);
     openDashboard(k ?? 'agy');
   };
   $('#settings-btn').onclick = () => openSettingsSheet();
   $('#sheet-backdrop').onclick = () => closeSheet();
-  $('#remote-btn').onclick = () => openDashboard('agy');
   $('#storage-btn').onclick = () => bridge.requestStorage();
   $('#bg-btn').onclick = () => bridge.allowBackground();
-  $('#claude-remote-btn').onclick = () => openDashboard('claude');
-  $('#copy-remote-cmd').onclick = () => {
-    bridge.copyText('agy --remote-control');
-    toast('Command copied');
-  };
-  $('#copy-claude-cmd').onclick = () => {
-    bridge.copyText('claude --remote-control');
-    toast('Command copied');
-  };
   // Any text field in the page (settings) takes the keyboard back from the terminal.
   document.addEventListener('focusin', (e) => {
     const t = e.target as HTMLElement;

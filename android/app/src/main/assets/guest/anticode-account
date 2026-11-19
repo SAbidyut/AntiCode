@@ -1,6 +1,7 @@
 #!/bin/bash
 # AntiCode: the folder an agent's extra account keeps its sign-in in.
-#   anticode-account agy|claude|codex|opencode   prints it (made the first time); nothing for
+#   anticode-account agy|claude|codex|opencode|cursor|copilot
+#                                                prints it (made the first time); nothing for
 #                                                the usual account
 #   anticode-account codex-config DIR   Codex's settings in DIR get "no sandbox" unless they
 #                                       say otherwise (its sandbox needs Linux namespaces,
@@ -30,7 +31,7 @@ if [ "$kind" = codex-config ]; then
   exit 0
 fi
 name=${ANTICODE_PROFILE-}
-[[ $kind == agy || $kind == claude || $kind == codex || $kind == opencode ]] || exit 0
+[[ $kind == agy || $kind == claude || $kind == codex || $kind == opencode || $kind == cursor || $kind == copilot ]] || exit 0
 [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,19}$ ]] || exit 0
 base=${ANTICODE_REAL_HOME:-$HOME}
 d="$base/.anticode/profiles/$kind/$name"

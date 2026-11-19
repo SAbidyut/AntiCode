@@ -240,6 +240,16 @@ class UbuntuManager private constructor(private val context: Context) {
             // (an extra account's folder is its CODEX_HOME / its XDG_DATA_HOME)
             "codex" -> gone(File(if (prof.isEmpty()) File(home, ".codex") else home, "auth.json"))
             "opencode" -> gone(File(if (prof.isEmpty()) File(home, ".local/share/opencode") else File(home, "opencode"), "auth.json"))
+            "cursor" -> {
+                gone(File(if (prof.isEmpty()) File(home, ".config/cursor") else File(home, "cursor"), "auth.json"))
+                gone(File(if (prof.isEmpty()) File(home, ".cursor") else home, "auth.json"))
+            }
+            "copilot" -> {
+                val dir = if (prof.isEmpty()) File(home, ".copilot") else home
+                gone(File(dir, "config.json"))
+                gone(File(dir, "hosts.json"))
+                gone(File(dir, "apps.json"))
+            }
             else -> return false
         }
         return true
@@ -530,7 +540,8 @@ class UbuntuManager private constructor(private val context: Context) {
         write("usr/local/bin/xdg-open", asset("xdg-open"), exec)
         write("usr/local/bin/setup-storage", asset("setup-storage"), exec)
         for (script in listOf("term-setup", "agy-setup", "agy-start", "claude-setup", "claude-start", "codex-setup", "codex-start",
-                "opencode-setup", "opencode-start", "agy-autocomplete", "anticode-account")) {
+                "opencode-setup", "opencode-start", "cursor-setup", "cursor-start", "copilot-setup", "copilot-start",
+                "agy-autocomplete", "anticode-account")) {
             write("usr/local/bin/$script", asset(script), exec)
         }
         write("usr/local/bin/agy-prompt", asset("agy-prompt"), exec)
@@ -734,6 +745,8 @@ class UbuntuManager private constructor(private val context: Context) {
             "claude" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/claude-start")
             "codex" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/codex-start")
             "opencode" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/opencode-start")
+            "cursor" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/cursor-start")
+            "copilot" -> args += listOf("/bin/bash", "-l", "/usr/local/bin/copilot-start")
             // used by the debug-only self test (see SessionService.runSelfTest)
             "selftest" -> args += listOf(
                 "/bin/bash", "-lc",
@@ -949,7 +962,7 @@ class UbuntuManager private constructor(private val context: Context) {
         fun validProfile(name: String) = Regex("^[A-Za-z0-9][A-Za-z0-9-]{0,19}$").matches(name)
 
         /** The coding agents a tab can be opened for (each with its accounts). */
-        val AGENTS = setOf("agy", "claude", "codex", "opencode")
+        val AGENTS = setOf("agy", "claude", "codex", "opencode", "cursor", "copilot")
 
         /** What the app calls an agent. */
         fun agentName(kind: String) = when (kind) {
@@ -957,6 +970,8 @@ class UbuntuManager private constructor(private val context: Context) {
             "claude" -> "Claude Code"
             "codex" -> "Codex"
             "opencode" -> "OpenCode"
+            "cursor" -> "Cursor"
+            "copilot" -> "Copilot"
             else -> ""
         }
 
